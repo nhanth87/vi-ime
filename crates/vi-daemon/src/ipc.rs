@@ -286,6 +286,9 @@ pub fn handle_write_command(
             if let Some(ref m) = *input_method {
                 s.input_method = match m.as_str() {
                     "VNI" | "Vni" | "vni" => InputMethod::Vni,
+                    // GUI gửi label hiển thị "Tự do" — thiếu nhánh này thì
+                    // chọn Tự do bị lưu thành Telex (dấu chọn "không nhảy").
+                    "Tự do" | "tự do" | "Smart" | "smart" => InputMethod::Smart,
                     _ => InputMethod::Telex,
                 };
             }
@@ -320,6 +323,7 @@ pub fn handle_write_command(
                 entry.input_method = match m.as_str() {
                     "Telex" | "telex" => Some(InputMethod::Telex),
                     "VNI" | "Vni" | "vni" => Some(InputMethod::Vni),
+                    "Tự do" | "tự do" | "Smart" | "smart" => Some(InputMethod::Smart),
                     _ => None,
                 };
             }

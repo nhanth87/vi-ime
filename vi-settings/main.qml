@@ -83,25 +83,41 @@ FloatingWindow {
         }
     }
 
+    // Đồng bộ định kỳ: đổi config từ TRAY/CLI khi cửa sổ đang mở cũng
+    // nhảy theo trong GUI (2s một lần, chỉ khi còn kết nối).
+    Timer {
+        interval: 2000; repeat: true; running: win.connected
+        onTriggered: win.refreshState()
+    }
+
     // ── Small reusable pill button ────────────────────────────────
+    // LƯU Ý: màu phải là BINDING thuần (không gán trong onEntered/onExited —
+    // gán trực tiếp sẽ cắt đứt binding `active`, dấu chọn không bao giờ
+    // nhảy theo config nữa: chính là bug "bấm mà không đổi màu").
     component Pill: Rectangle {
         property string label
         property bool active
+        property bool showCheck: true
         signal clicked
         implicitWidth: t.implicitWidth + 26
         implicitHeight: 34
         radius: 8
-        color: active ? "#7aa2f733" : "#292e42"
+        color: ma.containsMouse
+               ? (active ? "#7aa2f755" : "#3b4261")
+               : (active ? "#7aa2f733" : "#292e42")
         border { color: active ? "#7aa2f7" : "#3b4261"; width: 1 }
-        
-        Text { id: t; anchors.centerIn: parent; text: label; color: "#c0caf5"; font.pixelSize: 12 }
-        MouseArea { 
-            anchors.fill: parent; cursorShape: Qt.PointingHandCursor; 
-            onClicked: parent.clicked()
-            // Tối ưu hóa trải nghiệm hover nhẹ
+
+        Text {
+            id: t; anchors.centerIn: parent
+            text: (parent.active && parent.showCheck ? "✓ " : "") + parent.label
+            color: parent.active ? "#7aa2f7" : "#c0caf5"
+            font { pixelSize: 12; bold: parent.active }
+        }
+        MouseArea {
+            id: ma
+            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
             hoverEnabled: true
-            onEntered: parent.color = active ? "#7aa2f755" : "#3b4261"
-            onExited: parent.color = active ? "#7aa2f733" : "#292e42"
+            onClicked: parent.clicked()
         }
     }
     
@@ -196,15 +212,25 @@ FloatingWindow {
             }
             Heading { text: "Chế độ hiển thị" }
             RowLayout { spacing: 8
-                Repeater { model: [ "Preedit", "NonPreedit" ]
-                    Pill { label: modelData; active: win.imeMode === modelData
-                           onClicked: win.setConfig({ ime_mode: modelData }) } }
+                Pill { label: "Preedit (gạch chân khi gõ)"
+                       active: win.imeMode === "Preedit"
+                       onClicked: win.setConfig({ ime_mode: "Preedit" }) }
+                Pill { label: "NonPreedit (gõ thẳng, kiểu cổ điển)"
+                       active: win.imeMode === "NonPreedit"
+                       onClicked: win.setConfig({ ime_mode: "NonPreedit" }) }
             }
             Heading { text: "Trạng thái" }
             RowLayout { spacing: 10
-                Switch { checked: win.enabled; onToggled: win.setConfig({ enabled: checked }) }
-                Text { text: win.enabled ? "🟢 Đang hoạt động" : "🔴 Đã tắt"; color: "#c0caf5"
-                       font.pixelSize: 13; Layout.alignment: Qt.AlignVCenter }
+                Switch {
+                    // checked là BINDING theo win.enabled; user gạt thì chỉ
+                    // gửi lệnh — trạng thái thật quay về qua refreshState,
+                    // nên công tắc luôn khớp daemon (kể cả khi lệnh fail).
+                    checked: win.enabled
+                    onToggled: { win.setConfig({ enabled: checked }); checked = Qt.binding(function () { return win.enabled }) }
+                }
+                Text { text: win.enabled ? "🟢 Đang hoạt động" : "🔴 Đã tắt"
+                       color: win.enabled ? "#9ece6a" : "#f7768e"
+                       font { pixelSize: 13; bold: true }; Layout.alignment: Qt.AlignVCenter }
             }
             Item { Layout.fillHeight: true }
         }
