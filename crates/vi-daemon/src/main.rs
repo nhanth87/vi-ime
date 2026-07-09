@@ -24,6 +24,7 @@ mod plugin;
 mod rivals;
 mod sync;
 mod tray;
+mod tray_icon;
 mod telemetry;
 mod wayland;
 

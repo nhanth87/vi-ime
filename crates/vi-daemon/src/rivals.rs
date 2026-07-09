@@ -35,9 +35,20 @@ pub struct Rival {
     pub service: Option<&'static str>,
 }
 
-/// Scan `/proc/*/comm` for running rival IME processes (deduplicated by name).
+/// Scan `/proc/*/comm` for running rival IME processes (deduplicated by
+/// name), PLUS any other process also named `vi-ime` — now that vi-ime
+/// ships three ways (systemd service, direct binary, AppImage), the most
+/// common real-world "rival" is actually a leftover copy of ITSELF: a
+/// console-run instance from an earlier test session still holding the
+/// seat, so a freshly launched AppImage/systemd instance gets
+/// `Event::Unavailable` and silently passes every key through raw with no
+/// Vietnamese conversion (looks like "the AppImage doesn't type Vietnamese
+/// but the console binary does" — same binary, wrong instance won the
+/// race). Matched by comm name, so it also catches an AppImage-extracted
+/// copy (same binary name inside the mount).
 pub fn detect() -> Vec<Rival> {
     let mut found: Vec<Rival> = Vec::new();
+    let my_pid = std::process::id();
     let Ok(entries) = fs::read_dir("/proc") else {
         return found;
     };
@@ -47,6 +58,12 @@ pub fn detect() -> Vec<Rival> {
         let Ok(pid) = pid_str.parse::<u32>() else { continue };
         let comm = fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
         let comm = comm.trim();
+        if comm == "vi-ime" {
+            if pid != my_pid && !found.iter().any(|r| r.proc_name == "vi-ime") {
+                found.push(Rival { proc_name: "vi-ime", pid, service: Some("vi-ime") });
+            }
+            continue;
+        }
         if let Some((n, svc)) = KNOWN.iter().find(|(n, _)| *n == comm) {
             // One entry per distinct rival name is enough for the message.
             if !found.iter().any(|r| r.proc_name == *n) {
