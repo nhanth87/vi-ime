@@ -103,11 +103,7 @@ pub fn run() {
                 Some(true) => "activate ✅",
                 _ => "activate ?",
             };
-            println!(
-                "  {name}: {act}, {surr}, ack ema {}µs, timeouts {}",
-                p.done_ack_ema_us.unwrap_or(0),
-                p.done_timeouts
-            );
+            println!("  {name}: {act}, {surr}");
         }
     }
 

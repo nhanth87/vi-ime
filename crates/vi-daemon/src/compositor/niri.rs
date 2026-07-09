@@ -14,9 +14,6 @@ use crate::compositor::FocusEvent;
 pub(crate) struct NiriWindows {
     #[serde(rename = "Windows")]
     pub(crate) windows: Vec<NiriWindow>,
-    #[serde(rename = "FocusToken")]
-    #[allow(dead_code)]
-    focus_token: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]

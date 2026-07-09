@@ -2,9 +2,9 @@
 // Copyright (c) 2024-2026 vi-im contributors
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use tracing::{info, warn};
+use tracing::info;
 use wayland_client::Connection;
 use wayland_protocols_misc::zwp_input_method_v2::client::{
     zwp_input_method_keyboard_grab_v2::ZwpInputMethodKeyboardGrabV2,
@@ -14,7 +14,6 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboar
 use crate::engine::fast_engine::{CompositorKind, NonPreeditEngine};
 use crate::plugin::PluginManager;
 
-use crate::wayland::commit::Phase2;
 use crate::wayland::feedback::{FeedbackFn, ImeFeedback};
 use crate::wayland::runtime::{self, RuntimeConfig};
 use crate::wayland::viet_typer::VietTyper;
@@ -30,21 +29,15 @@ pub(crate) enum FieldSensitivity {
     Normal,
     /// Password/PIN: engine OFF, no preedit, and keys are never logged.
     Secure,
-    /// Terminal field: no longer special-cased (preedit-everywhere), kept for API.
-    #[allow(dead_code)]
-    Terminal,
-    /// Digits/number/phone/date/time: mapped to Normal (preedit-everywhere).
+    /// Digits/number/phone/date/time: mapped to Normal today, but the gate
+    /// (actions.rs) already treats it as passthrough — kept for the day
+    /// `sensitivity_of` starts distinguishing numeric fields for real.
     #[allow(dead_code)]
     NumericRaw,
     /// URL fields (address bar): passthrough raw keys so browser
     /// autocomplete can see them. Vietnamese composition disabled.
     Url,
 }
-
-/// If the compositor never answers a phase-1 delete with `done` (app without
-/// surrounding-text support), give up waiting and send phase-2 anyway —
-/// otherwise the key queue is stuck forever.
-const DONE_TIMEOUT: Duration = Duration::from_millis(150);
 
 // ============================================================================
 // Key event buffer entry for rollover handling
@@ -79,16 +72,6 @@ pub struct ImeAppState {
     pub(crate) viet: VietTyper,
     /// Key event buffer for rollover handling.
     pub(crate) key_buffer: VecDeque<KeyEvent>,
-    /// Whether we are currently waiting for a "done" event (mid-commit sequence).
-    pub(crate) waiting_for_done: bool,
-    /// When the phase-1 delete was sent (drives DONE_TIMEOUT).
-    pub(crate) waiting_since: Option<Instant>,
-    /// Deferred phase-2 to run after "done" (or timeout).
-    pub(crate) pending_phase2: Option<Phase2>,
-    /// The rendered text WE currently own in the app for the in-progress word.
-    /// This is the exact string a `delete_surrounding_text` must remove before
-    /// committing the next form. Empty when no word is in progress.
-    pub(crate) committed_word: String,
     /// Live mode (P0-3): what we have typed into the app for the current
     /// word via the Vietnamese virtual keyboard — the diff base for
     /// `sync_shown`. Empty when no word is in progress.
@@ -146,10 +129,6 @@ impl ImeAppState {
             vk: VkForwarder::new(virtual_keyboard),
             viet: VietTyper::new(viet_keyboard),
             key_buffer: VecDeque::with_capacity(16),
-            waiting_for_done: false,
-            waiting_since: None,
-            pending_phase2: None,
-            committed_word: String::new(),
             shown_word: String::new(),
             runtime: None,
             last_generation: 0,
@@ -295,16 +274,6 @@ impl ImeAppState {
     /// Process buffered keys in order. Called after key events and "done".
     pub(crate) fn flush_key_buffer(&mut self, conn: &Connection) {
         while let Some(ev) = self.key_buffer.pop_front() {
-            if self.waiting_for_done {
-                if !self.done_timed_out() {
-                    // Can't process until the current commit sequence finishes
-                    self.key_buffer.push_front(ev);
-                    return;
-                }
-                warn!("[COMMIT] done timeout — forcing phase-2 without ack");
-                self.emit(ImeFeedback::DoneTimeout);
-                self.finish_waiting_and_run_phase2();
-            }
             if ev.pressed {
                 // QueueWait stage: time the key sat in our buffer (waiting
                 // for a `done` ack or a burst) — ≥1ms is worth reporting.
@@ -321,40 +290,6 @@ impl ImeAppState {
                 // Forward the release only if we forwarded its press.
                 self.vk.release(ev.keycode);
             }
-        }
-    }
-
-    fn done_timed_out(&self) -> bool {
-        self.waiting_since
-            .map(|t| t.elapsed() >= DONE_TIMEOUT)
-            .unwrap_or(true)
-    }
-
-    /// How long the event loop may block before it MUST force phase-2: the
-    /// remaining slice of `DONE_TIMEOUT` while a commit awaits `done`, or
-    /// `None` when nothing is pending — then the loop blocks indefinitely, so
-    /// an idle IME still costs zero CPU (R15). Without this the 150 ms timeout
-    /// could only fire reactively on the next key, leaving a toned character
-    /// "stuck" for a keystroke (1–2 s in natural typing).
-    pub(crate) fn done_wait_remaining(&self) -> Option<Duration> {
-        if !self.waiting_for_done {
-            return None;
-        }
-        Some(match self.waiting_since {
-            Some(t) => DONE_TIMEOUT.saturating_sub(t.elapsed()),
-            None => Duration::ZERO,
-        })
-    }
-
-    /// Force the deferred phase-2 append when `done` never arrived within the
-    /// timeout, so the toned character appears on its own (not on the next
-    /// key). Called by the event loop after a poll wakeup/timeout.
-    pub(crate) fn force_phase2_if_timed_out(&mut self, conn: &Connection) {
-        if self.waiting_for_done && self.done_timed_out() {
-            warn!("[COMMIT] done timeout — forcing phase-2 without ack");
-            self.emit(ImeFeedback::DoneTimeout);
-            self.finish_waiting_and_run_phase2();
-            self.flush_key_buffer(conn);
         }
     }
 

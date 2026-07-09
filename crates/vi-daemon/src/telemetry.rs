@@ -5,11 +5,10 @@
 //! `~/.local/share/vi-ime/telemetry.toml`.
 //!
 //! Answers, with data instead of guesses:
-//! - which apps ack `done` and how fast (replacement for the old
-//!   guessed AdaptiveDelay),
-//! - which apps time out (broken surrounding-text),
+//! - which apps send `surrounding_text` (live-model capability),
 //! - whether the compositor ever delivered key events out of order,
-//! - how often key chatter ("buzz") was coalesced.
+//! - how often key chatter ("buzz") was coalesced,
+//! - where a keystroke lost time (delivery / queue / engine).
 //!
 //! Pure counters + EMA — no timers, no threads (R15-friendly); the owner
 //! decides when to `save()` (event-driven, throttled).
@@ -20,19 +19,17 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// EMA smoothing for ack latency (weight of the newest sample).
+/// EMA smoothing for stage latency (weight of the newest sample).
 const EMA_ALPHA: f64 = 0.2;
 
 /// One keystroke pipeline stage, for localizing WHERE keys get stuck.
 /// Blame map: Delivery → compositor/Wayland transport; QueueWait → the
-/// pending-ack chain holding our buffer; Engine → vi-im itself;
-/// AckWait → the compositor↔app text-input-v3 leg.
+/// rollover coalescing buffer; Engine → vi-im itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
     Delivery,
     QueueWait,
     Engine,
-    AckWait,
 }
 
 impl Stage {
@@ -40,9 +37,8 @@ impl Stage {
     fn stall_threshold_us(self) -> u32 {
         match self {
             Stage::Delivery => 20_000,  // >20ms compositor→IME = lag
-            Stage::QueueWait => 50_000, // >50ms in buffer = ack chain stuck
+            Stage::QueueWait => 50_000, // >50ms in buffer = coalescing stuck
             Stage::Engine => 5_000,     // >5ms in vi-im = our bug
-            Stage::AckWait => 100_000,  // >100ms app ack = app/v3 stuck
         }
     }
 
@@ -50,9 +46,8 @@ impl Stage {
     fn blame_label(self) -> &'static str {
         match self {
             Stage::Delivery => "compositor/Wayland transport",
-            Stage::QueueWait => "commit-ack chain (buffer hold)",
+            Stage::QueueWait => "rollover coalescing buffer",
             Stage::Engine => "vi-im engine (OUR bug)",
-            Stage::AckWait => "app / text-input-v3 bridge",
         }
     }
 }
@@ -95,18 +90,6 @@ pub struct AppMetrics {
     /// Activations in which surrounding_text was seen.
     #[serde(default)]
     pub surrounding_seen: u64,
-    /// Phase-1 deletes acked by `done`.
-    #[serde(default)]
-    pub done_acks: u64,
-    /// EMA of ack latency in microseconds.
-    #[serde(default)]
-    pub done_ack_ema_us: f64,
-    /// Worst ack latency seen, microseconds.
-    #[serde(default)]
-    pub done_ack_max_us: u32,
-    /// `done` never arrived in time; phase-2 was forced.
-    #[serde(default)]
-    pub done_timeouts: u64,
     /// Key events delivered with non-monotonic timestamps.
     #[serde(default)]
     pub key_reorders: u64,
@@ -119,27 +102,12 @@ pub struct AppMetrics {
     /// Compositor→IME transport latency (blame: compositor).
     #[serde(default)]
     pub stage_delivery: StageStat,
-    /// Time keys sat in the IME buffer (blame: ack chain).
+    /// Time keys sat in the IME buffer (blame: rollover coalescing).
     #[serde(default)]
     pub stage_queue: StageStat,
     /// vi-im's own processing time (blame: us).
     #[serde(default)]
     pub stage_engine: StageStat,
-    /// Phase-1 delete → `done` ack (blame: app / text-input-v3).
-    #[serde(default)]
-    pub stage_ack: StageStat,
-}
-
-impl AppMetrics {
-    fn ack(&mut self, latency_us: u32) {
-        self.done_acks += 1;
-        self.done_ack_max_us = self.done_ack_max_us.max(latency_us);
-        self.done_ack_ema_us = if self.done_acks == 1 {
-            f64::from(latency_us)
-        } else {
-            EMA_ALPHA * f64::from(latency_us) + (1.0 - EMA_ALPHA) * self.done_ack_ema_us
-        };
-    }
 }
 
 /// All telemetry, keyed by app_id. `"?"` holds unattributed signals
@@ -193,12 +161,6 @@ impl Telemetry {
         self.app(app_id).surrounding_seen += 1;
     }
 
-    pub fn record_done_ack(&mut self, app_id: Option<&str>, latency_us: u32) {
-        let m = self.app(app_id);
-        m.ack(latency_us);
-        m.stage_ack.add(latency_us, Stage::AckWait.stall_threshold_us());
-    }
-
     /// Feed one pipeline-stage latency sample (see [`Stage`] blame map).
     pub fn record_stage(&mut self, app_id: Option<&str>, stage: Stage, us: u32) {
         let threshold = stage.stall_threshold_us();
@@ -207,7 +169,6 @@ impl Telemetry {
             Stage::Delivery => &mut m.stage_delivery,
             Stage::QueueWait => &mut m.stage_queue,
             Stage::Engine => &mut m.stage_engine,
-            Stage::AckWait => &mut m.stage_ack,
         };
         stat.add(us, threshold);
     }
@@ -217,11 +178,10 @@ impl Telemetry {
     /// is over threshold — the "đổ lỗi" line for debugging.
     pub fn blame(&self, app_id: &str) -> Option<String> {
         let m = self.apps.get(app_id)?;
-        let stages: [(Stage, &StageStat); 4] = [
+        let stages: [(Stage, &StageStat); 3] = [
             (Stage::Delivery, &m.stage_delivery),
             (Stage::QueueWait, &m.stage_queue),
             (Stage::Engine, &m.stage_engine),
-            (Stage::AckWait, &m.stage_ack),
         ];
         let (stage, stat, ratio) = stages
             .iter()
@@ -241,10 +201,6 @@ impl Telemetry {
         ))
     }
 
-    pub fn record_done_timeout(&mut self, app_id: Option<&str>) {
-        self.app(app_id).done_timeouts += 1;
-    }
-
     pub fn record_key_reorder(&mut self, app_id: Option<&str>, delta_ms: u32) {
         let m = self.app(app_id);
         m.key_reorders += 1;
@@ -259,17 +215,13 @@ impl Telemetry {
     pub fn report(&self) -> String {
         let mut names: Vec<&String> = self.apps.keys().collect();
         names.sort();
-        let mut out = String::with_capacity(names.len() * 96);
+        let mut out = String::with_capacity(names.len() * 80);
         for name in names {
             let Some(m) = self.apps.get(name) else { continue };
             out.push_str(&format!(
-                "{name}: act={} surr={} ack={} ema={:.0}µs max={}µs timeout={} reorder={} (max {}ms) chatter={}\n",
+                "{name}: act={} surr={} reorder={} (max {}ms) chatter={}\n",
                 m.activations,
                 m.surrounding_seen,
-                m.done_acks,
-                m.done_ack_ema_us,
-                m.done_ack_max_us,
-                m.done_timeouts,
                 m.key_reorders,
                 m.reorder_max_ms,
                 m.key_chatter,
@@ -278,4 +230,3 @@ impl Telemetry {
         out
     }
 }
-

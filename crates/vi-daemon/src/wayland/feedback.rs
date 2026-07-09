@@ -11,11 +11,8 @@
 /// One stage of a keystroke's pipeline — used to localize WHERE a key got
 /// stuck so blame lands on the right component:
 /// - `Delivery`: compositor → IME transport (blame compositor/Wayland).
-/// - `QueueWait`: held in the IME key buffer waiting for a commit ack
-///   (blame the pending ack chain, not typing speed).
+/// - `QueueWait`: held in the IME key buffer waiting for rollover coalescing.
 /// - `Engine`: vi-im's own processing (blame us — should be µs).
-/// - `AckWait` is reported via `DoneAck`/`DoneTimeout`: the
-///   compositor↔app text-input-v3 leg (blame app/v3 bridge).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineStage {
     Delivery,
@@ -29,13 +26,9 @@ pub enum ImeFeedback {
     /// A text input attached (Activate): the focused app speaks the
     /// input-method path at all.
     Activated,
-    /// The app sent `surrounding_text` this activation → the live
-    /// delete+commit model is safe here.
+    /// The app sent `surrounding_text` this activation — a hard capability
+    /// signal, fed into the learned cache.
     SurroundingTextSeen,
-    /// Phase-1 delete was acked by `done` after `latency_us` µs.
-    DoneAck { latency_us: u32 },
-    /// `done` never came within the timeout; phase-2 was forced.
-    DoneTimeout,
     /// The compositor reported another IME owns the seat.
     Unavailable,
     /// Key events arrived with non-monotonic timestamps (reordering on the

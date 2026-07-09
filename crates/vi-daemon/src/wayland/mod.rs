@@ -102,10 +102,8 @@ fn run_ime_internal(
         compositor
     );
 
-    // Event loop with a bounded wait: normally blocks forever on the Wayland
-    // fd (zero-CPU idle, R15), but while a two-phase commit awaits `done` it
-    // wakes after the remaining slice of DONE_TIMEOUT to force phase-2 — so a
-    // toned character appears immediately instead of only on the next key.
+    // Event loop: blocks forever on the Wayland fd (zero-CPU idle, R15).
+    // The only other wakeup source is the physical-click eventfd below.
     loop {
         if let Err(e) = event_queue.flush() {
             error!("Wayland flush error: {e}");
@@ -115,12 +113,6 @@ fn run_ime_internal(
             error!("Wayland dispatch error: {e}");
             break;
         }
-
-        // -1 = block indefinitely; a bounded value only while mid-commit.
-        let timeout_ms: i32 = match state.done_wait_remaining() {
-            Some(d) => d.as_millis().min(150) as i32,
-            None => -1,
-        };
 
         let Some(read_guard) = event_queue.prepare_read() else {
             // Events arrived during dispatch — loop back to drain them.
@@ -144,7 +136,7 @@ fn run_ime_internal(
                 revents: 0,
             },
         ];
-        let ret = unsafe { libc::poll(pfds.as_mut_ptr(), 2, timeout_ms) };
+        let ret = unsafe { libc::poll(pfds.as_mut_ptr(), 2, -1) };
         if ret > 0 && (pfds[1].revents & libc::POLLIN) != 0 {
             // Drain the eventfd (nonblocking) and drop any hanging word.
             let mut buf: u64 = 0;
@@ -181,9 +173,6 @@ fn run_ime_internal(
             error!("Wayland dispatch error: {e}");
             break;
         }
-
-        // If `done` never came within the window, commit the pending append now.
-        state.force_phase2_if_timed_out(&conn);
 
         if !state.active && state.keyboard_grab.is_some()
             && let Some(grab) = state.keyboard_grab.take() {

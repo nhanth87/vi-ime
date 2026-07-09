@@ -88,29 +88,6 @@ impl Adaptation {
                     suggestion_changed = changed && before != self.learned.suggested_config(id);
                 }
             }
-            ImeFeedback::DoneAck { latency_us } => {
-                self.telemetry.record_done_ack(app_id, latency_us);
-                if let Some(id) = app_id {
-                    self.dirty |= self.learned.observe(id, |p| {
-                        let ema = match p.done_ack_ema_us {
-                            Some(prev) => {
-                                (0.2 * f64::from(latency_us) + 0.8 * f64::from(prev)) as u32
-                            }
-                            None => latency_us,
-                        };
-                        p.done_ack_ema_us = Some(ema);
-                    });
-                }
-            }
-            ImeFeedback::DoneTimeout => {
-                self.telemetry.record_done_timeout(app_id);
-                if let Some(id) = app_id {
-                    let before = self.learned.suggested_config(id);
-                    let changed = self.learned.observe(id, |p| p.done_timeouts += 1);
-                    self.dirty |= changed;
-                    suggestion_changed = before != self.learned.suggested_config(id);
-                }
-            }
             ImeFeedback::Unavailable => {
                 warn!("another IME owns the seat — signals paused");
             }

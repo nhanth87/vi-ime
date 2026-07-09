@@ -88,8 +88,6 @@ pub struct AppEntry {
 pub struct LearnedEntry {
     pub app_id: String,
     pub surrounding_text: Option<bool>,
-    pub done_ack_ema_us: Option<u32>,
-    pub done_timeouts: u32,
     pub ime_activated: Option<bool>,
 }
 
@@ -255,8 +253,6 @@ pub fn handle_read_command(
                 .map(|(id, p)| LearnedEntry {
                     app_id: id.clone(),
                     surrounding_text: p.surrounding_text,
-                    done_ack_ema_us: p.done_ack_ema_us,
-                    done_timeouts: p.done_timeouts,
                     ime_activated: p.ime_activated,
                 }).collect();
             let mut r = nil();

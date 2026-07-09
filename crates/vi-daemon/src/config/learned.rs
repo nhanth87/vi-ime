@@ -4,8 +4,8 @@
 //! the 4-layer resolution (user override > learned > builtin > global).
 //!
 //! Fed by hard protocol signals from the IME thread (SurroundingText seen,
-//! Done-ack latency, activate), NOT heuristics. Persisted to
-//! `~/.local/share/vi-ime/learned.toml` so the second session starts smart.
+//! activate), NOT heuristics. Persisted to `~/.local/share/vi-ime/learned.toml`
+//! so the second session starts smart.
 
 use std::collections::HashMap;
 use std::fs;
@@ -16,21 +16,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::types::{AppConfig, ImeMode};
 
-/// Done-timeout count past which surrounding-text is considered broken
-/// for the app even if it once worked.
-const TIMEOUT_TOLERANCE: u32 = 3;
-
 /// What we have observed about one app. All signals are protocol facts.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct LearnedProfile {
     /// App emitted `surrounding_text` at least once → live model is safe.
     /// `Some(false)` = activated repeatedly but never sent it.
     pub surrounding_text: Option<bool>,
-    /// EMA of phase-1 delete → `done` ack latency, microseconds.
-    pub done_ack_ema_us: Option<u32>,
-    /// Number of Done-ack timeouts observed (forced phase-2).
-    #[serde(default)]
-    pub done_timeouts: u32,
     /// App attached a text input (IME Activate seen) at least once.
     pub ime_activated: Option<bool>,
     /// Unix seconds of the last update (absolute, not relative).
@@ -47,12 +38,9 @@ impl LearnedProfile {
         Some(AppConfig { ime_mode: Some(mode), ..AppConfig::default() })
     }
 
-    /// Live model needs working surrounding-text. No surrounding-text or
-    /// repeated ack timeouts → fall back to real preedit for this app.
+    /// No surrounding-text seen after repeated activations → fall back to
+    /// real preedit for this app (the live model needs it).
     pub fn suggested_mode(&self) -> Option<ImeMode> {
-        if self.done_timeouts > TIMEOUT_TOLERANCE {
-            return Some(ImeMode::Preedit);
-        }
         match self.surrounding_text {
             Some(false) => Some(ImeMode::Preedit),
             _ => None, // supported or unknown → builtin/global decides

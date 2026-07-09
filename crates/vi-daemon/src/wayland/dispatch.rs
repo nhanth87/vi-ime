@@ -84,12 +84,6 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                 }
             }
             Event::Deactivate => {
-                // R8 applies to the deferred phase-2 as well: running it now
-                // would commit_string AFTER the cursor moved (mouse click) —
-                // text lands at the new position. Drop it; the phase-1
-                // delete already happened at the old spot, losing the tail
-                // of one word is the lesser evil (Drop, Don't Commit).
-                state.pending_phase2 = None;
                 let had_pending = state.engine.has_pending();
                 info!(
                     "[SCENARIO] ❌ DEACTIVATE — focus lost, had_pending={had_pending}"
@@ -103,14 +97,8 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                 crate::godmod::log_deactivate();
                 state.active = false;
                 state.key_buffer.clear();
-                state.waiting_for_done = false;
-                state.waiting_since = None;
-                state.pending_phase2 = None;
                 state.field_sensitivity = FieldSensitivity::Normal;
                 state.surrounding_seen = false;
-                // Never carry word ownership across a focus change — a
-                // stale committed_word would make the next sync_word
-                // delete text in the NEW field.
                 state.external_change = false;
                 state.reset_word_state();
                 state.last_key_time = None;
@@ -141,16 +129,6 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                     if let Some(im) = state.input_method.clone() {
                         state.set_preedit(&im, "");
                     }
-                }
-                // Phase-1 delete acknowledged → run the deferred phase-2.
-                if state.waiting_for_done {
-                    // Real per-app ack latency — feeds the learned cache
-                    // (replaces the old guessed AdaptiveDelay with data).
-                    if let Some(since) = state.waiting_since {
-                        let us = since.elapsed().as_micros().min(u128::from(u32::MAX)) as u32;
-                        state.emit(ImeFeedback::DoneAck { latency_us: us });
-                    }
-                    state.finish_waiting_and_run_phase2();
                 }
                 // Flush any keys buffered during the commit sequence.
                 let buf_len = state.key_buffer.len();
@@ -300,9 +278,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, KeyboardGrabUserData> for ImeAppStat
                 // Buffer press AND release: releases ride the same queue so a
                 // forwarded press is always followed by its release in order.
                 state.buffer_key(key, pressed);
-                if !state.waiting_for_done {
-                    state.flush_key_buffer(conn);
-                }
+                state.flush_key_buffer(conn);
             }
             Event::Modifiers {
                 serial: _,
