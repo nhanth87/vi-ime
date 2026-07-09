@@ -230,7 +230,8 @@ FloatingWindow {
                 }
                 Text { text: win.enabled ? "🟢 Đang hoạt động" : "🔴 Đã tắt"
                        color: win.enabled ? "#9ece6a" : "#f7768e"
-                       font { pixelSize: 13; bold: true }; Layout.alignment: Qt.AlignVCenter }
+                       font { pixelSize: 13; bold: true }
+                       Layout.alignment: Qt.AlignVCenter }
             }
             Item { Layout.fillHeight: true }
         }

@@ -11,10 +11,12 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 
 use tracing::{info, warn};
 
-use crate::config::{ConfigManager, InputMethod};
+use crate::config::{ConfigManager, ImeMode, InputMethod};
 
 /// Tray state source: reads/writes the on-disk config the daemon watches.
 pub struct ViTray {
@@ -23,6 +25,7 @@ pub struct ViTray {
     settings_exe: Option<PathBuf>,
     /// Live method — set in activate callback, ksni re-reads menu() after.
     current_method: InputMethod,
+    current_mode: ImeMode,
     current_enabled: bool,
 }
 
@@ -36,6 +39,16 @@ impl ViTray {
             m.setting_mut().input_method = method;
             let _ = m.save();
             info!("[TRAY] method → {method}");
+        }
+    }
+
+    /// Persist display mode (Preedit/NonPreedit) — same flow as set_method.
+    fn set_mode(&mut self, mode: ImeMode) {
+        self.current_mode = mode;
+        if let Ok(mut m) = ConfigManager::new(Some(self.config_path.clone())) {
+            m.setting_mut().ime_mode = mode;
+            let _ = m.save();
+            info!("[TRAY] ime_mode → {mode:?}");
         }
     }
 
@@ -88,10 +101,14 @@ impl ksni::Tray for ViTray {
         // ksni re-reads menu() after an activate callback returns.
         // Mutating self.current_method in the callback propagates ✓.
         let cur = self.current_method;
+        let cur_mode = self.current_mode;
         vec![
             method_item("  Telex", cur, InputMethod::Telex),
             method_item("  VNI",   cur, InputMethod::Vni),
             method_item("  Tự do", cur, InputMethod::Smart),
+            MenuItem::Separator,
+            mode_item("  Preedit (gạch chân)", cur_mode, ImeMode::Preedit),
+            mode_item("  NonPreedit (gõ thẳng)", cur_mode, ImeMode::NonPreedit),
             MenuItem::Separator,
             StandardItem {
                 label: if self.current_enabled {
@@ -131,19 +148,61 @@ fn method_item(label: &str, cur: InputMethod, method: InputMethod) -> ksni::Menu
     .into()
 }
 
+fn mode_item(label: &str, cur: ImeMode, mode: ImeMode) -> ksni::MenuItem<ViTray> {
+    use ksni::menu::StandardItem;
+    let checked = if cur == mode { " ✓" } else { "" };
+    StandardItem {
+        label: format!("{label}{checked}"),
+        activate: Box::new(move |t: &mut ViTray| t.set_mode(mode)),
+        ..Default::default()
+    }
+    .into()
+}
+
+/// Read the tray-relevant trio from disk.
+fn read_state(path: &PathBuf) -> (InputMethod, ImeMode, bool) {
+    ConfigManager::new(Some(path.clone()))
+        .map(|m| {
+            let s = m.setting();
+            (s.input_method, s.ime_mode, s.enabled)
+        })
+        .unwrap_or((InputMethod::Telex, ImeMode::Preedit, true))
+}
+
 /// Register the tray (fcitx-style). Non-fatal: if no StatusNotifierHost is
 /// running (bar without tray support), this simply shows no icon — the IME
 /// keeps working. `settings_exe` is the vi-settings launcher for the menu.
 pub fn spawn(config_path: PathBuf, settings_exe: Option<PathBuf>) {
-    let (current_method, current_enabled) = ConfigManager::new(Some(config_path.clone()))
-        .map(|m| (m.setting().input_method, m.setting().enabled))
-        .unwrap_or((InputMethod::Telex, true));
+    let (current_method, current_mode, current_enabled) = read_state(&config_path);
     let tray = ViTray {
-        config_path,
+        config_path: config_path.clone(),
         settings_exe,
         current_method,
+        current_mode,
         current_enabled,
     };
-    ksni::TrayService::new(tray).spawn();
+    let service = ksni::TrayService::new(tray);
+    let handle = service.handle();
+    service.spawn();
+
+    // Reverse sync: the tray's own clicks update it via ksni's re-read, but
+    // changes from the settings GUI / CLI / file edits only land on disk.
+    // Poll the config and push differences into ksni (handle.update emits
+    // the DBus layout change → ✓ marks and title follow live).
+    thread::spawn(move || {
+        let mut last = read_state(&config_path);
+        loop {
+            thread::sleep(Duration::from_secs(2));
+            let now = read_state(&config_path);
+            if now != last {
+                last = now;
+                handle.update(|t: &mut ViTray| {
+                    t.current_method = now.0;
+                    t.current_mode = now.1;
+                    t.current_enabled = now.2;
+                });
+            }
+        }
+    });
     info!("[TRAY] StatusNotifierItem registered (fcitx-style tray + menu)");
 }
