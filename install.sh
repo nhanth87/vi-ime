@@ -280,6 +280,51 @@ disable_rivals() {
 }
 
 # ─────────────────────────────────────────────────────────────────────
+# `input` group — optional, for the physical mouse-click watcher
+# (drops a half-typed word the instant the mouse clicks, even in apps
+# that report nothing over text-input-v3). Reads raw /dev/input/event*,
+# which on most distros requires group membership. This is the ONE step
+# in the whole installer that needs root, so it is asked for explicitly
+# — never run silently, never assumed.
+# ─────────────────────────────────────────────────────────────────────
+setup_input_group() {
+    step "Click-detect (optional): quyền đọc /dev/input"
+
+    if ! command_exists id; then
+        return
+    fi
+    if id -nG "$USER" 2>/dev/null | grep -qw input; then
+        info "đã ở nhóm 'input' — click-detect sẵn sàng"
+        return
+    fi
+    if ! command_exists sudo; then
+        warn "không có sudo — bỏ qua click-detect (IME vẫn hoạt động bình thường)"
+        return
+    fi
+
+    echo "  vi-im có thể tự phát hiện lúc bạn bấm chuột (kể cả trong app không"
+    echo "  báo tín hiệu gì cho IME), để tránh chữ đang gõ dở bị chèn sai vị trí."
+    echo "  Việc này cần quyền đọc /dev/input — tức là vào nhóm hệ thống 'input':"
+    echo ""
+    echo -e "      ${CYAN}sudo usermod -aG input \"$USER\"${NC}"
+    echo ""
+    read -r -p "  Chạy lệnh trên ngay bây giờ? [y/N] " reply
+    case "$reply" in
+        [yY]|[yY][eE][sS])
+            if sudo usermod -aG input "$USER"; then
+                info "đã thêm $USER vào nhóm 'input'"
+                warn "cần ĐĂNG XUẤT / ĐĂNG NHẬP LẠI để quyền có hiệu lực"
+            else
+                warn "usermod thất bại — click-detect sẽ tắt, IME vẫn chạy bình thường"
+            fi
+            ;;
+        *)
+            info "bỏ qua — chạy lại bất cứ lúc nào: sudo usermod -aG input \"$USER\""
+            ;;
+    esac
+}
+
+# ─────────────────────────────────────────────────────────────────────
 # Systemd user service
 # ─────────────────────────────────────────────────────────────────────
 setup_systemd() {
@@ -311,7 +356,13 @@ ExecStart=$BIN_DIR/vi-ime
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=3
-Environment=WAYLAND_DISPLAY=%i
+# WAYLAND_DISPLAY is intentionally NOT set here: this is a plain user
+# service (no @instance), so a hardcoded value would be wrong for every
+# session but the one that happened to write this file, and %i expands to
+# nothing on a non-templated unit. niri/Hyprland/Sway session startup
+# already runs \`systemctl --user import-environment WAYLAND_DISPLAY\`
+# (or dbus-update-activation-environment) before graphical-session.target
+# fires, so the variable is inherited correctly without us touching it.
 
 # Security hardening
 NoNewPrivileges=yes
@@ -333,6 +384,32 @@ UNITFILE
     echo "       Stop:   systemctl --user stop vi-ime"
     echo "       Status: systemctl --user status vi-ime"
     echo "       Logs:   journalctl --user -u vi-ime -f"
+}
+
+# ─────────────────────────────────────────────────────────────────────
+# Desktop entry — makes "vi-im Settings" show up in app launchers
+# (wofi/rofi/GNOME overview/…), not just the tray. Icon itself is
+# installed by the daemon at first run (crates/vi-daemon/src/tray.rs
+# install_icons()) so it doesn't need duplicating here.
+# ─────────────────────────────────────────────────────────────────────
+install_desktop_entry() {
+    step "Đăng ký vi-im Settings vào app launcher"
+
+    local APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+    mkdir -p "$APPS_DIR"
+    cat > "$APPS_DIR/vi-im-settings.desktop" << DESKTOP
+[Desktop Entry]
+Type=Application
+Name=vi-im Settings
+Comment=Cấu hình bộ gõ tiếng Việt vi-im
+Exec=$BIN_DIR/vi-settings
+Icon=vi-im
+Terminal=false
+Categories=Settings;Utility;
+NoDisplay=false
+DESKTOP
+
+    info "desktop entry: $APPS_DIR/vi-im-settings.desktop"
 }
 
 # ─────────────────────────────────────────────────────────────────────
@@ -383,7 +460,9 @@ check_deps
 build_project
 setup_config
 disable_rivals
+setup_input_group
 setup_systemd
+install_desktop_entry
 path_reminder
 summary
 

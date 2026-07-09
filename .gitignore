@@ -1,5 +1,9 @@
 # Build artifacts
 /target/
+*.AppImage
+
+# Cached build tools (appimagetool)
+.cache/
 
 # Accidental CLI output files (vi-ime --status > file mishaps)
 /--*
