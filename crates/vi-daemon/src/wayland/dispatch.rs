@@ -1,0 +1,331 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR Commercial
+// Copyright (c) 2024-2026 vi-im contributors
+use tracing::{info, warn};
+use wayland_client::protocol::wl_keyboard::KeyState;
+use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
+use wayland_protocols_misc::zwp_input_method_v2::client::{
+    zwp_input_method_keyboard_grab_v2::ZwpInputMethodKeyboardGrabV2,
+    zwp_input_method_v2::ZwpInputMethodV2,
+};
+
+use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::{
+    ChangeCause, ContentPurpose,
+};
+
+use crate::wayland::feedback::ImeFeedback;
+use crate::wayland::state::{FieldSensitivity, ImeAppState};
+use crate::wayland::{ImUserData, KeyboardGrabUserData};
+
+/// Map the app's self-declared field purpose to our per-field gate.
+/// Terminal is mapped to Normal — we use commit_string everywhere
+/// (preedit-everywhere), no per-app guessing needed.
+fn sensitivity_of(purpose: ContentPurpose) -> FieldSensitivity {
+    match purpose {
+        // Security-critical: engine off, never logged. Non-negotiable.
+        ContentPurpose::Password | ContentPurpose::Pin => FieldSensitivity::Secure,
+        // URL fields: passthrough keys so browser autocomplete works.
+        ContentPurpose::Url => FieldSensitivity::Url,
+        // Terminal, Digits, Number etc. → Normal (preedit works everywhere).
+        ContentPurpose::Terminal
+        | ContentPurpose::Digits
+        | ContentPurpose::Number
+        | ContentPurpose::Phone
+        | ContentPurpose::Date
+        | ContentPurpose::Time
+        | ContentPurpose::Datetime => FieldSensitivity::Normal,
+        _ => FieldSensitivity::Normal,
+    }
+}
+
+// ============================================================================
+// Dispatch implementations
+// ============================================================================
+
+impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
+    fn event(
+        state: &mut Self,
+        proxy: &ZwpInputMethodV2,
+        event: <ZwpInputMethodV2 as Proxy>::Event,
+        _data: &ImUserData,
+        conn: &Connection,
+        qhandle: &QueueHandle<Self>,
+    ) {
+        use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_v2::Event;
+        match event {
+            Event::Activate => {
+                // Pick up any daemon-side config change before deciding to grab:
+                // ime_enabled gates the grab below, and a disabled→enabled
+                // transition re-grabs here (the only place with a QueueHandle).
+                let prev_app = state.current_app_id.clone();
+                state.maybe_reconfigure();
+                let mode = format!("{:?}", state.engine.mode());
+                info!(
+                    "[SCENARIO] ✅ ACTIVATE — IME={mode} composer attached, grabbing keyboard..."
+                );
+                state.active = true;
+                // Only clear the per-field classification on a REAL app switch.
+                // A same-app re-activation (focus churn: DEACTIVATE→ACTIVATE with
+                // no field change) must KEEP Terminal/Secure — the app sends
+                // ContentType only on first focus, so resetting here would
+                // silently lose it and a terminal would fall back to the delete
+                // path (which it ignores → "nhaân"). Capability tracking still
+                // resets each activation.
+                if state.current_app_id != prev_app {
+                    state.field_sensitivity = FieldSensitivity::Normal;
+                }
+                state.surrounding_seen = false;
+                state.emit(ImeFeedback::Activated);
+                crate::godmod::log_activate();
+                if state.keyboard_grab.is_none() && state.ime_enabled {
+                    let grab =
+                        proxy.grab_keyboard(qhandle, KeyboardGrabUserData);
+                    state.keyboard_grab = Some(grab);
+                    info!("[SCENARIO] ⌨️  Keyboard GRABBED (all keys go to IME now)");
+                }
+            }
+            Event::Deactivate => {
+                // R8 applies to the deferred phase-2 as well: running it now
+                // would commit_string AFTER the cursor moved (mouse click) —
+                // text lands at the new position. Drop it; the phase-1
+                // delete already happened at the old spot, losing the tail
+                // of one word is the lesser evil (Drop, Don't Commit).
+                state.pending_phase2 = None;
+                let had_pending = state.engine.has_pending();
+                info!(
+                    "[SCENARIO] ❌ DEACTIVATE — focus lost, had_pending={had_pending}"
+                );
+                // R8: do NOT commit on Deactivate. The compositor already moved
+                // the cursor by the time we see this event (e.g. mouse click).
+                // Committing now places text at the wrong position.
+                // Instead: drop the buffer. Compositor clears preedit from the
+                // old position automatically when the input method deactivates.
+                state.engine.reset();
+                crate::godmod::log_deactivate();
+                state.active = false;
+                state.key_buffer.clear();
+                state.waiting_for_done = false;
+                state.waiting_since = None;
+                state.pending_phase2 = None;
+                state.field_sensitivity = FieldSensitivity::Normal;
+                state.surrounding_seen = false;
+                // Never carry word ownership across a focus change — a
+                // stale committed_word would make the next sync_word
+                // delete text in the NEW field.
+                state.external_change = false;
+                state.reset_word_state();
+                state.last_key_time = None;
+                // Never leave the app with a stuck forwarded key.
+                state.vk.release_all();
+                if let Some(grab) = state.keyboard_grab.take() {
+                    grab.release();
+                    info!(
+                        "[SCENARIO] 🔓 Keyboard RELEASED (app gets keys directly again)"
+                    );
+                }
+            }
+            Event::Done => {
+                state.serial += 1;
+                // P1-2: the app reported an external text/cursor change
+                // (mouse click inside the SAME field never fires
+                // Deactivate — this is the only signal we get). R8: drop
+                // the half-typed word, never commit it at the new cursor.
+                if std::mem::take(&mut state.external_change)
+                    && state.engine.has_pending()
+                {
+                    info!(
+                        "[SCENARIO] 🖱️ external cursor/text change — \
+                         dropping composition (R8: Drop, Don't Commit)"
+                    );
+                    state.engine.reset();
+                    state.reset_word_state();
+                    if let Some(im) = state.input_method.clone() {
+                        state.set_preedit(&im, "");
+                    }
+                }
+                // Phase-1 delete acknowledged → run the deferred phase-2.
+                if state.waiting_for_done {
+                    // Real per-app ack latency — feeds the learned cache
+                    // (replaces the old guessed AdaptiveDelay with data).
+                    if let Some(since) = state.waiting_since {
+                        let us = since.elapsed().as_micros().min(u128::from(u32::MAX)) as u32;
+                        state.emit(ImeFeedback::DoneAck { latency_us: us });
+                    }
+                    state.finish_waiting_and_run_phase2();
+                }
+                // Flush any keys buffered during the commit sequence.
+                let buf_len = state.key_buffer.len();
+                if buf_len > 0 {
+                    info!(
+                        "[SCENARIO] 🔄 DONE received — flushing {} buffered keys",
+                        buf_len
+                    );
+                }
+                state.flush_key_buffer(conn);
+            }
+            Event::Unavailable => {
+                // Single-owner seat: a rival grabbed the input-method first.
+                // Name it and hand the user the one-liner to take the seat.
+                let rivals = crate::rivals::detect();
+                if rivals.is_empty() {
+                    warn!(
+                        "IME unavailable — another input method holds the seat \
+                         (không rõ tiến trình). Đảm bảo chỉ vi-ime chạy."
+                    );
+                } else {
+                    warn!(
+                        "IME unavailable — {} đang giữ input-method seat. \
+                         Chạy `vi-ime --take-over` rồi khởi động lại vi-ime.",
+                        crate::rivals::describe(&rivals)
+                    );
+                }
+                state.active = false;
+                state.emit(ImeFeedback::Unavailable);
+            }
+            Event::SurroundingText {
+                text,
+                cursor,
+                anchor: _,
+            } => {
+                info!(
+                    "[SURROUNDING] len={} cursor={cursor} pending={}",
+                    text.len(),
+                    state.engine.has_pending()
+                );
+                // Hard capability signal: this app supports surrounding
+                // text → the live delete+commit model is safe. Report the
+                // first sighting per activation to the learned cache.
+                if !state.surrounding_seen {
+                    state.surrounding_seen = true;
+                    state.emit(ImeFeedback::SurroundingTextSeen);
+                }
+            }
+            Event::TextChangeCause { cause } => {
+                // P1-2: `other` = the text/cursor changed app-side (mouse
+                // click, arrow keys handled by the app, undo…) — NOT by us.
+                // Latched here, applied at `done` (end of the state batch).
+                info!("[CAUSE] text_change_cause={cause:?}");
+                state.external_change = matches!(cause, WEnum::Value(ChangeCause::Other));
+            }
+            Event::ContentType { hint: _, purpose } => {
+                let sens = match purpose {
+                    WEnum::Value(p) => sensitivity_of(p),
+                    WEnum::Unknown(_) => FieldSensitivity::Normal,
+                };
+                if sens != state.field_sensitivity {
+                    info!("[CONTENT-TYPE] field sensitivity → {sens:?}");
+                    state.field_sensitivity = sens;
+                    // The ContentType event often arrives AFTER the first
+                    // keystroke already entered the engine (seen live:
+                    // KEY-IN 'n' → then "→ Url"). Switching to a
+                    // passthrough class would strand that pending key —
+                    // the "address bar / password loses the first char"
+                    // bug. Flush it as real text before going raw.
+                    if sens != FieldSensitivity::Normal
+                        && state.engine.has_pending()
+                        && let Some(im) = state.input_method.clone()
+                    {
+                        info!("[CONTENT-TYPE] flushing pending first key(s) before passthrough");
+                        state.finalize_word(&im);
+                    }
+                }
+            }
+            _ => {}
+        }
+        let _ = conn.flush();
+    }
+}
+
+#[allow(unreachable_patterns)]
+impl Dispatch<ZwpInputMethodKeyboardGrabV2, KeyboardGrabUserData> for ImeAppState {
+    fn event(
+        state: &mut Self,
+        _proxy: &ZwpInputMethodKeyboardGrabV2,
+        event: <ZwpInputMethodKeyboardGrabV2 as Proxy>::Event,
+        _data: &KeyboardGrabUserData,
+        conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_keyboard_grab_v2::Event;
+        match event {
+            Event::Keymap { format, fd, size } => {
+                info!("Received keymap (size: {size})");
+                // Mirror to the virtual keyboard FIRST (borrows the fd), so
+                // forwarded keycodes decode identically app-side…
+                state.vk.set_keymap(format, &fd, size);
+                match format {
+                    WEnum::Value(_) => {
+                        // …then hand the fd to xkb (consumes it).
+                        state.xkb.set_keymap(fd, size);
+                    }
+                    WEnum::Unknown(raw) => {
+                        warn!("Unsupported keymap format: {raw}");
+                    }
+                }
+            }
+            Event::Key {
+                serial: _,
+                time,
+                key,
+                state: key_state,
+            } => {
+                let pressed = match key_state {
+                    WEnum::Value(KeyState::Pressed) => true,
+                    WEnum::Value(KeyState::Released) => false,
+                    WEnum::Value(_) | WEnum::Unknown(_) => return,
+                };
+                if pressed {
+                    // Telemetry: non-monotonic compositor timestamps mean the
+                    // delivery order differs from the typing order. The wl
+                    // clock is u32 ms and wraps (~49 days) — treat huge
+                    // "backwards" jumps as wraparound, not reordering.
+                    if let Some(last) = state.last_key_time {
+                        let back = last.wrapping_sub(time);
+                        if back > 0 && back < 10_000 {
+                            warn!("[REORDER] key time went back {back}ms (last={last} now={time})");
+                            state.emit(ImeFeedback::KeyReorder { delta_ms: back });
+                            crate::godmod::log_rollover();
+                        }
+                    }
+                    state.last_key_time = Some(time);
+                    // Delivery stage: compositor → us. ≥1ms = transport lag
+                    // worth attributing (blame compositor, not the IME).
+                    if let Some(us) = state.delivery_latency_us(time)
+                        && us >= 1000 {
+                            state.emit(ImeFeedback::StageSample {
+                                stage: crate::wayland::feedback::PipelineStage::Delivery,
+                                us,
+                            });
+                        }
+                }
+                // Buffer press AND release: releases ride the same queue so a
+                // forwarded press is always followed by its release in order.
+                state.buffer_key(key, pressed);
+                if !state.waiting_for_done {
+                    state.flush_key_buffer(conn);
+                }
+            }
+            Event::Modifiers {
+                serial: _,
+                mods_depressed,
+                mods_latched,
+                mods_locked,
+                group,
+            } => {
+                state.xkb.update_modifiers(
+                    mods_depressed,
+                    mods_latched,
+                    mods_locked,
+                    group,
+                );
+                // Mirror so forwarded keys carry the right modifier state.
+                state.vk.modifiers(mods_depressed, mods_latched, mods_locked, group);
+            }
+            Event::RepeatInfo {
+                rate: _,
+                delay: _,
+            } => {}
+            _ => {}
+        }
+        let _ = conn.flush();
+    }
+}

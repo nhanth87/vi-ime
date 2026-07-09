@@ -1,0 +1,23 @@
+# vi-ime — Udev rules for keyboard hotplug
+#
+# When a USB/Bluetooth keyboard is plugged in, restart vi-ime service
+# so it re-grabs the new keyboard device via Wayland.
+#
+# Install: sudo cp deploy/99-vi-ime.rules /etc/udev/rules.d/
+# Reload:   sudo udevadm control --reload-rules && sudo udevadm trigger
+
+# USB keyboards
+ACTION=="add", SUBSYSTEM=="input", KERNEL=="event*", \
+    ENV{ID_INPUT_KEYBOARD}=="1", \
+    RUN+="/usr/bin/systemctl --user restart vi-ime.service"
+
+# Bluetooth keyboards
+ACTION=="add", SUBSYSTEM=="input", KERNEL=="event*", \
+    ENV{ID_INPUT_KEYBOARD}=="1", \
+    ATTRS{bustype}=="0005", \
+    RUN+="/usr/bin/systemctl --user restart vi-ime.service"
+
+# On keyboard remove — also restart (clean up grab state)
+ACTION=="remove", SUBSYSTEM=="input", KERNEL=="event*", \
+    ENV{ID_INPUT_KEYBOARD}=="1", \
+    RUN+="/usr/bin/systemctl --user restart vi-ime.service"

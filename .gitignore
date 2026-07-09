@@ -1,0 +1,14 @@
+# Build artifacts
+/target/
+
+# Accidental CLI output files (vi-ime --status > file mishaps)
+/--*
+
+# Editor / tooling
+.claude/
+.agents/
+.understand-anything/
+skills-lock.json
+
+# Packed assets (generated from assets/)
+assets.zip

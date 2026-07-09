@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: GPL-3.0-or-later OR Commercial
+# Copyright (c) 2024-2026 vi-im contributors
+[package]
+name = "vi-daemon"
+version = "0.1.0"
+edition = "2024"
+description = "Vietnamese IME daemon — main binary, wires all subsystems"
+
+# The single binary the user runs: `vi-ime` → IME + tray + auto-config.
+[[bin]]
+name = "vi-ime"
+path = "src/main.rs"
+
+# vi-status: legacy standalone status window, superseded by the SNI tray.
+# Kept (not deleted) pending confirmation; no longer auto-spawned.
+[[bin]]
+name = "vi-status"
+path = "src/status_window.rs"
+
+[dependencies]
+unicode-normalization = "0.1"
+wayland-client = "0.31"
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+libc = "0.2"
+# evdev fallback (--evdev) for X11/XWayland apps invisible to input-method-v2.
+evdev = "0.13"
+# System-tray icon (StatusNotifierItem) — fcitx-style tray + menu. Sync/thread
+# based (0.2) to match the daemon's threading model (no async runtime).
+ksni = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+dirs = "6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Non-blocking log writer: hot path (per-keystroke) must never block on a
+# journald/stderr write syscall — a background thread drains the queue.
+tracing-appender = "0.2"
+inotify = { version = "0.11.2", default-features = false }

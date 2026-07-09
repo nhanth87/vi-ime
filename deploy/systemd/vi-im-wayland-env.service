@@ -1,0 +1,31 @@
+# ~/.config/systemd/user/vi-im-wayland-env.service
+#
+# Propagate Wayland environment variables into the systemd --user session
+# so that vi-im.service can inherit WAYLAND_DISPLAY, XDG_RUNTIME_DIR,
+# DBUS_SESSION_BUS_ADDRESS, and other session-critical vars.
+#
+# This MUST be enabled and started BEFORE vi-im.service.
+# Most compositors call dbus-update-activation-environment at startup;
+# this unit wraps that call for systemd-managed sessions.
+#
+# Install:
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now vi-im-wayland-env.service
+
+[Unit]
+Description=Propagate Wayland environment to systemd user session
+After=graphical-session-pre.target
+Before=graphical-session.target
+Before=vi-im.service
+ConditionEnvironment=WAYLAND_DISPLAY
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/dbus-update-activation-environment --systemd \
+    DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE \
+    XDG_SESSION_DESKTOP XDG_CURRENT_DESKTOP \
+    XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS XAUTHORITY
+
+[Install]
+WantedBy=graphical-session.target

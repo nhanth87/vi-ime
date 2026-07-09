@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-3.0-or-later OR Commercial
+# Copyright (c) 2024-2026 vi-im contributors
+[package]
+name = "vi-settings"
+version = "0.1.0"
+edition = "2024"
+description = "Settings window for vi-ime — QML-based"
+
+[dependencies]
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[bin]]
+name = "vi-settings"
+path = "src/main.rs"

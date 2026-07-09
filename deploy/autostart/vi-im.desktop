@@ -1,0 +1,32 @@
+# ~/.config/autostart/vi-im.desktop
+# XDG autostart — fallback when systemd user services are unavailable.
+# This .desktop file is launched by the desktop environment's session
+# manager (GNOME, KDE, XFCE, LXQt, Cosmic, etc.) on login.
+#
+# The compositor MUST call dbus-update-activation-environment (or set
+# WAYLAND_DISPLAY in the session environment) before this runs.
+# Delay helps ensure the compositor socket is ready.
+
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=vi-im
+Name[vi]=Bộ gõ tiếng Việt vi-im
+GenericName=Vietnamese IME
+GenericName[vi]=Bộ gõ tiếng Việt
+Comment=Native Vietnamese input method for Wayland
+Comment[vi]=Bộ gõ tiếng Việt thuần Wayland, không cần IBus/Fcitx
+
+Exec=%h/.local/bin/vi-ime
+TryExec=%h/.local/bin/vi-ime
+Terminal=false
+Icon=vi-im
+
+Categories=Utility;InputMethod;
+Keywords=vietnamese;ime;input;wayland;telex;vni;
+Keywords[vi]=tieng viet;bo go;telex;vni;wayland;
+
+X-GNOME-Autostart-Delay=2
+X-KDE-autostart-after=panel
+Hidden=false
+StartupNotify=false

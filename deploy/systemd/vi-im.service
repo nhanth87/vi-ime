@@ -1,0 +1,77 @@
+# ~/.config/systemd/user/vi-im.service
+#
+# vi-im Vietnamese IME daemon — auto-started with graphical session.
+# Requires vi-im-wayland-env.service to have propagated Wayland env vars.
+#
+# Install:
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now vi-im.service
+# Logs:
+#   journalctl --user -u vi-im -f -o cat
+#
+# Troubleshooting:
+#   If the service fails with "WAYLAND_DISPLAY not set":
+#     1) systemctl --user restart vi-im-wayland-env.service
+#     2) systemctl --user restart vi-im.service
+#   If the compositor does not use dbus-update-activation-environment:
+#     Install deploy/systemd/vi-im-wayland-env.service and enable it first.
+
+[Unit]
+Description=vi-im Vietnamese Wayland IME
+Documentation=https://github.com/meodien/vi-im
+After=graphical-session.target
+After=dbus.service
+After=vi-im-wayland-env.service
+Wants=graphical-session.target
+PartOf=graphical-session.target
+Conflicts=fcitx5.service
+Conflicts=ibus.service
+Conflicts=vi-ime.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/vi-ime
+Restart=on-failure
+RestartSec=3s
+StartLimitInterval=60s
+StartLimitBurst=5
+
+# ── Logging ──────────────────────────────────────────────────────────
+Environment=RUST_LOG=vi_im=info
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vi-im
+
+# ── Graphics environment ─────────────────────────────────────────────
+Environment=GDK_BACKEND=wayland,x11
+Environment=GSK_RENDERER=cairo
+
+# ── Resource limits ──────────────────────────────────────────────────
+MemoryMax=128M
+CPUWeight=50
+IOWeight=50
+Nice=5
+
+# ── Security hardening ───────────────────────────────────────────────
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=%h/.config/vi-ime
+ReadWritePaths=%t
+ReadOnlyPaths=%h/.local
+PrivateNetwork=false
+PrivateDevices=false
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+
+# Limit exposed /proc and /sys to the bare minimum
+ProcSubset=pid
+ProtectProc=invisible
+
+WorkingDirectory=%h
+
+[Install]
+WantedBy=graphical-session.target

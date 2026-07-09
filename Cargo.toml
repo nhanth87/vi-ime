@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-or-later OR Commercial
+# Copyright (c) 2024-2026 vi-im contributors
+[workspace]
+resolver = "2"
+members = [
+    "crates/vi-daemon",
+    "crates/vi-settings",
+]

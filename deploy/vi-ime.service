@@ -1,0 +1,39 @@
+[Unit]
+Description=vi-ime — Vietnamese Input Method for Wayland
+Documentation=https://github.com/vui-vn/vi-im
+After=graphical-session.target
+PartOf=graphical-session.target
+Wants=graphical-session.target
+
+# Restart if the IME crashes (don't leave user without Vietnamese typing)
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/vi-ime
+Restart=on-failure
+RestartSec=2
+
+# Wayland environment
+Environment=WAYLAND_DISPLAY=wayland-1
+Environment=XDG_RUNTIME_DIR=%t
+
+# Logging
+Environment=RUST_LOG=info
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vi-ime
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.config/vi-ime
+ReadWritePaths=%h/.local/share/vi-ime
+ReadOnlyPaths=%h/.config/niri
+
+# Capabilities
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=graphical-session.target
