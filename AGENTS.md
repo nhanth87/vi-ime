@@ -219,6 +219,79 @@ Cần user ở nhóm `input` (`sudo usermod -aG input $USER`) — AppRun của
 AppImage tự xin quyền một lần qua `pkexec`/`sudo` rồi `sg input -c` để áp
 dụng ngay, không cần đăng xuất lại.
 
+### R17. BẢN ĐỒ 3 TÍNH NĂNG HAY VỠ + TẠI SAO SỬA HOÀI KHÔNG HẾT (phân tích 2026-07-10)
+
+> Đây là kết quả trace toàn bộ code sau chuỗi regression trong R16. Agent nào
+> định sửa MỘT trong ba tính năng dưới đây: đọc HẾT mục này trước, vì chúng
+> chia sẻ state và điểm ngắt — sửa một cái mà không nhìn hai cái kia là
+> nguồn regression chính của dự án.
+
+**Tính năng 1 — Address bar → tiếng Anh (Url passthrough), chuỗi 3 bước:**
+1. `dispatch.rs` `sensitivity_of()`: `ContentPurpose::Url → FieldSensitivity::Url`
+   (app tự khai loại field qua text-input-v3).
+2. `dispatch.rs` `Event::ContentType`: ghi `state.field_sensitivity = sens`;
+   kèm flush phím ĐẦU đã lỡ vào engine trước khi ContentType đến
+   (`should_finalize` — thiếu nó là "mất chữ đầu trong address bar").
+3. `actions.rs` `process_key`, gate: `field_sensitivity ∈ {Secure, NumericRaw,
+   Url}` → `vk.press()` passthrough thẳng, không qua engine. Đây là CỔNG THẬT.
+
+**Tính năng 2 — Terminal → NonPreedit, hai đường ghi đè lẫn nhau:**
+1. `dispatch.rs` `Event::ContentType`: `Terminal` → `engine.set_mode(NonPreedit)`
+   ngay (trừ khi `mode_from_user`).
+2. `state.rs` `maybe_reconfigure`: SAU MỖI `apply_snapshot` (vốn ghi đè mode
+   về giá trị config) phải ép lại Terminal → NonPreedit. Quên bước này =
+   config reload là terminal rơi về Preedit.
+
+**Tính năng 3 — chống "nhảy theo con trỏ" trong terminal: BA lớp phòng thủ,
+không phải một chỗ:**
+| Lớp | Code | Khi nào hoạt động |
+|---|---|---|
+| Deactivate | `dispatch.rs` Event::Deactivate | CHỈ khi click sang cửa sổ KHÁC |
+| text_change_cause=Other | `dispatch.rs` Event::Done + external_change | app phải report surrounding — **terminal không bao giờ gửi** |
+| evdev click watch | `click_watch.rs` → `on_physical_click` + per-key guard (`actions.rs`) | CẦN nhóm `input`; không có quyền = lớp này TẮT |
+
+**Ba lý do cấu trúc khiến "sửa lỗi này ra lỗi khác":**
+
+1. **Một triệu chứng, nhiều cơ chế.** "Nhảy chữ theo con trỏ" = ít nhất 3 bug
+   khác nhau cùng biểu hiện: (A) maybe_reconfigure commit khi đổi app — đã
+   sửa (drop vô điều kiện, R16); (B) `set_preedit("")` thừa cho live mode —
+   đã sửa (check `live`); (C) **click trong CÙNG cửa sổ terminal**: cả 3 lớp
+   phòng thủ đều mù (không Deactivate vì cùng surface, không
+   text_change_cause vì terminal không gửi, evdev tắt vì thiếu quyền) →
+   engine giữ từ dở → phím kế tiếp vào `sync_shown` (`actions.rs`) gõ
+   `Backspace × k` để diff — cursor đã ở chỗ mới nên backspace ĂN CHỮ TẠI
+   VỊ TRÍ MỚI rồi gõ phần còn lại vào đó. **Cơ chế C chưa từng được sửa và
+   KHÔNG sửa được thuần code khi thiếu quyền `input`.** User test lại sau
+   khi A/B đã fix, gặp C, tưởng "lỗi quay lại" — thực ra là lỗi khác chưa
+   từng đi. Khi nhận bug report "nhảy chữ": XÁC ĐỊNH CƠ CHẾ trước (xem log:
+   có RECONFIG? có Deactivate? click watch có chạy?), đừng vá mù.
+
+2. **Một biến, năm người ghi, hai luồng đua.** `field_sensitivity` bị ghi từ
+   4 chỗ (ContentType / reset ở Activate / reset ở Deactivate / default);
+   `engine.mode()` bị ghi từ 3 chỗ (apply_snapshot theo R13 / ContentType-
+   Terminal / reconfigure-Terminal). Ai ghi SAU CÙNG thắng, thứ tự phụ thuộc
+   timing từng app. Reset ở Activate so sánh `current_app_id` (main thread
+   đút qua RuntimeConfig, nguồn niri IPC) với `prev_app` (Wayland thread tự
+   nhớ) — hai luồng biết về CÙNG một lần đổi focus ở hai thời điểm khác
+   nhau; main thread chậm → reset không bắn → Url/Terminal của app cũ dính
+   sang app mới.
+
+3. **Ba tính năng đòi ba câu trả lời TRÁI NGƯỢC tại cùng điểm ngắt.** Khi có
+   chữ dở mà bị ngắt ngang: Url cần **COMMIT** (flush phím đầu kẻo mất);
+   Terminal cần **TIẾP TỤC COMPOSE** (không finalize); click/reconfigure/
+   deactivate cần **DROP** (R8). Ba đáp án × nhiều điểm ngắt × 2 mode
+   (Preedit/live) = ma trận mà chỉnh một ô là lệch ô bên cạnh. Bất kỳ thay
+   đổi nào ở MỘT điểm ngắt phải rà lại cả ma trận: address bar Chrome,
+   terminal kitty, đổi setting giữa chừng từ, click giữa chừng từ.
+
+**Trạng thái máy dev (2026-07-10):** user CHƯA ở nhóm `input` → click-watch
+và legacy_grab (LibreOffice/OnlyOffice) đều bất hoạt. AppRun của AppImage đã
+có sẵn logic tự xin quyền (pkexec/sudo + `sg input`) ở lần chạy đầu. Cơ chế
+C ở trên chỉ hết hẳn khi quyền này được cấp. Phương án dự phòng chưa làm:
+heuristic "quá N giây không gõ → coi như từ mới" (`last_key_time` hiện chỉ
+dùng cho telemetry REORDER, chưa dùng ngắt từ) — chỉ giảm tần suất, không
+diệt gốc.
+
 ### R15. Zero-CPU Idle
 - Daemon main loop = MỘT `rx.recv()` blocking trên unified DaemonEvent channel.
   CẤM recv_timeout/try_recv/sleep trong main loop.
