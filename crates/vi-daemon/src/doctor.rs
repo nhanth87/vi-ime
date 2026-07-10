@@ -130,7 +130,7 @@ pub fn run() {
 
     // ── L4: evdev fallback readiness (for X11/XWayland apps) ──
     println!("\n── L4 · evdev fallback (app X11, dùng `--evdev`) ──");
-    for line in crate::evdev_mode::doctor_lines() {
+    for line in crate::evdev_inject::doctor_lines() {
         println!("  {line}");
     }
 

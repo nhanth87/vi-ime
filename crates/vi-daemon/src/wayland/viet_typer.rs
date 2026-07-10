@@ -26,24 +26,31 @@ use std::os::fd::{AsFd, FromRawFd, OwnedFd};
 use std::time::Instant;
 
 use tracing::warn;
+use wayland_client::Proxy;
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;
 
 /// wl_keyboard keymap format: xkb_v1.
-const KEYMAP_FORMAT_XKB_V1: u32 = 1;
+pub(crate) const KEYMAP_FORMAT_XKB_V1: u32 = 1;
 
 /// Safe evdev codes for injected keys: the main typing rows ('1'..'=',
 /// QWERTY row…). Nothing here doubles as a navigation/media key anywhere.
-const FIRST_CODE: u32 = 2;
+pub(crate) const FIRST_CODE: u32 = 2;
 const LAST_CODE: u32 = 33;
-const MAX_UNIQUE: usize = (LAST_CODE - FIRST_CODE + 1) as usize; // 32
+pub(crate) const MAX_UNIQUE: usize = (LAST_CODE - FIRST_CODE + 1) as usize; // 32
 
-/// Generate a minimal keymap for this word's unique chars.
-fn build_keymap(chars: &[(char, u32)]) -> String {
+/// Generate a minimal keymap for this word's unique chars. `'\u{0008}'`
+/// maps to the BackSpace keysym (used by the evdev fallback typer — U0008
+/// is NOT the BackSpace keysym).
+pub(crate) fn build_keymap(chars: &[(char, u32)]) -> String {
     let mut codes = String::new();
     let mut syms = String::new();
     for (ch, evdev) in chars {
         codes.push_str(&format!("<K{evdev}> = {};\n", evdev + 8));
-        syms.push_str(&format!("key <K{evdev}> {{ [ U{:04X} ] }};\n", *ch as u32));
+        if *ch == '\u{0008}' {
+            syms.push_str(&format!("key <K{evdev}> {{ [ BackSpace ] }};\n"));
+        } else {
+            syms.push_str(&format!("key <K{evdev}> {{ [ U{:04X} ] }};\n", *ch as u32));
+        }
     }
     format!(
         "xkb_keymap {{\n\
@@ -56,7 +63,7 @@ fn build_keymap(chars: &[(char, u32)]) -> String {
 }
 
 /// Write the keymap into a memfd (protocol wants fd + size, NUL-terminated).
-fn memfd_keymap(text: &str) -> Option<(OwnedFd, u32)> {
+pub(crate) fn memfd_keymap(text: &str) -> Option<(OwnedFd, u32)> {
     let name = std::ffi::CString::new("vi-viet-keymap").ok()?;
     let raw = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
     if raw < 0 {
@@ -89,14 +96,30 @@ impl VietTyper {
     /// Type `s` by uploading a per-word keymap and tapping its keycodes.
     /// All-or-nothing: returns false (typing nothing) when impossible.
     pub(crate) fn type_str(&mut self, s: &str) -> bool {
+        self.backspace_then_type(0, s)
+    }
+
+    /// BackSpace × n, then type `s`, ALL on this one keyboard (BackSpace
+    /// rides the same per-word keymap). VCL/gtk3 (LibreOffice) swallows an
+    /// event burst that mixes BackSpace with other keys WHOLE — probe-
+    /// verified 2026-07-10 (`scripts/vk-probe`): BS+"ệ" in one flush typed
+    /// NOTHING, BS → flush + 15ms → chars typed perfectly. So each
+    /// BackSpace is flushed and given its own beat. kitty/terminals accept
+    /// both forms; the paced one is the only one every client accepts.
+    pub(crate) fn backspace_then_type(&mut self, backspaces: usize, s: &str) -> bool {
         let Some(vk) = &self.vk else { return false };
-        if s.is_empty() {
+        if backspaces == 0 && s.is_empty() {
             return true;
         }
 
-        // Assign safe keycodes to this word's unique chars.
+        // Assign safe keycodes: BackSpace first (if needed), then the
+        // word's unique chars.
         let mut map: HashMap<char, u32> = HashMap::new();
         let mut assigned: Vec<(char, u32)> = Vec::new();
+        if backspaces > 0 {
+            map.insert('\u{0008}', FIRST_CODE);
+            assigned.push(('\u{0008}', FIRST_CODE));
+        }
         for ch in s.chars() {
             if map.contains_key(&ch) {
                 continue;
@@ -120,11 +143,21 @@ impl VietTyper {
         vk.keymap(KEYMAP_FORMAT_XKB_V1, fd.as_fd(), size);
 
         let mut t = self.start.elapsed().as_millis() as u32;
-        for ch in s.chars() {
-            let code = map[&ch];
-            vk.key(t, code, 1);
+        let mut tap = |code: u32, t: &mut u32| {
+            vk.key(*t, code, 1);
             vk.key(t.wrapping_add(1), code, 0);
-            t = t.wrapping_add(2);
+            *t = t.wrapping_add(2);
+        };
+        for _ in 0..backspaces {
+            tap(FIRST_CODE, &mut t);
+            // Flush + pace: without this the whole burst dies on VCL/gtk3.
+            if let Some(backend) = vk.backend().upgrade() {
+                let _ = wayland_client::Connection::from_backend(backend).flush();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+        for ch in s.chars() {
+            tap(map[&ch], &mut t);
         }
         true
     }

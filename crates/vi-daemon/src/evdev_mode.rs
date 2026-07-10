@@ -1,31 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2024-2026 vi-im contributors
-//! EXPERIMENTAL evdev fallback for apps invisible to `zwp_input_method_v2`
-//! (mainly XWayland/X11). Opt-in via `--evdev`; MUTUALLY EXCLUSIVE with the
-//! Wayland input-method path — grabbing the keyboard means the compositor no
-//! longer sees it, so vi-ime becomes the SOLE keyboard handler.
+//! evdev fallback for apps invisible to `zwp_input_method_v2` (XWayland/X11
+//! clients, LibreOffice's one-shot VCL text-input — see legacy_grab.rs).
+//! Opt-in globally via `--evdev`, or engaged automatically per-app.
 //!
-//! Model (buffer-and-commit, like the terminal-preedit path): letter/tone keys
-//! feed the engine and are NOT forwarded; every other key (space, punctuation,
-//! Enter, arrows, shortcuts, modifiers) is mirrored 1:1 through a uinput device.
-//! At a word boundary the composed word is typed into the focused app via
-//! `wtype` (Wayland) or `xdotool` (X11) — uinput emits keycodes, not Unicode,
-//! so an external typer is required for diacritics.
+//! Model (LIVE echo — the old buffer-and-commit model showed NOTHING until
+//! the word boundary; on LibreOffice that read as "phải commit mới hiện
+//! chữ", reported 2026-07-10): letter/tone keys are consumed and re-echoed
+//! in rendered form via `evdev_compose::Composer`, whose Unicode output
+//! travels on ONE persistent virtual keyboard (`evdev_typer.rs`; `xdotool`
+//! is the X11 fallback). Every other key (space, punctuation, Enter,
+//! arrows, shortcuts, modifiers) is mirrored 1:1 through a uinput device.
 //!
-//! SAFETY: the keyboard is ALWAYS ungrabbed on exit/panic (Drop). Worst case a
-//! bug still lets you switch VT (Ctrl+Alt+F3) or `pkill vi-daemon` from another
-//! machine/SSH. Never auto-enabled.
+//! SAFETY: the keyboard is ALWAYS ungrabbed on exit/panic (Drop). Worst case
+//! a bug still lets you switch VT (Ctrl+Alt+F3) or `pkill vi-daemon` from
+//! another machine/SSH. Never auto-enabled system-wide.
 
 use std::os::fd::AsRawFd;
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
-use evdev::{Device, EventType, InputEvent, KeyCode};
 use evdev::uinput::VirtualDevice;
+use evdev::{Device, EventType, InputEvent, KeyCode};
 use tracing::{error, info, warn};
 
-use crate::engine::fast_engine::NonPreeditEngine;
-use crate::engine::{ImeMode, InputMethod, NonPreeditAction};
+use crate::engine::InputMethod;
+use crate::evdev_compose::{Composer, Typer};
+use crate::wayland::RuntimeConfig;
 
 /// A grabbed keyboard that ungrabs itself on drop (panic-safe).
 struct Grabbed(Device);
@@ -35,16 +36,31 @@ impl Drop for Grabbed {
     }
 }
 
+/// Injected-keyboard device names that must NEVER be grabbed: our own
+/// uinput mirror (feedback loop) and other IMEs' injectors (field case
+/// 2026-07-10: `Fcitx5_Uinput_Server` advertises A-Z, grabbing it made
+/// vi-ime re-process every key that rival injected — doubled/garbled text).
+const IGNORE_DEVICE_MARKERS: &[&str] = &["vi-ime", "fcitx", "ibus", "uinput", "ydotool", "wtype"];
+
+/// Find and grab every real keyboard (devices that report letter keys).
 fn grab_all_keyboards() -> Vec<Grabbed> {
     let mut keyboards: Vec<Grabbed> = Vec::new();
     for (path, dev) in evdev::enumerate() {
+        let name = dev.name().unwrap_or("").to_lowercase();
+        if IGNORE_DEVICE_MARKERS.iter().any(|m| name.contains(m)) {
+            info!("evdev: skipping injected keyboard {:?} ({name}) — not a physical device", path);
+            continue;
+        }
         let is_kbd = dev
             .supported_keys()
             .is_some_and(|k| k.contains(KeyCode::KEY_A) && k.contains(KeyCode::KEY_Z));
         if is_kbd {
             let mut dev = dev;
             match dev.grab() {
-                Ok(()) => keyboards.push(Grabbed(dev)),
+                Ok(()) => {
+                    info!("evdev: grabbing {:?} ({})", path, dev.name().unwrap_or("?"));
+                    keyboards.push(Grabbed(dev));
+                }
                 Err(e) => warn!("evdev: cannot grab {:?}: {e} (need group `input`?)", path),
             }
         }
@@ -52,6 +68,7 @@ fn grab_all_keyboards() -> Vec<Grabbed> {
     keyboards
 }
 
+/// uinput mirror: advertise every standard key so passthrough works.
 fn build_uinput_mirror() -> Result<VirtualDevice, Box<dyn std::error::Error>> {
     let mut keys = evdev::AttributeSet::<KeyCode>::new();
     for code in 1u16..=248 {
@@ -63,43 +80,35 @@ fn build_uinput_mirror() -> Result<VirtualDevice, Box<dyn std::error::Error>> {
         .build()?)
 }
 
-/// Scoped variant for the automatic per-app fallback (see `legacy_grab.rs`):
-/// same buffer-and-commit composition core as `run()`, but polls each
-/// keyboard fd with a short timeout instead of blocking forever, so it can
-/// be released the instant focus leaves the app it was engaged for — this
-/// runs ALONGSIDE the normal Wayland IM thread, only for the apps that
-/// protocol can't reach (XWayland clients, LibreOffice's VCL text-input).
-/// Returns (ungrabs everything) when `stop` is set or a device errors out.
-pub fn run_scoped(method: InputMethod, stop: &AtomicBool) {
-    let Some(injector) = Injector::detect() else {
-        warn!("evdev fallback: no Unicode typer found — install `wtype` or `xdotool`");
-        return;
-    };
-
-    let mut keyboards = grab_all_keyboards();
-    if keyboards.is_empty() {
-        warn!("evdev fallback: no grabbable keyboard (need group `input`?) — staying passthrough");
-        return;
-    }
-
-    let mut ui = match build_uinput_mirror() {
-        Ok(ui) => ui,
-        Err(e) => {
-            error!("evdev fallback: cannot create uinput mirror: {e}");
-            return;
-        }
-    };
-
-    let mut engine = NonPreeditEngine::new(method, ImeMode::NonPreedit);
-    let mut shift = false;
-
+/// Shared event loop. Polls each keyboard fd with a 200ms timeout so the
+/// stop flag (set the instant focus leaves a legacy app) is honored ≥5x/sec
+/// even with zero key traffic. Returns (ungrabs everything) when `stop` is
+/// set or a device errors out.
+fn run_loop(
+    mut keyboards: Vec<Grabbed>,
+    mut ui: VirtualDevice,
+    typer: Typer,
+    method: InputMethod,
+    stop: &AtomicBool,
+    runtime: Option<Arc<RuntimeConfig>>,
+) {
+    let mut composer = Composer::new(method, typer);
+    let mut last_clicks = runtime.as_ref().map(|rt| rt.clicks()).unwrap_or(0);
     'outer: while !stop.load(Ordering::Relaxed) {
+        // Physical-click guard (same click_watch counter the Wayland path
+        // uses): a click moved the cursor — drop the word tracking before
+        // the next key diffs at the wrong position (R8/R17-C).
+        if let Some(rt) = &runtime {
+            let clicks = rt.clicks();
+            if clicks != last_clicks {
+                last_clicks = clicks;
+                composer.click_reset();
+            }
+        }
         let mut pfds: Vec<libc::pollfd> = keyboards
             .iter()
             .map(|k| libc::pollfd { fd: k.0.as_raw_fd(), events: libc::POLLIN, revents: 0 })
             .collect();
-        // 200ms timeout: the stop flag (set the instant focus leaves the
-        // app) is checked at least 5x/sec even with zero key traffic.
         let n = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, 200) };
         if n <= 0 {
             continue;
@@ -116,66 +125,47 @@ pub fn run_scoped(method: InputMethod, stop: &AtomicBool) {
                 }
             };
             for ev in events {
-                if ev.event_type() != EventType::KEY {
-                    continue;
-                }
-                let code = KeyCode::new(ev.code());
-                let value = ev.value();
-
-                if matches!(code, KeyCode::KEY_LEFTSHIFT | KeyCode::KEY_RIGHTSHIFT) {
-                    shift = value != 0;
-                    emit(&mut ui, code, value);
-                    continue;
-                }
-
-                let ch = key_to_char(code, shift);
-                let is_letterish = ch.is_some();
-                if !is_letterish {
-                    if value != 0 {
-                        flush(&mut engine, &injector);
-                    }
-                    emit(&mut ui, code, value);
-                    continue;
-                }
-
-                if value == 0 {
-                    continue;
-                }
-                let Some(ch) = ch else { continue };
-                if let NonPreeditAction::CommitWithBackspace { text, .. } = engine.push_key(ch) {
-                    injector.type_text(&text);
+                if ev.event_type() == EventType::KEY {
+                    composer.handle(&mut ui, KeyCode::new(ev.code()), ev.value());
                 }
             }
         }
     }
-    // Flush a half-typed word rather than lose it, then keyboards drop
-    // (ungrab) and the uinput mirror is torn down as this function returns.
-    flush(&mut engine, &injector);
+    // The half-typed word is already echoed on screen — just settle it,
+    // then keyboards drop (ungrab) and the uinput mirror is torn down.
+    composer.finish_word();
+}
+
+/// Scoped variant for the automatic per-app fallback (see `legacy_grab.rs`):
+/// runs ALONGSIDE the normal Wayland IM thread, only for the apps that
+/// protocol can't reach, released the instant focus leaves the app.
+pub fn run_scoped(method: InputMethod, stop: &AtomicBool, runtime: Option<Arc<RuntimeConfig>>) {
+    let Some(typer) = Typer::detect() else {
+        warn!("evdev fallback: no Unicode typer (no virtual-keyboard support, no `xdotool`)");
+        return;
+    };
+    let keyboards = grab_all_keyboards();
+    if keyboards.is_empty() {
+        warn!("evdev fallback: no grabbable keyboard (need group `input`?) — staying passthrough");
+        return;
+    }
+    let ui = match build_uinput_mirror() {
+        Ok(ui) => ui,
+        Err(e) => {
+            error!("evdev fallback: cannot create uinput mirror: {e}");
+            return;
+        }
+    };
+    run_loop(keyboards, ui, typer, method, stop, runtime);
 }
 
 /// Entry point for `--evdev`. Blocks forever (or until error). Never returns Ok
 /// in normal operation; returns Err on a fatal setup problem so main can log it.
 pub fn run(method: InputMethod) -> Result<(), Box<dyn std::error::Error>> {
-    let injector = Injector::detect().ok_or(
-        "no Unicode typer found — install `wtype` (Wayland) or `xdotool` (X11)",
+    let typer = Typer::detect().ok_or(
+        "no Unicode typer — compositor lacks zwp_virtual_keyboard_v1 and `xdotool` is missing",
     )?;
-    info!("evdev mode: Unicode output via {}", injector.name());
-
-    // Find real keyboards (devices that report letter keys).
-    let mut keyboards: Vec<Grabbed> = Vec::new();
-    for (path, dev) in evdev::enumerate() {
-        let is_kbd = dev
-            .supported_keys()
-            .is_some_and(|k| k.contains(KeyCode::KEY_A) && k.contains(KeyCode::KEY_Z));
-        if is_kbd {
-            info!("evdev: grabbing {:?} ({})", path, dev.name().unwrap_or("?"));
-            let mut dev = dev;
-            match dev.grab() {
-                Ok(()) => keyboards.push(Grabbed(dev)),
-                Err(e) => warn!("evdev: cannot grab {:?}: {e} (need group `input`?)", path),
-            }
-        }
-    }
+    let keyboards = grab_all_keyboards();
     if keyboards.is_empty() {
         return Err(
             "no grabbable keyboard found. Add yourself to the `input` group \
@@ -183,179 +173,9 @@ pub fn run(method: InputMethod) -> Result<(), Box<dyn std::error::Error>> {
             .into(),
         );
     }
-
-    // uinput mirror: advertise every standard key so passthrough works.
-    let mut keys = evdev::AttributeSet::<KeyCode>::new();
-    for code in 1u16..=248 {
-        keys.insert(KeyCode::new(code));
-    }
-    let mut ui = VirtualDevice::builder()?
-        .name("vi-ime evdev virtual keyboard")
-        .with_keys(&keys)?
-        .build()?;
-
-    let mut engine = NonPreeditEngine::new(method, ImeMode::NonPreedit);
-    let mut shift = false;
-
+    let ui = build_uinput_mirror()?;
     info!("evdev mode ACTIVE — vi-ime is the sole keyboard handler now.");
-    loop {
-        for kbd in &mut keyboards {
-            let events: Vec<InputEvent> = match kbd.0.fetch_events() {
-                Ok(evs) => evs.collect(),
-                Err(e) => {
-                    error!("evdev: read error: {e}");
-                    return Ok(());
-                }
-            };
-            for ev in events {
-                if ev.event_type() != EventType::KEY {
-                    continue;
-                }
-                let code = KeyCode::new(ev.code());
-                let value = ev.value(); // 0=release 1=press 2=repeat
-
-                // Track shift for ASCII casing.
-                if matches!(code, KeyCode::KEY_LEFTSHIFT | KeyCode::KEY_RIGHTSHIFT) {
-                    shift = value != 0;
-                    emit(&mut ui, code, value);
-                    continue;
-                }
-
-                // Only act on press/repeat for composition; releases of
-                // consumed letter keys are simply dropped.
-                let ch = key_to_char(code, shift);
-                let is_letterish = ch.is_some();
-
-                // Any modifier held (ctrl/alt/super) → flush + passthrough.
-                // (We don't track them individually; treat as boundary.)
-                if !is_letterish {
-                    // Non-composing key: flush pending word first, then forward.
-                    if value != 0 {
-                        flush(&mut engine, &injector);
-                    }
-                    emit(&mut ui, code, value);
-                    continue;
-                }
-
-                // Letter/digit/tone key: consume (do NOT forward) on press.
-                if value == 0 {
-                    continue; // swallow release of consumed key
-                }
-                let Some(ch) = ch else { continue };
-                // Buffer/preedit/clear actions keep composing silently; only a
-                // completed word produces output (typed via the injector).
-                if let NonPreeditAction::CommitWithBackspace { text, .. } = engine.push_key(ch) {
-                    injector.type_text(&text);
-                }
-            }
-        }
-    }
-}
-
-/// Commit any in-progress word (called before a boundary/shortcut key).
-fn flush(engine: &mut NonPreeditEngine, injector: &Injector) {
-    if engine.has_pending() {
-        let text = engine.inner().preedit_output();
-        engine.reset();
-        if !text.is_empty() {
-            injector.type_text(&text);
-        }
-    }
-}
-
-fn emit(ui: &mut VirtualDevice, code: KeyCode, value: i32) {
-    let ev = InputEvent::new(EventType::KEY.0, code.code(), value);
-    let _ = ui.emit(&[ev]);
-}
-
-/// Minimal US-QWERTY evdev keycode → char (lowercase unless `shift`). Enough for
-/// Telex/VNI composition; non-letter keys return None (forwarded verbatim).
-fn key_to_char(code: KeyCode, shift: bool) -> Option<char> {
-    let base = match code {
-        KeyCode::KEY_A => 'a', KeyCode::KEY_B => 'b', KeyCode::KEY_C => 'c',
-        KeyCode::KEY_D => 'd', KeyCode::KEY_E => 'e', KeyCode::KEY_F => 'f',
-        KeyCode::KEY_G => 'g', KeyCode::KEY_H => 'h', KeyCode::KEY_I => 'i',
-        KeyCode::KEY_J => 'j', KeyCode::KEY_K => 'k', KeyCode::KEY_L => 'l',
-        KeyCode::KEY_M => 'm', KeyCode::KEY_N => 'n', KeyCode::KEY_O => 'o',
-        KeyCode::KEY_P => 'p', KeyCode::KEY_Q => 'q', KeyCode::KEY_R => 'r',
-        KeyCode::KEY_S => 's', KeyCode::KEY_T => 't', KeyCode::KEY_U => 'u',
-        KeyCode::KEY_V => 'v', KeyCode::KEY_W => 'w', KeyCode::KEY_X => 'x',
-        KeyCode::KEY_Y => 'y', KeyCode::KEY_Z => 'z',
-        KeyCode::KEY_1 => '1', KeyCode::KEY_2 => '2', KeyCode::KEY_3 => '3',
-        KeyCode::KEY_4 => '4', KeyCode::KEY_5 => '5', KeyCode::KEY_6 => '6',
-        KeyCode::KEY_7 => '7', KeyCode::KEY_8 => '8', KeyCode::KEY_9 => '9',
-        KeyCode::KEY_0 => '0',
-        _ => return None,
-    };
-    // Digits are tone/quality keys in VNI — never uppercase them.
-    if shift && base.is_ascii_alphabetic() {
-        Some(base.to_ascii_uppercase())
-    } else {
-        Some(base)
-    }
-}
-
-/// External Unicode typer (uinput cannot emit arbitrary Unicode).
-enum Injector {
-    Wtype,
-    Xdotool,
-}
-impl Injector {
-    fn detect() -> Option<Self> {
-        // Prefer wtype under Wayland; fall back to xdotool for X11/XWayland.
-        if std::env::var_os("WAYLAND_DISPLAY").is_some() && which("wtype") {
-            Some(Injector::Wtype)
-        } else if which("xdotool") {
-            Some(Injector::Xdotool)
-        } else if which("wtype") {
-            Some(Injector::Wtype)
-        } else {
-            None
-        }
-    }
-    fn name(&self) -> &'static str {
-        match self {
-            Injector::Wtype => "wtype",
-            Injector::Xdotool => "xdotool",
-        }
-    }
-    fn type_text(&self, text: &str) {
-        let _ = match self {
-            Injector::Wtype => Command::new("wtype").arg(text).status(),
-            Injector::Xdotool => Command::new("xdotool").args(["type", "--", text]).status(),
-        };
-    }
-}
-
-fn which(bin: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|paths| {
-            std::env::split_paths(&paths).any(|p| p.join(bin).is_file())
-        })
-        .unwrap_or(false)
-}
-
-/// Readiness lines for `--doctor`: how many keyboards we can see and whether a
-/// Unicode typer exists. Read-only (never grabs).
-pub fn doctor_lines() -> Vec<String> {
-    let mut out = Vec::new();
-    let kbds = evdev::enumerate()
-        .filter(|(_, d)| {
-            d.supported_keys()
-                .is_some_and(|k| k.contains(KeyCode::KEY_A) && k.contains(KeyCode::KEY_Z))
-        })
-        .count();
-    if kbds > 0 {
-        out.push(format!("✅ thấy {kbds} bàn phím có thể grab (quyền /dev/input OK)"));
-    } else {
-        out.push(
-            "❌ không mở được /dev/input — thêm group `input`: sudo usermod -aG input $USER (rồi re-login)"
-                .to_string(),
-        );
-    }
-    match Injector::detect() {
-        Some(inj) => out.push(format!("✅ Unicode typer: {}", inj.name())),
-        None => out.push("❌ thiếu `wtype` (Wayland) hoặc `xdotool` (X11) để gõ Unicode".to_string()),
-    }
-    out
+    static NEVER_STOP: AtomicBool = AtomicBool::new(false);
+    run_loop(keyboards, ui, typer, method, &NEVER_STOP, None);
+    Ok(())
 }

@@ -113,7 +113,20 @@ pub struct ImeAppState {
     pub(crate) feedback: Option<FeedbackFn>,
     /// Game mode: raw key passthrough, no IME processing.
     pub(crate) game_mode: bool,
+    /// When the last composing key was processed — arms the idle
+    /// auto-commit (see [`Self::idle_commit_deadline_ms`]).
+    pub(crate) last_key_at: Option<Instant>,
 }
+
+/// Preedit-only compositions are DROPPED on a mouse click (R8) — the field
+/// complaint (2026-07-10, LibreOffice): "gõ dở rồi click là mất chữ". A
+/// mid-word commit at click time is a proven race (R16). Instead: after
+/// this long without a key, finalize the word while the cursor is
+/// guaranteed still in place — semantically identical to the user pressing
+/// the boundary themselves, zero race. Trade-off: a mid-word pause longer
+/// than this finalizes the word, so a LATE tone key starts a new word
+/// (rare; tone keys follow within a word almost immediately).
+const IDLE_COMMIT_MS: u128 = 1500;
 
 impl ImeAppState {
     pub(crate) fn new(
@@ -148,7 +161,35 @@ impl ImeAppState {
             clock_base_ms: None,
             feedback: None,
             game_mode: false,
+            last_key_at: None,
         }
+    }
+
+    /// ms left until the idle auto-commit fires, or None when unarmed.
+    /// Armed ONLY while a composition exists solely as preedit (non-live):
+    /// live mode's text is already real, nothing to lose on a click.
+    pub(crate) fn idle_commit_deadline_ms(&self) -> Option<i32> {
+        if !self.active || !self.engine.has_pending() {
+            return None;
+        }
+        if self.engine.mode() == ImeMode::NonPreedit && self.viet.ready() {
+            return None;
+        }
+        let elapsed = self.last_key_at?.elapsed().as_millis();
+        Some(IDLE_COMMIT_MS.saturating_sub(elapsed).min(i32::MAX as u128) as i32)
+    }
+
+    /// Fire the idle auto-commit if its deadline passed (poll timeout path).
+    pub(crate) fn idle_commit(&mut self, conn: &Connection) {
+        match self.idle_commit_deadline_ms() {
+            Some(ms) if ms <= 0 => {}
+            _ => return,
+        }
+        let Some(im) = self.input_method.clone() else { return };
+        info!("[IDLE-COMMIT] {IDLE_COMMIT_MS}ms không gõ — chốt từ đang soạn (kẻo click là mất, R8)");
+        self.finalize_word(&im);
+        self.last_key_at = None;
+        let _ = conn.flush();
     }
 
     /// Delivery-stage latency (compositor → us) for one key event, in µs.

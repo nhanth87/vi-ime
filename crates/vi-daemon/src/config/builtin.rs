@@ -63,16 +63,33 @@ fn mode_config(m: ImeMode) -> AppConfig {
     AppConfig { ime_mode: Some(m), ..AppConfig::default() }
 }
 
+/// Chromium-family ids: Preedit double-inputs under niri (the very reason
+/// ChromiumNiriPlugin exists — but plugins are advisory-only per R13, so
+/// the mode has to be decided HERE, in a resolution layer).
+const CHROMIUM_FAMILY: &[&str] = &[
+    "chromium-browser", "chromium", "google-chrome", "brave-browser",
+    "vivaldi-stable", "discord", "slack", "element",
+];
+
+fn on_niri() -> bool {
+    std::env::var("XDG_CURRENT_DESKTOP")
+        .map(|d| d.to_lowercase().contains("niri"))
+        .unwrap_or(false)
+}
+
 /// Builtin profile for an app_id (case-insensitive exact match).
 pub fn builtin_app_profile(app_id: &str) -> Option<AppConfig> {
     let id = app_id.to_lowercase();
     if KNOWN_TERMINALS.contains(&id.as_str()) {
         return Some(mode_config(ImeMode::NonPreedit));
     }
-    BUILTIN_APPS
-        .iter()
-        .find(|(k, _)| *k == id)
-        .map(|(_, m)| mode_config(*m))
+    let (_, m) = BUILTIN_APPS.iter().find(|(k, _)| *k == id)?;
+    let mode = if *m == ImeMode::Preedit && on_niri() && CHROMIUM_FAMILY.contains(&id.as_str()) {
+        ImeMode::NonPreedit
+    } else {
+        *m
+    };
+    Some(mode_config(mode))
 }
 
 /// Builtin site profile: longest title-substring match (both lowercase),

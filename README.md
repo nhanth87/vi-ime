@@ -13,7 +13,7 @@ daemon trung gian nào cả.
 
 | | vi-im | fcitx5 | IBus |
 |---|---|---|---|
-| Kích thước | **~4MB** (1 binary) | ~30MB+ (core + engine + plugin) | ~150MB (core + engine + gtk/qt module) |
+| Kích thước | **~1.9MB** (1 binary) | ~30MB+ (core + engine + plugin) | ~150MB (core + engine + gtk/qt module) |
 | CPU lúc rảnh | **0%** — chặn trên 1 event, không poll | daemon nền liên tục | daemon nền liên tục |
 | Phụ thuộc | libwayland, libxkbcommon | Qt/GTK, D-Bus, nhiều module | GTK, D-Bus |
 

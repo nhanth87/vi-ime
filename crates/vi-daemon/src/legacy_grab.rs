@@ -30,6 +30,7 @@ use tracing::info;
 
 use crate::engine::InputMethod;
 use crate::evdev_mode;
+use crate::wayland::RuntimeConfig;
 
 /// app_id prefixes (case-insensitive) known to be unreachable via
 /// `zwp_input_method_v2`. Structural limitation, not a user preference —
@@ -55,13 +56,13 @@ pub struct LegacyGrab {
 }
 
 impl LegacyGrab {
-    pub fn start(method: InputMethod) -> Self {
+    pub fn start(method: InputMethod, runtime: Arc<RuntimeConfig>) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
         info!("[LEGACY-GRAB] engaging evdev fallback (app outside zwp_input_method_v2 reach)");
         let handle = std::thread::Builder::new()
             .name("vi-legacy-grab".into())
-            .spawn(move || evdev_mode::run_scoped(method, &stop2))
+            .spawn(move || evdev_mode::run_scoped(method, &stop2, Some(runtime)))
             .ok();
         Self { stop, handle }
     }

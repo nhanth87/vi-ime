@@ -219,6 +219,34 @@ Cần user ở nhóm `input` (`sudo usermod -aG input $USER`) — AppRun của
 AppImage tự xin quyền một lần qua `pkexec`/`sudo` rồi `sg input -c` để áp
 dụng ngay, không cần đăng xuất lại.
 
+**Mô hình evdev fallback = LIVE echo (sửa 2026-07-10, 2 vòng):** bản đầu
+là buffer-and-commit (nuốt phím chữ, chỉ gõ cả từ qua wtype ở word
+boundary) → user báo "LibreOffice phải commit mới hiện chữ, cả predict
+lẫn nonpredict" — đúng, vì trong lúc soạn KHÔNG có gì trên màn hình, và
+mode setting không liên quan (legacy path luôn dùng NonPreeditEngine).
+Fix vòng 1: echo theo từng phím — mỗi keystroke diff `shown` với
+`engine.preedit_output()` rồi gửi `BackSpace × k + suffix` qua wtype.
+**Vòng 1 FAIL trên field ("mèo"→"mèe"):** mỗi lần spawn wtype = một
+virtual keyboard + keymap MỚI (keysym→keycode phụ thuộc nội dung suffix
+từng lần gọi) → seat keymap của compositor nhảy real↔wtype MỖI PHÍM;
+client áp keymap trễ một nhịp là render SAI GLYPH (keycode của 'o' lần
+này = keycode của 'e' lần trước). Fix vòng 2 (đang áp dụng):
+`evdev_typer.rs` — MỘT `zwp_virtual_keyboard_v1` bền vững trên connection
+riêng của daemon, mỗi sync upload keymap tí hon (BackSpace + suffix,
+keycode 2..=33 — tái dùng builder của `viet_typer.rs`) + tap trên CÙNG
+object nên keymap-trước-key được protocol bảo đảm; kết thúc bằng
+roundtrip để event sau của uinput mirror không vượt mặt (cross-channel).
+xdotool chỉ còn là fallback X11 (`evdev_inject.rs`). Composer ở
+`evdev_compose.rs`, dùng chung cho `run` (--evdev) lẫn `run_scoped`.
+Fix kèm cùng ngày: (a) digit đầu từ (VNI) / digit boundary (Telex) bị
+NUỐT MẤT (PassThrough không emit) — giờ replay qua uinput tap;
+(b) Backspace giữa từ vào engine (diff-erase) thay vì forward thô;
+(c) **Ctrl+A bị engine ăn mất** — Composer thiếu gate system-modifier:
+giờ Ctrl/Alt/Super track riêng (transparent như MODIFIER_KEYS Wayland
+path), phím bấm khi đang giữ chord → finish_word + forward VERBATIM;
+(d) release của phím chữ giờ forward luôn (release không press là no-op,
+nhưng nếu press đã forward theo chord mà release bị nuốt = KẸT PHÍM).
+
 ### R17. BẢN ĐỒ 3 TÍNH NĂNG HAY VỠ + TẠI SAO SỬA HOÀI KHÔNG HẾT (phân tích 2026-07-10)
 
 > Đây là kết quả trace toàn bộ code sau chuỗi regression trong R16. Agent nào
@@ -284,13 +312,86 @@ không phải một chỗ:**
    đổi nào ở MỘT điểm ngắt phải rà lại cả ma trận: address bar Chrome,
    terminal kitty, đổi setting giữa chừng từ, click giữa chừng từ.
 
-**Trạng thái máy dev (2026-07-10):** user CHƯA ở nhóm `input` → click-watch
-và legacy_grab (LibreOffice/OnlyOffice) đều bất hoạt. AppRun của AppImage đã
-có sẵn logic tự xin quyền (pkexec/sudo + `sg input`) ở lần chạy đầu. Cơ chế
-C ở trên chỉ hết hẳn khi quyền này được cấp. Phương án dự phòng chưa làm:
-heuristic "quá N giây không gõ → coi như từ mới" (`last_key_time` hiện chỉ
-dùng cho telemetry REORDER, chưa dùng ngắt từ) — chỉ giảm tần suất, không
-diệt gốc.
+**Tính năng 4 (bổ sung 2026-07-10) — engine "đ" đứng một mình:** gõ
+`dd`/`d9` + boundary từng commit RAW ("dd"/"d9") ở MỌI app: normalize ra
+`['đ']` nhưng `decompose` đòi nucleus có nguyên âm → fail → R9 restore
+raw. Fix ở `syllable.rs::process`: decompose fail NHƯNG chars là đúng MỘT
+initial hợp lệ (`is_onset_only`: "đ", "ngh", "nh"…) → render dạng chuẩn
+hoá (`đ`), không restore raw. KHÔNG nới thêm điều kiện này (vd "chấp nhận
+mọi prefix") — R9 tồn tại để "windows"→"ưindows" không xảy ra; từ tiếng
+Anh thật không bao giờ là một onset Việt trần có modifier bị nuốt.
+
+**Tính năng 5 (2026-07-10 tối) — RIVAL Ở TẦNG EVDEV + double-path LibreOffice.**
+Chuỗi regression "sửa một ra ba" chiều 2026-07-10 hoá ra có một thủ phạm
+ngoài code: máy dev chạy sẵn **`/usr/local/bin/fcitx5_uinput_server`**
+(service HỆ THỐNG `fcitx5-uinput-meodien.service`, enabled, chạy từ boot,
+quyền root) — một injector bàn phím cấp evdev của setup fcitx5 cũ. Ba hệ quả:
+1. `rivals.rs` KHÔNG bắt được nó: so comm CHÍNH XÁC với "fcitx5" trong khi
+   /proc comm bị cắt 15 ký tự thành "fcitx5_uinput_s" → đã đổi sang
+   `starts_with`. Khi nhận bug "nuốt phím/mất dấu/shortcut chết toàn hệ
+   thống": chạy `vi-ime --doctor` xem mục rival TRƯỚC khi nghi code.
+2. `grab_all_keyboards` từng grab MỌI thiết bị có phím A-Z — kể cả uinput
+   device của rival (`Fcitx5_Uinput_Server`) → vi-ime xử lý lại phím do
+   rival tiêm = chữ đôi/loạn. Đã thêm `IGNORE_DEVICE_MARKERS` (vi-ime/
+   fcitx/ibus/uinput/ydotool/wtype) — evdev fallback CHỈ grab bàn phím
+   vật lý.
+3. **LibreOffice text-input KHÔNG chết hẳn**: nó Activate thật ở lần focus
+   ĐẦU (learned.toml ghi surrounding_text=true cho libreoffice-writer!) —
+   tức là có khoảng thời gian cả Wayland path LẪN evdev legacy grab cùng
+   gõ vào một cửa sổ (space đi vòng qua IM-grab replay trễ → "d ân trí").
+   Fix: handshake trong main.rs — nhận `ImeFeedback::Activated` khi đang
+   có legacy grab → NHẢ grab ngay (protocol path là chủ); focus lại lần
+   sau không có Activate → grab engage lại như cũ. KHÔNG thêm điều kiện
+   khác vào handshake này.
+
+**Tính năng 6 (2026-07-10 tối, PROBE-VERIFIED) — VCL/gtk3 nuốt burst
+BackSpace+ký-tự:** LibreOffice "nonpredict mất dấu" đã được TÁI HIỆN CÓ ĐO
+ĐẠC bằng `scripts/vk-probe` (virtual keyboard thật + zenity/LibreOffice +
+grim đọc kết quả). Ma trận kết quả trên LibreOffice Writer (gtk3):
+| Chuỗi tap trong MỘT burst | Kết quả |
+|---|---|
+| 1 phím bất kỳ (kể cả ê/ệ, kể cả BackSpace trần) | ✅ ăn |
+| 2+ ký tự thường (xy) | ✅ ăn |
+| BackSpace + ký tự khác (BS,ệ hoặc BS,x) | ❌ NUỐT TRỌN GÓI (cả BS lẫn chữ) |
+| BS → roundtrip + 15ms → ký tự | ✅ hoàn hảo ("việt" đủ dấu) |
+Timestamp đơn điệu KHÔNG cứu. zenity (GTK4) không dính. kitty không dính.
+→ Fix THỐNG NHẤT một pattern cho cả hai đường gõ (bản đầu từng ép builtin
+LibreOffice→Preedit để né — user bác ngay vì preedit = gạch chân, đã revert):
+- `viet_typer.rs::backspace_then_type`: BackSpace vào CHUNG keymap per-word
+  (keycode FIRST_CODE), tap trên CÙNG object, sau mỗi BS thì flush + 15ms.
+  `sync_shown` (actions.rs, Wayland live) giờ gọi hàm này — vk1 KHÔNG còn
+  gõ BackSpace hộ live path nữa (một kênh duy nhất, hết cả câu hỏi
+  cross-object). kitty chịu thêm 15ms MỖI phím-có-diff-lùi (phím dấu) —
+  chấp nhận, đổi lấy MỘT hành vi cho mọi app.
+- `evdev_typer.rs` (fallback path) cùng pattern, pace sau mỗi BS.
+Chromium-family trên niri (`CHROMIUM_FAMILY`, builtin.rs) giờ resolve
+NonPreedit ngay ở layer builtin — trước đó `google-chrome → Preedit`
+builtin ĐÈ toggle NonPreedit toàn cục của user (log: gen=71 NonPreedit →
+gen=74 Preedit khi focus Chrome) trong khi ChromiumNiriPlugin chỉ advisory
+(R13) nên dòng log "forcing NonPreedit" của nó là noise, không phải hành động.
+
+**Tính năng 7 (2026-07-10 tối) — chống "click là mất chữ đang gõ":**
+composition chỉ-là-preedit bị DROP khi click (R8, đúng và giữ nguyên —
+commit lúc click là race đã tử nạn nhiều lần, R16). Giảm đau bằng 2 lớp:
+1. **Idle auto-commit** (`state.rs::idle_commit`, `IDLE_COMMIT_MS=1500`):
+   đang soạn preedit mà 1.5s không gõ → `finalize_word` khi cursor CHẮC
+   CHẮN còn tại chỗ (an toàn tuyệt đối — y hệt user tự bấm boundary, không
+   race). Cơ chế: poll timeout trong loop wayland/mod.rs, CHỈ arm khi có
+   pending dạng preedit (live mode không arm — text đã thật; idle = block
+   vô hạn như cũ, R15 giữ nguyên). Trade-off: nghỉ giữa từ >1.5s là từ bị
+   chốt, phím dấu muộn rơi vào từ mới — hiếm, chấp nhận.
+2. **Click-guard cho evdev Composer** (`click_reset`, đọc cùng counter
+   click_watch qua RuntimeConfig truyền vào `LegacyGrab::start`): click là
+   drop tracking, KHÔNG đụng màn hình (text live là thật, diff tiếp sẽ
+   backspace nhầm chỗ mới — cơ chế C của R17).
+
+**Trạng thái máy dev (2026-07-10 tối):** user ĐÃ ở nhóm `input` (click-watch
++ legacy_grab hoạt động). Rival `fcitx5-uinput-meodien.service` cần disable
+thủ công (system service, cần sudo):
+`sudo systemctl disable --now fcitx5-uinput-meodien.service`.
+Phương án dự phòng chưa làm: heuristic "quá N giây không gõ → coi như từ
+mới" (`last_key_time` hiện chỉ dùng cho telemetry REORDER, chưa dùng ngắt
+từ) — chỉ giảm tần suất cơ chế C, không diệt gốc.
 
 ### R15. Zero-CPU Idle
 - Daemon main loop = MỘT `rx.recv()` blocking trên unified DaemonEvent channel.

@@ -136,7 +136,13 @@ fn run_ime_internal(
                 revents: 0,
             },
         ];
-        let ret = unsafe { libc::poll(pfds.as_mut_ptr(), 2, -1) };
+        // Timeout only while an idle auto-commit is armed (a composition
+        // that exists solely as preedit) — otherwise block forever (R15).
+        let timeout = state
+            .idle_commit_deadline_ms()
+            .map(|ms| ms.max(1))
+            .unwrap_or(-1);
+        let ret = unsafe { libc::poll(pfds.as_mut_ptr(), 2, timeout) };
         if ret > 0 && (pfds[1].revents & libc::POLLIN) != 0 {
             // Drain the eventfd (nonblocking) and drop any hanging word.
             let mut buf: u64 = 0;
@@ -167,6 +173,10 @@ fn run_ime_internal(
         } else {
             // Timeout (or signal): release the read intent without reading.
             drop(read_guard);
+        }
+        if ret == 0 {
+            // Poll timeout: the idle auto-commit deadline passed.
+            state.idle_commit(&conn);
         }
 
         if let Err(e) = event_queue.dispatch_pending(&mut state) {

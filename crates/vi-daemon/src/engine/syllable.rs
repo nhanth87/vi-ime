@@ -105,8 +105,25 @@ pub fn process(raw_keys: &[char], method: InputMethod, style: ToneStyle) -> Outc
 
     match decompose(&norm.chars) {
         Some(syl) => Outcome::Rendered(render(&syl, norm.tone, style, case)),
+        // Onset-only word: "đ" (dd/d9) has no nucleus yet, so decompose
+        // fails — but every char forms a valid initial, i.e. a PREFIX of a
+        // Vietnamese syllable. Render the normalized form ("đ"), don't
+        // R9-restore the raw keys ("dd"/"d9") — field bug 2026-07-10:
+        // typing "đ" + space committed "dd". Real English words are never
+        // a bare Vietnamese onset with a consumed modifier, so R9 restore
+        // (windows→windows) is unaffected.
+        None if is_onset_only(&norm.chars) => {
+            Outcome::Rendered(render_literal(&norm.chars, case))
+        }
         None => Outcome::Raw,
     }
+}
+
+/// Do these chars form exactly one valid Vietnamese initial ("đ", "ngh"…)?
+fn is_onset_only(chars: &[char]) -> bool {
+    INITIALS
+        .iter()
+        .any(|init| init.chars().count() == chars.len() && starts_with(chars, init))
 }
 
 // ── Decomposition (structural, table-free) ────────────────────────────────
@@ -274,3 +291,4 @@ fn detect_case(raw_keys: &[char]) -> CaseHint {
         _ => CaseHint::Lower,
     }
 }
+

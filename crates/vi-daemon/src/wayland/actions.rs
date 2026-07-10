@@ -15,10 +15,6 @@ use crate::engine::{ImeMode, NonPreeditAction};
 use crate::wayland::feedback::{ImeFeedback, PipelineStage};
 use crate::wayland::state::{FieldSensitivity, ImeAppState};
 
-/// evdev keycode for Backspace — erases forwarded raw keys before the
-/// composed word is typed (Live mode, P0-3).
-const KEY_BACKSPACE: u32 = 14;
-
 /// Modifier keycodes (evdev): LCTRL, LSHIFT, RSHIFT, LALT, CAPSLOCK,
 /// RCTRL, RALT, LMETA, RMETA. Forwarded transparently, never break a word.
 const MODIFIER_KEYS: [u32; 9] = [29, 42, 54, 56, 58, 97, 100, 125, 126];
@@ -133,6 +129,8 @@ impl ImeAppState {
         };
         let engine_us = t0.elapsed().as_micros().min(u128::from(u32::MAX)) as u32;
         self.apply_action(action, keycode, &im);
+        // Arm/refresh the idle auto-commit (state.rs) while composing.
+        self.last_key_at = self.engine.has_pending().then(std::time::Instant::now);
         let spent = t0.elapsed();
         if spent.as_millis() >= 1 {
             let us = spent.as_micros().min(u128::from(u32::MAX)) as u32;
@@ -262,10 +260,12 @@ impl ImeAppState {
 
     /// Live mode (P0-3): make the app show `target` for the in-progress
     /// word. Diffs against what we already typed and touches only the
-    /// changed suffix: Backspace × k, then type the new suffix on the
-    /// per-word keymap. Everything travels on wl_keyboard, so ordering is
-    /// guaranteed — the failure modes of commit_string (cross-channel
-    /// reorder) and delete_surrounding_text (silently ignored) can't occur.
+    /// changed suffix: BackSpace × k + the new suffix, ALL on the per-word
+    /// keymap keyboard (viet_typer) — one object, so keymap-before-keys and
+    /// key order are protocol-guaranteed, and the BackSpaces are paced
+    /// (VCL/gtk3 swallows BS+char bursts whole, probe-verified 2026-07-10).
+    /// The failure modes of commit_string (cross-channel reorder) and
+    /// delete_surrounding_text (silently ignored) can't occur here.
     fn sync_shown(&mut self, target: &str) {
         let shown: Vec<char> = self.shown_word.chars().collect();
         let tgt: Vec<char> = target.chars().collect();
@@ -274,14 +274,14 @@ impl ImeAppState {
             .zip(tgt.iter())
             .take_while(|(a, b)| a == b)
             .count();
-        for _ in common..shown.len() {
-            self.vk.tap(KEY_BACKSPACE);
-        }
-        if common < tgt.len() {
-            let suffix: String = tgt[common..].iter().collect();
-            if !self.viet.type_str(&suffix) {
-                tracing::warn!("[VIET-TYPER] không gõ được \"{suffix}\" — giữ nguyên");
-            }
+        let suffix: String = tgt[common..].iter().collect();
+        tracing::debug!(
+            "[LIVE-SYNC] shown={:?} → target={target:?} (bs={}, suffix={suffix:?})",
+            self.shown_word,
+            shown.len() - common
+        );
+        if !self.viet.backspace_then_type(shown.len() - common, &suffix) {
+            tracing::warn!("[VIET-TYPER] không gõ được (bs={}, \"{suffix}\") — giữ nguyên", shown.len() - common);
         }
         self.shown_word.clear();
         self.shown_word.push_str(target);

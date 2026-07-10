@@ -13,7 +13,10 @@ mod compositor;
 mod config;
 mod doctor;
 mod engine;
+mod evdev_compose;
+mod evdev_inject;
 mod evdev_mode;
+mod evdev_typer;
 mod events;
 mod game_detector;
 mod godmod;
@@ -317,7 +320,10 @@ fn main() {
                     let wants_legacy = current_app_id.as_deref().is_some_and(legacy_grab::is_legacy_app);
                     match (wants_legacy, legacy_grab.is_some()) {
                         (true, false) => {
-                            legacy_grab = Some(legacy_grab::LegacyGrab::start(engine_input_method(config_manager.setting().input_method)));
+                            legacy_grab = Some(legacy_grab::LegacyGrab::start(
+                                engine_input_method(config_manager.setting().input_method),
+                                Arc::clone(&runtime),
+                            ));
                         }
                         (false, true) => legacy_grab = None,
                         _ => {}
@@ -355,6 +361,21 @@ fn main() {
             }
 
             DaemonEvent::ImeFeedback(fb) => {
+                // Legacy-grab ↔ Wayland-path handshake (field bug 2026-07-10):
+                // LibreOffice's text-input DOES activate on its FIRST focus,
+                // so the evdev fallback and the Wayland engine were typing
+                // into the same window at once (the space replayed through
+                // the IM-grab detour landed late → "d ân trí"). The protocol
+                // signal is authoritative: the moment the focused app
+                // Activates, the Wayland path owns it — release the grab.
+                // A later focus without Activate re-engages it (LibreOffice
+                // never re-arms after the first focus, see R16 Bài học 4).
+                if matches!(fb, crate::wayland::feedback::ImeFeedback::Activated)
+                    && legacy_grab.is_some()
+                {
+                    info!("[LEGACY-GRAB] app Activate qua Wayland — nhả evdev grab, protocol path xử lý");
+                    legacy_grab = None;
+                }
                 let changed = adapt.handle_feedback(current_app_id.as_deref(), fb);
                 if changed {
                     info!("learned suggestion changed for {:?} — re-resolving", current_app_id);

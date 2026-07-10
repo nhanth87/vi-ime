@@ -64,7 +64,12 @@ pub fn detect() -> Vec<Rival> {
             }
             continue;
         }
-        if let Some((n, svc)) = KNOWN.iter().find(|(n, _)| *n == comm) {
+        // Prefix match, not exact: /proc comm is truncated to 15 chars and
+        // rivals ship helper daemons — the field case (2026-07-10) was
+        // `fcitx5_uinput_server` (comm "fcitx5_uinput_s"), an evdev-level
+        // key injector that never matched "fcitx5" exactly, so it silently
+        // fought vi-ime for every keystroke (mất dấu, nuốt shortcut).
+        if let Some((n, svc)) = KNOWN.iter().find(|(n, _)| comm.starts_with(*n)) {
             // One entry per distinct rival name is enough for the message.
             if !found.iter().any(|r| r.proc_name == *n) {
                 found.push(Rival { proc_name: n, pid, service: *svc });
