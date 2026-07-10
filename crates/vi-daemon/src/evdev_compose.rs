@@ -240,6 +240,17 @@ impl Composer {
         {
             common_bytes += 1;
         }
+        // Byte compare can stop MID-CHAR when two different composed chars
+        // share a UTF-8 prefix — mọi chữ 2-dấu (U+1EA0..U+1EF9) đều bắt đầu
+        // E1 BA/BB, nên đổi dấu (ứ→ừ, ề→ệ) chung 2 byte đầu → slicing panics
+        // ("byte index is not a char boundary") và giết luôn thread grab.
+        // Lùi về ranh giới ký tự của CẢ HAI chuỗi.
+        while common_bytes > 0
+            && !(self.shown.is_char_boundary(common_bytes)
+                && target.is_char_boundary(common_bytes))
+        {
+            common_bytes -= 1;
+        }
 
         let bs_count = self.shown[common_bytes..].chars().count();
         let suffix = &target[common_bytes..];

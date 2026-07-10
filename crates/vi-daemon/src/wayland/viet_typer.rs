@@ -139,6 +139,13 @@ impl VietTyper {
             return false;
         }
 
+        let pace = |vk: &ZwpVirtualKeyboardV1| {
+            if let Some(backend) = vk.backend().upgrade() {
+                let _ = wayland_client::Connection::from_backend(backend).flush();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        };
+
         let missing = needed
             .iter()
             .filter(|c| !self.cached_map.contains_key(c))
@@ -166,14 +173,15 @@ impl VietTyper {
                 return false;
             };
             vk.keymap(KEYMAP_FORMAT_XKB_V1, fd.as_fd(), size);
+            // Keymap-apply beat (repro 2026-07-10): Electron/Chromium áp
+            // keymap TRỄ MỘT NHỊP — tap keycode mới trong cùng burst giải
+            // mã theo keymap cũ → ký tự biến mất ("quà"→"q", "kẹ"→"k").
+            // Flush + 15ms sau upload để client kịp áp trước tap đầu tiên.
+            if paced {
+                pace(vk);
+            }
         }
 
-        let pace = |vk: &ZwpVirtualKeyboardV1| {
-            if let Some(backend) = vk.backend().upgrade() {
-                let _ = wayland_client::Connection::from_backend(backend).flush();
-            }
-            std::thread::sleep(std::time::Duration::from_millis(15));
-        };
         let mut t = self.start.elapsed().as_millis() as u32;
         for _ in 0..backspaces {
             let code = self.cached_map[&'\u{0008}'];

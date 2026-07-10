@@ -424,6 +424,29 @@ pace SAU MỌI TAP → `viet_typer` (khi `paced=true`) và `evdev_typer` (luôn,
 vì chỉ nhắm legacy app) giờ flush+15ms sau TỪNG tap. Đừng "tối ưu" bỏ bớt
 nhịp nào khi target là VCL — mọi biến thể ít-pace-hơn đều đã fail thực địa.
 
+**Đính chính pacing LẦN 2 (regression "commit xong mất" VNI/Tự do,
+2026-07-10 khuya — REPRO CÓ ĐO ĐẠC):** commit `6b2f357` từng thu hẹp paced
+về whitelist libreoffice/soffice ("chỉ VCL cần pace") — SAI, đúng lời cảnh
+báo ở trên. Repro bằng uinput rollover 20ms/phím vào Electron (orca-ide)
+ép NonPreedit live: từ có ký tự dấu MỚI (chưa có trong keymap cache của
+`viet_typer`) ngay sau khi keymap đổi bị ăn mất đuôi — "quà"→"q",
+"kẹ"→"k", "từ"→"t", "tiệm"→"tieệm". Cơ chế: client (Electron/Chromium,
+nghi cả GTK cũ) áp `wl_keyboard.keymap` TRỄ MỘT NHỊP; tap keycode mới
+nằm CÙNG burst với keymap upload bị giải mã theo keymap CŨ → unmapped
+(mất chữ) hoặc trúng BS cũ (ăn ngược từ). Chữ ≥2 dấu dính nhiều nhất vì
+mỗi lần đổi/thêm dấu là một composed char MỚI → một lần đổi keymap.
+Quy tắc hiện hành (3 điểm, đừng đảo lại):
+1. `actions.rs::sync_shown`: paced MẶC ĐỊNH BẬT; chỉ tắt cho
+   `compositor::KNOWN_TERMINALS` (kitty/foot… đã probe burst-safe).
+   `current_app_id == None` → paced (phía an toàn).
+2. `viet_typer`/`evdev_typer`: sau MỖI lần `vk.keymap()` upload phải có
+   nhịp flush+15ms TRƯỚC tap đầu tiên (keymap-apply beat) — pace-sau-tap
+   không cứu được tap ĐẦU.
+3. `evdev_compose::sync_shown`: diff theo byte phải lùi `common_bytes` về
+   char-boundary của CẢ shown lẫn target — mọi chữ 2-dấu (U+1EA0..U+1EF9)
+   chung prefix E1 BA/BB, đổi dấu (ứ→ừ, ề→ệ) làm byte-compare dừng GIỮA
+   ký tự → slice panic giết thread legacy-grab.
+
 **Key-repeat kẹt app-side (Chrome Ctrl+T → "tttt…", 2026-07-10 muộn):**
 chuỗi: Ctrl+T forward qua vk1 → tab mới Deactivate → release_all drain
 `held` → grab nhả → niri gửi `wl_keyboard.enter` kèm mảng phím ĐANG ĐÈ

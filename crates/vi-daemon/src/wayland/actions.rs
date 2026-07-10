@@ -280,11 +280,16 @@ impl ImeAppState {
             self.shown_word,
             shown.len() - common
         );
-        // Pacing only for the app family that needs it (VCL/gtk3 swallows
-        // BS+char bursts whole, probe-verified) — terminals stay burst-fast.
-        let paced = self.current_app_id.as_deref().is_some_and(|id| {
+        // Pacing DEFAULT-ON; only known burst-safe terminals go fast.
+        // Regression 2026-07-10 (repro: uinput rollover 20ms/key vào Electron
+        // live-mode): whitelist "chỉ libreoffice cần pace" làm Electron/
+        // Chromium mất ký tự có keycode MỚI trong keymap vừa upload —
+        // client áp keymap trễ một nhịp, tap giải mã theo keymap CŨ →
+        // "quà"→"q", "kẹ"→"k" (đúng lớp lỗi R16 đã cảnh báo: mọi biến thể
+        // ít-pace-hơn đều fail thực địa). app_id None → paced (phía an toàn).
+        let paced = !self.current_app_id.as_deref().is_some_and(|id| {
             let id = id.to_lowercase();
-            id.starts_with("libreoffice") || id.starts_with("soffice")
+            crate::compositor::KNOWN_TERMINALS.contains(&id.as_str())
         });
         if !self.viet.backspace_then_type(shown.len() - common, &suffix, paced) {
             tracing::warn!("[VIET-TYPER] không gõ được (bs={}, \"{suffix}\") — giữ nguyên", shown.len() - common);
