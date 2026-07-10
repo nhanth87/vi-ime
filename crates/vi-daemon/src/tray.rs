@@ -1,5 +1,5 @@
 
-// SPDX-License-Identifier: GPL-3.0-or-later OR Commercial
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2024-2026 vi-im contributors
 //! System-tray icon (StatusNotifierItem) — ayatana-appindicator (libappindicator3)
 //! Runs GTK main loop in a dedicated thread. Provides better panel compatibility

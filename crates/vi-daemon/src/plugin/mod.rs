@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later OR Commercial
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2024-2026 vi-im contributors
 //! Plugin system for vi-ime.
 //! Plugins form a middleware chain: ALL matching plugins process each key.

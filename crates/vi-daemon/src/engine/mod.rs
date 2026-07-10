@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later OR Commercial
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2024-2026 vi-im contributors
 #![allow(dead_code)]
 //! Vietnamese IME core (was the `vi-engine` leaf crate, folded in to cut crate

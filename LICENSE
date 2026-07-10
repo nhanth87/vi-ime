@@ -1,5 +1,5 @@
 vi-im — Vietnamese Input Method for Wayland
-Dual License: GNU GPL v3.0 or Commercial
+License: GNU GPL v3.0 only
 
 =============================================================================
                     GNU GENERAL PUBLIC LICENSE
@@ -9,9 +9,8 @@ Dual License: GNU GPL v3.0 or Commercial
 Copyright (C) 2024-2026 vi-im contributors
 
 This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+it under the terms of the GNU General Public License, version 3, as
+published by the Free Software Foundation.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -20,12 +19,5 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
-=============================================================================
-                        COMMERCIAL LICENSE
-=============================================================================
-
-A separate commercial license is available for proprietary use.
-Contact the copyright holder for terms.
 
 For the full GPLv3 text, see: https://www.gnu.org/licenses/gpl-3.0.txt

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later OR Commercial
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2024-2026 vi-im contributors
 //! EXPERIMENTAL evdev fallback for apps invisible to `zwp_input_method_v2`
 //! (mainly XWayland/X11). Opt-in via `--evdev`; MUTUALLY EXCLUSIVE with the

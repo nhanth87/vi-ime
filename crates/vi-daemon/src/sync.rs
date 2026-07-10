@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later OR Commercial
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2024-2026 vi-im contributors
 //! Bridging vi-config types → vi-engine runtime snapshots.
 //! vi-engine is the crate-DAG leaf, so the enum duplication between

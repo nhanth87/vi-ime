@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-License-Identifier: GPL-3.0-or-later OR Commercial
+# SPDX-License-Identifier: GPL-3.0-only
 # Copyright (c) 2024-2026 vi-im contributors
 # ============================================================================
 # install.sh — vi-im install script (POSIX sh)

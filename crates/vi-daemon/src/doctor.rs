@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later OR Commercial
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2024-2026 vi-im contributors
 //! `vi-ime --doctor` — one-shot diagnosis, the vi-im analogue of
 //! fcitx5-diagnose. Walks the stack bottom-up and says which LAYER is

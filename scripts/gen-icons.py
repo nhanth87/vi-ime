@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-3.0-or-later OR Commercial
+# SPDX-License-Identifier: GPL-3.0-only
 # Copyright (c) 2024-2026 vi-im contributors
 """Generate the vi-im tray icons: a sky-blue rounded square with a bold
 white glyph — 'V' when Vietnamese input is on, 'E' when it's off (raw
