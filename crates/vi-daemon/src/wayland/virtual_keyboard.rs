@@ -93,17 +93,21 @@ impl VkForwarder {
         self.held.insert(keycode);
     }
 
-    /// Forward the release of a previously forwarded press.
-    /// Returns true if this release belonged to a forwarded key.
+    /// Forward a key release — ALWAYS, even when we never forwarded its
+    /// press. A release for an un-pressed key is a no-op for the app, but
+    /// swallowing one can leave the app repeating a key forever: field case
+    /// 2026-07-10 (Chrome, Ctrl+T) — the tab switch Deactivates (release_all
+    /// drains `held`), niri hands Chrome an enter[] with 't' still down (the
+    /// real key IS still down), the re-grab then eats the real release, and
+    /// the old code dropped it here because `held` no longer knew the key →
+    /// Chrome typed "tttttt…" until the next key event.
     pub(crate) fn release(&mut self, keycode: u32) -> bool {
-        if !self.held.remove(&keycode) {
-            return false;
-        }
+        let was_held = self.held.remove(&keycode);
         if let Some(vk) = &self.vk
             && self.keymap_ready {
                 vk.key(self.now_ms(), keycode, KEY_RELEASED);
             }
-        true
+        was_held
     }
 
     /// Synthesize a full press+release (for keys replayed after a commit
@@ -128,6 +132,14 @@ impl VkForwarder {
                 for kc in keys {
                     vk.key(self.now_ms(), kc, KEY_RELEASED);
                 }
+                // Releasing the KEY is not enough: the grab's modifiers
+                // event was mirrored (`vk.modifiers(depressed=Super…)`) and
+                // that explicit state outlives the grab — the user's real
+                // Super release lands AFTER Deactivate, so nothing ever
+                // mirrors the release and the seat keeps Super pressed
+                // forever ("kẹt phím window", field 2026-07-10). This
+                // keyboard holds nothing now — say so explicitly.
+                vk.modifiers(0, 0, 0, 0);
             }
     }
 }

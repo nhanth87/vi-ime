@@ -280,7 +280,13 @@ impl ImeAppState {
             self.shown_word,
             shown.len() - common
         );
-        if !self.viet.backspace_then_type(shown.len() - common, &suffix) {
+        // Pacing only for the app family that needs it (VCL/gtk3 swallows
+        // BS+char bursts whole, probe-verified) — terminals stay burst-fast.
+        let paced = self.current_app_id.as_deref().is_some_and(|id| {
+            let id = id.to_lowercase();
+            id.starts_with("libreoffice") || id.starts_with("soffice")
+        });
+        if !self.viet.backspace_then_type(shown.len() - common, &suffix, paced) {
             tracing::warn!("[VIET-TYPER] không gõ được (bs={}, \"{suffix}\") — giữ nguyên", shown.len() - common);
         }
         self.shown_word.clear();

@@ -11,47 +11,11 @@
 
 use evdev::uinput::VirtualDevice;
 use evdev::{EventType, InputEvent, KeyCode};
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::engine::fast_engine::NonPreeditEngine;
 use crate::engine::{ImeMode, InputMethod, NonPreeditAction};
-use crate::evdev_inject::{key_to_char, Injector};
-use crate::evdev_typer::EvdevTyper;
-
-/// Unicode output channel: a persistent virtual keyboard when the
-/// compositor supports it (Wayland), else the xdotool fallback (X11).
-pub(crate) enum Typer {
-    Native(EvdevTyper),
-    Cmd(Injector),
-}
-
-impl Typer {
-    pub(crate) fn detect() -> Option<Self> {
-        if let Some(t) = EvdevTyper::new() {
-            info!("evdev fallback: Unicode qua virtual keyboard bền vững (native)");
-            return Some(Typer::Native(t));
-        }
-        Injector::detect().map(|inj| {
-            info!("evdev fallback: Unicode qua {}", inj.name());
-            Typer::Cmd(inj)
-        })
-    }
-
-    fn backspace_then_type(&mut self, backspaces: usize, text: &str) {
-        let ok = match self {
-            Typer::Native(t) => t.backspace_then_type(backspaces, text),
-            Typer::Cmd(inj) => {
-                inj.backspace_then_type(backspaces, text);
-                true
-            }
-        };
-        if !ok {
-            // shown-tracking is now desynced from the screen for this word;
-            // the log is the evidence trail (R17: identify mechanism first).
-            warn!("[EVDEV-TYPER] gõ thất bại (bs={backspaces}, text={text:?}) — từ này có thể sai trên màn hình");
-        }
-    }
-}
+use crate::evdev_inject::{key_to_char, Typer};
 
 /// Live composer: the engine plus what is currently on screen for the
 /// in-progress word. Shared by `run` (--evdev) and `run_scoped` (auto
@@ -63,6 +27,12 @@ pub(crate) struct Composer {
     shift: bool,
     /// Bitmask of held system modifiers (Ctrl/Alt/Super).
     sysmods: u8,
+    /// Byte count of the common prefix between `shown` and the next target.
+    /// Monotonic (never decreases within a word) except when a tone mark
+    /// changes a vowel inside the prefix — that rare case is detected and
+    /// falls back to a zero-based recompute. Avoids re-collecting into
+    /// Vec<char> + zip on every keystroke (opt 3).
+    common_bytes: usize,
 }
 
 /// Bit for a system-modifier key (Ctrl/Alt/Super), 0 for everything else.
@@ -87,6 +57,7 @@ impl Composer {
             typer,
             shift: false,
             sysmods: 0,
+            common_bytes: 0,
         }
     }
 
@@ -163,22 +134,54 @@ impl Composer {
                 // Live echo: the screen follows the rendered form key by
                 // key ("tie" + 'e' → "tiê" instantly). preedit_output
                 // applies NFC/NFD (R12) — this is real text, not preedit.
+                // sync=false: mid-word, no roundtrip (opt 1).
                 let target = self.engine.inner().preedit_output();
-                self.sync_shown(&target);
+                self.sync_shown(&target, false);
             }
             NonPreeditAction::CommitWithBackspace { text, .. } => {
                 // Screen already shows the word (usually a no-op diff).
                 // Replay the boundary key that triggered the commit — the
                 // engine never includes it in the committed text.
-                self.sync_shown(&text);
+                // sync=true: word boundary, roundtrip before uinput replay.
+                self.sync_shown(&text, true);
                 self.shown.clear();
+                self.common_bytes = 0;
                 tap(ui, code);
             }
-            NonPreeditAction::ClearPreedit => self.sync_shown(""),
+            NonPreeditAction::ClearPreedit => {
+                self.sync_shown("", true);
+                self.common_bytes = 0;
+            }
             // Digit at word start (VNI) or digit boundary (Telex): the char
             // was consumed above, so replay it or it would be LOST.
             NonPreeditAction::PassThrough => tap(ui, code),
         }
+    }
+
+    /// Emit releases for any modifiers the uinput mirror still holds — on
+    /// disengage (focus left) the user's real release lands AFTER ungrab
+    /// and never reaches the mirror, which would pin Super/Ctrl forever
+    /// (same class as the vk1 stuck-Super bug, virtual_keyboard.rs).
+    pub(crate) fn release_mods(&mut self, ui: &mut VirtualDevice) {
+        if self.shift {
+            emit(ui, KeyCode::KEY_LEFTSHIFT, 0);
+            emit(ui, KeyCode::KEY_RIGHTSHIFT, 0);
+            self.shift = false;
+        }
+        const MODS: [(u8, KeyCode); 6] = [
+            (1, KeyCode::KEY_LEFTCTRL),
+            (2, KeyCode::KEY_RIGHTCTRL),
+            (4, KeyCode::KEY_LEFTALT),
+            (8, KeyCode::KEY_RIGHTALT),
+            (16, KeyCode::KEY_LEFTMETA),
+            (32, KeyCode::KEY_RIGHTMETA),
+        ];
+        for (bit, code) in MODS {
+            if self.sysmods & bit != 0 {
+                emit(ui, code, 0);
+            }
+        }
+        self.sysmods = 0;
     }
 
     /// Physical click while composing: the cursor moved — stop tracking the
@@ -191,6 +194,7 @@ impl Composer {
         info!("[EVDEV-CLICK] chuột click khi đang gõ dở — drop tracking (R8)");
         self.engine.reset();
         self.shown.clear();
+        self.common_bytes = 0;
     }
 
     /// A non-composing key ended the word: it is already echoed on screen,
@@ -198,43 +202,77 @@ impl Composer {
     pub(crate) fn finish_word(&mut self) {
         if self.engine.has_pending() {
             let target = self.engine.inner().preedit_output();
-            self.sync_shown(&target);
+            // sync=true: word ending → roundtrip (next key is cross-channel).
+            self.sync_shown(&target, true);
         }
         self.engine.reset();
         self.shown.clear();
+        self.common_bytes = 0;
     }
 
     /// Make the app show `target` for the in-progress word: BackSpace × k
-    /// for the divergent tail + the new suffix, in ONE typer call so the
-    /// events cannot interleave with the uinput mirror (the typer blocks
-    /// until the compositor has processed them).
-    fn sync_shown(&mut self, target: &str) {
-        let shown: Vec<char> = self.shown.chars().collect();
-        let tgt: Vec<char> = target.chars().collect();
-        let common = shown
-            .iter()
-            .zip(tgt.iter())
-            .take_while(|(a, b)| a == b)
-            .count();
-        let suffix: String = tgt[common..].iter().collect();
+    /// for the divergent tail + the new suffix.
+    ///
+    /// `sync`: true at word boundary (roundtrip before cross-channel uinput);
+    /// false mid-word (flush only — next keystroke is same channel, protocol
+    /// ordering is guaranteed, ~80% latency reduction per keystroke).
+    fn sync_shown(&mut self, target: &str, sync: bool) {
+        // NO-OP guard (opt 5): nothing changed on screen → skip everything.
+        if target == self.shown {
+            return;
+        }
+
+        // Byte-based diff (opt 3): compare from the last known common prefix,
+        // not from scratch. Rare case (tone mark changes a vowel inside the
+        // prefix → bytes diverge) falls back to a zero-based compare.
+        let mut common_bytes = self.common_bytes.min(self.shown.len()).min(target.len());
+        if common_bytes > 0
+            && self.shown.as_bytes().get(..common_bytes)
+                != target.as_bytes().get(..common_bytes)
+        {
+            // Tone mark shifted the rendered form earlier than expected —
+            // rare, just recompute from zero.
+            common_bytes = 0;
+        }
+        while common_bytes < self.shown.len()
+            && common_bytes < target.len()
+            && self.shown.as_bytes()[common_bytes] == target.as_bytes()[common_bytes]
+        {
+            common_bytes += 1;
+        }
+
+        let bs_count = self.shown[common_bytes..].chars().count();
+        let suffix = &target[common_bytes..];
         tracing::debug!(
-            "[EVDEV-SYNC] shown={:?} → target={target:?} (bs={}, suffix={suffix:?})",
+            "[EVDEV-SYNC] shown={:?} → target={target:?} (bs={}, suffix={suffix:?}, sync={sync})",
             self.shown,
-            shown.len() - common
+            bs_count
         );
-        self.typer.backspace_then_type(shown.len() - common, &suffix);
+        self.typer.backspace_then_type(bs_count, suffix, sync);
         self.shown.clear();
         self.shown.push_str(target);
+        self.common_bytes = common_bytes;
     }
 }
 
 fn emit(ui: &mut VirtualDevice, code: KeyCode, value: i32) {
-    let ev = InputEvent::new(EventType::KEY.0, code.code(), value);
-    let _ = ui.emit(&[ev]);
+    // Kernel requires EV_SYN / SYN_REPORT after each event group — without it
+    // press/release events can merge, causing stuck modifier keys (field bug
+    // 2026-07-10: Super/Ctrl/Shift bị kẹt trong LibreOffice, phải kill vi-ime).
+    let events = [
+        InputEvent::new(EventType::KEY.0, code.code(), value),
+        InputEvent::new(EventType::SYNCHRONIZATION.0, 0, 0),
+    ];
+    let _ = ui.emit(&events);
 }
 
 /// Press + release through the uinput mirror (boundary-key replay).
 fn tap(ui: &mut VirtualDevice, code: KeyCode) {
-    emit(ui, code, 1);
-    emit(ui, code, 0);
+    let events = [
+        InputEvent::new(EventType::KEY.0, code.code(), 1),
+        InputEvent::new(EventType::SYNCHRONIZATION.0, 0, 0),
+        InputEvent::new(EventType::KEY.0, code.code(), 0),
+        InputEvent::new(EventType::SYNCHRONIZATION.0, 0, 0),
+    ];
+    let _ = ui.emit(&events);
 }

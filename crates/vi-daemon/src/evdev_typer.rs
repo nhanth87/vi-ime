@@ -108,7 +108,18 @@ impl EvdevTyper {
     }
 
     /// BackSpace × n, then type `text`. All-or-nothing: false = nothing sent.
-    pub(crate) fn backspace_then_type(&mut self, backspaces: usize, text: &str) -> bool {
+    ///
+    /// `sync`: when true, block on a roundtrip so cross-channel uinput events
+    /// (space, Enter, boundary-key replay) can never overtake this text.
+    /// Mid-word composition passes `false` (flush only — next keystroke
+    /// goes through the same channel so ordering is protocol-guaranteed).
+    /// Word boundary passes `true` (roundtrip → uinput safe to emit next).
+    pub(crate) fn backspace_then_type(
+        &mut self,
+        backspaces: usize,
+        text: &str,
+        sync: bool,
+    ) -> bool {
         if backspaces == 0 && text.is_empty() {
             return true;
         }
@@ -155,10 +166,23 @@ impl EvdevTyper {
         for ch in text.chars() {
             if let Some((_, code)) = assigned.iter().find(|(c, _)| *c == ch) {
                 tap(&self.vk, *code);
+                // Pace EVERY tap, not just BackSpace: VCL still lost the
+                // char after the first in a post-BS burst (field
+                // "cua73"→"cưử", 2026-07-10). This typer only ever targets
+                // legacy apps (LibreOffice/OnlyOffice), so always pace.
+                let _ = self.queue.flush();
+                std::thread::sleep(std::time::Duration::from_millis(15));
             }
         }
-        // Block until the compositor has processed everything, so a later
-        // uinput-mirrored key (space, Enter…) can never overtake this text.
-        self.queue.roundtrip(&mut TyperState).is_ok()
+        // sync=true (word boundary): block until compositor has processed
+        // everything — cross-channel uinput events must not overtake this.
+        // sync=false (mid-word): flush is enough; next keystroke rides the
+        // same channel so ordering is protocol-guaranteed (no roundtrip =
+        // ~80% latency reduction per keystroke).
+        if sync {
+            self.queue.roundtrip(&mut TyperState).is_ok()
+        } else {
+            self.queue.flush().is_ok()
+        }
     }
 }

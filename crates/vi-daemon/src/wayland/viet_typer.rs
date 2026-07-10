@@ -78,6 +78,13 @@ pub(crate) fn memfd_keymap(text: &str) -> Option<(OwnedFd, u32)> {
 pub(crate) struct VietTyper {
     vk: Option<ZwpVirtualKeyboardV1>,
     start: Instant,
+    /// Char→keycode cache from the last uploaded keymap. A new call to
+    /// `backspace_then_type` reuses this mapping (skipping keymap build +
+    /// memfd + upload) when all chars are already present — the common case
+    /// for consecutive keystrokes that share overlapping character sets.
+    /// Field bug 2026-07-10: rebuilding the keymap per keystroke caused
+    /// 15-30ms `[SLOW-KEY]` spikes on tone-key presses in terminal live mode.
+    cached_map: HashMap<char, u32>,
 }
 
 impl VietTyper {
@@ -85,6 +92,7 @@ impl VietTyper {
         Self {
             vk,
             start: Instant::now(),
+            cached_map: HashMap::new(),
         }
     }
 
@@ -96,68 +104,98 @@ impl VietTyper {
     /// Type `s` by uploading a per-word keymap and tapping its keycodes.
     /// All-or-nothing: returns false (typing nothing) when impossible.
     pub(crate) fn type_str(&mut self, s: &str) -> bool {
-        self.backspace_then_type(0, s)
+        self.backspace_then_type(0, s, false)
     }
 
-    /// BackSpace × n, then type `s`, ALL on this one keyboard (BackSpace
-    /// rides the same per-word keymap). VCL/gtk3 (LibreOffice) swallows an
-    /// event burst that mixes BackSpace with other keys WHOLE — probe-
-    /// verified 2026-07-10 (`scripts/vk-probe`): BS+"ệ" in one flush typed
-    /// NOTHING, BS → flush + 15ms → chars typed perfectly. So each
-    /// BackSpace is flushed and given its own beat. kitty/terminals accept
-    /// both forms; the paced one is the only one every client accepts.
-    pub(crate) fn backspace_then_type(&mut self, backspaces: usize, s: &str) -> bool {
+    /// BackSpace × n, then type `s`, ALL on this one keyboard. Keymap is
+    /// cached across calls: consecutive keystrokes sharing the same char set
+    /// skip the keymap-build + memfd + upload round (field bug 2026-07-10:
+    /// 15-30ms SLOW-KEY spikes on tone-key presses in terminal live mode).
+    ///
+    /// `paced` = flush + 15ms after each BackSpace. Default burst-mode is
+    /// fine for terminals (kitty/foot accept mixed BS+char bursts), but
+    /// VCL/gtk3 (LibreOffice) swallows such a burst WHOLE — probe-verified
+    /// 2026-07-10 (`scripts/vk-probe`) — so the caller passes `paced=true`
+    /// when the focused app is in that family. Latency only ever hits the
+    /// app that needs it.
+    pub(crate) fn backspace_then_type(&mut self, backspaces: usize, s: &str, paced: bool) -> bool {
         let Some(vk) = &self.vk else { return false };
         if backspaces == 0 && s.is_empty() {
             return true;
         }
 
-        // Assign safe keycodes: BackSpace first (if needed), then the
-        // word's unique chars.
-        let mut map: HashMap<char, u32> = HashMap::new();
-        let mut assigned: Vec<(char, u32)> = Vec::new();
+        // Everything this call needs mapped: BackSpace (if any) + s's chars.
+        let mut needed: Vec<char> = Vec::new();
         if backspaces > 0 {
-            map.insert('\u{0008}', FIRST_CODE);
-            assigned.push(('\u{0008}', FIRST_CODE));
+            needed.push('\u{0008}');
         }
         for ch in s.chars() {
-            if map.contains_key(&ch) {
-                continue;
+            if !needed.contains(&ch) {
+                needed.push(ch);
             }
-            let code = FIRST_CODE + assigned.len() as u32;
-            if assigned.len() >= MAX_UNIQUE {
-                warn!("[VIET-TYPER] >{MAX_UNIQUE} ký tự khác nhau trong một từ — bỏ qua");
-                return false;
-            }
-            map.insert(ch, code);
-            assigned.push((ch, code));
+        }
+        if needed.len() > MAX_UNIQUE {
+            warn!("[VIET-TYPER] >{MAX_UNIQUE} ký tự khác nhau trong một lần gõ — bỏ qua");
+            return false;
         }
 
-        let keymap = build_keymap(&assigned);
-        let Some((fd, size)) = memfd_keymap(&keymap) else {
-            warn!("[VIET-TYPER] memfd failed — không gõ được từ này");
-            return false;
-        };
-        // keymap and key events go out on the SAME object in order — the
-        // app is guaranteed to see the new keymap before the first tap.
-        vk.keymap(KEYMAP_FORMAT_XKB_V1, fd.as_fd(), size);
+        let missing = needed
+            .iter()
+            .filter(|c| !self.cached_map.contains_key(c))
+            .count();
+        if missing > 0 {
+            // Grow-only cache: EVICT everything when this call would spill
+            // past the safe keycode window (2..=33) — otherwise the first
+            // overflow would make every later word with a new char fail
+            // forever (and un-checked growth would assign keycodes beyond
+            // LAST_CODE, the known char-eating zone, R16 field lesson).
+            if self.cached_map.len() + missing > MAX_UNIQUE {
+                self.cached_map.clear();
+            }
+            for ch in &needed {
+                if !self.cached_map.contains_key(ch) {
+                    let code = FIRST_CODE + self.cached_map.len() as u32;
+                    self.cached_map.insert(*ch, code);
+                }
+            }
+            let assigned: Vec<(char, u32)> =
+                self.cached_map.iter().map(|(c, k)| (*c, *k)).collect();
+            let keymap = build_keymap(&assigned);
+            let Some((fd, size)) = memfd_keymap(&keymap) else {
+                warn!("[VIET-TYPER] memfd failed — không gõ được từ này");
+                return false;
+            };
+            vk.keymap(KEYMAP_FORMAT_XKB_V1, fd.as_fd(), size);
+        }
 
-        let mut t = self.start.elapsed().as_millis() as u32;
-        let mut tap = |code: u32, t: &mut u32| {
-            vk.key(*t, code, 1);
-            vk.key(t.wrapping_add(1), code, 0);
-            *t = t.wrapping_add(2);
-        };
-        for _ in 0..backspaces {
-            tap(FIRST_CODE, &mut t);
-            // Flush + pace: without this the whole burst dies on VCL/gtk3.
+        let pace = |vk: &ZwpVirtualKeyboardV1| {
             if let Some(backend) = vk.backend().upgrade() {
                 let _ = wayland_client::Connection::from_backend(backend).flush();
             }
             std::thread::sleep(std::time::Duration::from_millis(15));
+        };
+        let mut t = self.start.elapsed().as_millis() as u32;
+        for _ in 0..backspaces {
+            let code = self.cached_map[&'\u{0008}'];
+            vk.key(t, code, 1);
+            vk.key(t.wrapping_add(1), code, 0);
+            t = t.wrapping_add(2);
+            if paced {
+                pace(vk);
+            }
         }
         for ch in s.chars() {
-            tap(map[&ch], &mut t);
+            let code = self.cached_map[&ch];
+            vk.key(t, code, 1);
+            vk.key(t.wrapping_add(1), code, 0);
+            t = t.wrapping_add(2);
+            // Paced mode spaces EVERY tap, not just BackSpace: field case
+            // 2026-07-10 "cua73"→screen "cưử" — the op BS→pause→"ửa" burst
+            // still lost the char AFTER the first ('a'); the probe mode
+            // that passes on VCL paces all taps (`scripts/vk-probe` paced).
+            if paced {
+                pace(vk);
+            }
         }
         true
     }

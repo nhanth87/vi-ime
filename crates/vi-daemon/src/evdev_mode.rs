@@ -25,7 +25,8 @@ use evdev::{Device, EventType, InputEvent, KeyCode};
 use tracing::{error, info, warn};
 
 use crate::engine::InputMethod;
-use crate::evdev_compose::{Composer, Typer};
+use crate::evdev_compose::Composer;
+use crate::evdev_inject::Typer;
 use crate::wayland::RuntimeConfig;
 
 /// A grabbed keyboard that ungrabs itself on drop (panic-safe).
@@ -42,8 +43,29 @@ impl Drop for Grabbed {
 /// vi-ime re-process every key that rival injected — doubled/garbled text).
 const IGNORE_DEVICE_MARKERS: &[&str] = &["vi-ime", "fcitx", "ibus", "uinput", "ydotool", "wtype"];
 
+/// Wait until NO key is held on `dev`, then return true. Grabbing while a
+/// key is physically down silences its RELEASE from the compositor's view
+/// forever — libinput keeps the key pressed on that device and a mirrored
+/// release from uinput is filtered (no matching press) → stuck Super after
+/// "giữ Super + chuyển cửa sổ sang LibreOffice" (field 2026-07-10). While
+/// we wait, events still flow to the compositor, so the release lands
+/// where it belongs. Canonical dynamic-grab trick (keyd/xremap do this).
+fn wait_keys_clear(dev: &evdev::Device, stop: &AtomicBool) -> bool {
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return false;
+        }
+        match dev.get_key_state() {
+            Ok(keys) if keys.iter().next().is_none() => return true,
+            Ok(_) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            // Can't read state — proceed rather than never engaging.
+            Err(_) => return true,
+        }
+    }
+}
+
 /// Find and grab every real keyboard (devices that report letter keys).
-fn grab_all_keyboards() -> Vec<Grabbed> {
+fn grab_all_keyboards(stop: &AtomicBool) -> Vec<Grabbed> {
     let mut keyboards: Vec<Grabbed> = Vec::new();
     for (path, dev) in evdev::enumerate() {
         let name = dev.name().unwrap_or("").to_lowercase();
@@ -56,6 +78,9 @@ fn grab_all_keyboards() -> Vec<Grabbed> {
             .is_some_and(|k| k.contains(KeyCode::KEY_A) && k.contains(KeyCode::KEY_Z));
         if is_kbd {
             let mut dev = dev;
+            if !wait_keys_clear(&dev, stop) {
+                continue; // stop was set while waiting (focus already left)
+            }
             match dev.grab() {
                 Ok(()) => {
                     info!("evdev: grabbing {:?} ({})", path, dev.name().unwrap_or("?"));
@@ -132,8 +157,11 @@ fn run_loop(
         }
     }
     // The half-typed word is already echoed on screen — just settle it,
-    // then keyboards drop (ungrab) and the uinput mirror is torn down.
+    // release any modifiers the mirror still holds (the real release lands
+    // after ungrab and would never reach it → stuck Super/Ctrl), then
+    // keyboards drop (ungrab) and the uinput mirror is torn down.
     composer.finish_word();
+    composer.release_mods(&mut ui);
 }
 
 /// Scoped variant for the automatic per-app fallback (see `legacy_grab.rs`):
@@ -144,7 +172,7 @@ pub fn run_scoped(method: InputMethod, stop: &AtomicBool, runtime: Option<Arc<Ru
         warn!("evdev fallback: no Unicode typer (no virtual-keyboard support, no `xdotool`)");
         return;
     };
-    let keyboards = grab_all_keyboards();
+    let keyboards = grab_all_keyboards(stop);
     if keyboards.is_empty() {
         warn!("evdev fallback: no grabbable keyboard (need group `input`?) — staying passthrough");
         return;
@@ -165,7 +193,11 @@ pub fn run(method: InputMethod) -> Result<(), Box<dyn std::error::Error>> {
     let typer = Typer::detect().ok_or(
         "no Unicode typer — compositor lacks zwp_virtual_keyboard_v1 and `xdotool` is missing",
     )?;
-    let keyboards = grab_all_keyboards();
+    static NEVER_STOP: AtomicBool = AtomicBool::new(false);
+    // wait_keys_clear also covers the launch case: `--evdev` is typed in a
+    // terminal, so Enter is still down right now — grabbing before its
+    // release would stick Enter exactly like the Super case.
+    let keyboards = grab_all_keyboards(&NEVER_STOP);
     if keyboards.is_empty() {
         return Err(
             "no grabbable keyboard found. Add yourself to the `input` group \
@@ -175,7 +207,6 @@ pub fn run(method: InputMethod) -> Result<(), Box<dyn std::error::Error>> {
     }
     let ui = build_uinput_mirror()?;
     info!("evdev mode ACTIVE — vi-ime is the sole keyboard handler now.");
-    static NEVER_STOP: AtomicBool = AtomicBool::new(false);
     run_loop(keyboards, ui, typer, method, &NEVER_STOP, None);
     Ok(())
 }

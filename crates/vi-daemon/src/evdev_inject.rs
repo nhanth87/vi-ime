@@ -6,6 +6,46 @@
 use std::process::Command;
 
 use evdev::KeyCode;
+use tracing::{info, warn};
+
+use crate::evdev_typer::EvdevTyper;
+
+/// Unicode output channel: a persistent virtual keyboard when the
+/// compositor supports it (Wayland), else the xdotool fallback (X11).
+pub(crate) enum Typer {
+    Native(EvdevTyper),
+    Cmd(Injector),
+}
+
+impl Typer {
+    pub(crate) fn detect() -> Option<Self> {
+        if let Some(t) = EvdevTyper::new() {
+            info!("evdev fallback: Unicode qua virtual keyboard bền vững (native)");
+            return Some(Typer::Native(t));
+        }
+        Injector::detect().map(|inj| {
+            info!("evdev fallback: Unicode qua {}", inj.name());
+            Typer::Cmd(inj)
+        })
+    }
+
+    pub(crate) fn backspace_then_type(&mut self, backspaces: usize, text: &str, sync: bool) {
+        let ok = match self {
+            Typer::Native(t) => t.backspace_then_type(backspaces, text, sync),
+            Typer::Cmd(inj) => {
+                inj.backspace_then_type(backspaces, text);
+                // External process always blocks until exit — equivalent to
+                // sync=true; that's the best xdotool/wtype can do.
+                true
+            }
+        };
+        if !ok {
+            // shown-tracking is now desynced from the screen for this word;
+            // the log is the evidence trail (R17: identify mechanism first).
+            warn!("[EVDEV-TYPER] gõ thất bại (bs={backspaces}, text={text:?}) — từ này có thể sai trên màn hình");
+        }
+    }
+}
 
 /// Minimal US-QWERTY evdev keycode → char (lowercase unless `shift`). Enough for
 /// Telex/VNI composition; non-letter keys return None (forwarded verbatim).

@@ -385,6 +385,54 @@ commit lúc click là race đã tử nạn nhiều lần, R16). Giảm đau bằ
    drop tracking, KHÔNG đụng màn hình (text live là thật, diff tiếp sẽ
    backspace nhầm chỗ mới — cơ chế C của R17).
 
+**Tính năng 8 (2026-07-10 tối) — KẸT PHÍM SUPER/CTRL sau khi đổi cửa sổ:**
+user giữ Super rồi bấm phím chuyển cửa sổ → grab forward Super PRESS qua
+vk1 VÀ mirror `vk.modifiers(depressed=Super)`; Deactivate đến trước khi
+user nhả Super → release không bao giờ tới IME. `release_all()` đã nhả
+KEY 125 nhưng KHÔNG clear modifiers-state đã mirror — trạng thái
+`vk.modifiers()` là EXPLICIT, key-release không tự xoá nó → seat giữ
+Super vĩnh viễn. Fix: `release_all()` giờ gửi thêm `vk.modifiers(0,0,0,0)`.
+Cùng class ở evdev path: uinput mirror forward modifier press, disengage
+trước khi release → `Composer::release_mods()` nhả hết modifier còn giữ ở
+teardown của `run_loop`. LƯU Ý khi review đề xuất "thiếu SYN_REPORT":
+evdev crate 0.13 `VirtualDevice::emit()` TỰ ĐỘNG kết batch bằng
+SYN_REPORT (đã đọc source registry) — đừng thêm SYN thủ công theo chẩn
+đoán đó, kẹt phím là do modifiers-state ở trên.
+`viet_typer` giờ có `cached_map` (skip keymap rebuild per phím, fix
+SLOW-KEY 15-30ms) + eviction khi tràn 32 slot (không có eviction thì lần
+tràn đầu tiên làm MỌI từ có ký tự mới fail vĩnh viễn); pacing BS giờ theo
+tham số `paced` — `sync_shown` chỉ bật cho app family libreoffice/soffice,
+terminal giữ burst-fast.
+
+**Cơ chế kẹt phím THỨ BA (cùng ngày, dai dẳng nhất): evdev grab GIỮA LÚC
+phím đang đè.** User giữ Super + chuyển cửa sổ sang LibreOffice → legacy
+grab EVIOCGRAB bàn phím vật lý ~300ms sau focus, khi Super CÒN ĐANG ĐÈ →
+từ đó release của Super chỉ đến vi-ime, libinput/niri không bao giờ thấy
+→ với compositor phím đó đè VĨNH VIỄN. Không cứu được bằng uinput
+(libinput lọc release của phím chưa từng press trên device đó) và không
+liên quan hai fix modifiers ở trên. Fix chuẩn (keyd/xremap cùng dùng):
+`wait_keys_clear` — poll `EVIOCGKEY` (`Device::get_key_state`) 20ms/lần,
+CHỜ mọi phím nhả hết rồi mới grab (trong lúc chờ event vẫn chảy về
+compositor nên release rơi đúng chỗ; stop-flag thoát chờ khi focus rời
+app). Bonus: `--evdev` gõ từ terminal không còn dính phím Enter lúc launch.
+KHÔNG bao giờ grab evdev mà không qua wait_keys_clear.
+
+**Đính chính pacing (field "cua73"→màn hình "cưử", 2026-07-10 muộn):**
+pace-chỉ-sau-BS KHÔNG đủ — burst 2 ký tự NGAY SAU chuỗi BS vẫn mất ký tự
+thứ hai trên VCL (op `BS→pause→"ửa"` chỉ ra 'ử'). Chế độ probe pass là
+pace SAU MỌI TAP → `viet_typer` (khi `paced=true`) và `evdev_typer` (luôn,
+vì chỉ nhắm legacy app) giờ flush+15ms sau TỪNG tap. Đừng "tối ưu" bỏ bớt
+nhịp nào khi target là VCL — mọi biến thể ít-pace-hơn đều đã fail thực địa.
+
+**Key-repeat kẹt app-side (Chrome Ctrl+T → "tttt…", 2026-07-10 muộn):**
+chuỗi: Ctrl+T forward qua vk1 → tab mới Deactivate → release_all drain
+`held` → grab nhả → niri gửi `wl_keyboard.enter` kèm mảng phím ĐANG ĐÈ
+(t thật sự còn đè) → app bắt đầu client-side repeat → ACTIVATE re-grab
+NUỐT release thật → `vk.release()` cũ bỏ qua vì `held` không còn biết phím
+→ app repeat vô hạn tới key event kế. Fix: `VkForwarder::release` giờ
+LUÔN forward release (release phím chưa press là no-op với app; nuốt nó
+mới là thứ gây bug). `held` chỉ còn là bookkeeping cho release_all.
+
 **Trạng thái máy dev (2026-07-10 tối):** user ĐÃ ở nhóm `input` (click-watch
 + legacy_grab hoạt động). Rival `fcitx5-uinput-meodien.service` cần disable
 thủ công (system service, cần sudo):
