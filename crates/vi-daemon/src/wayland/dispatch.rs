@@ -17,6 +17,13 @@ use crate::wayland::feedback::ImeFeedback;
 use crate::wayland::state::{FieldSensitivity, ImeAppState};
 use crate::wayland::{ImUserData, KeyboardGrabUserData};
 
+/// ⚠️ Chrome/Firefox depend on this: `ContentPurpose::Url` → `FieldSensitivity::Url`
+/// is what makes the address bar type raw ASCII instead of composing
+/// Vietnamese ("tự chuyển tiếng Anh khi gõ trong address bar"). Verified
+/// working 2026-07-10 against Chrome — do NOT touch this mapping without
+/// re-testing an actual browser address bar, since the browser's own
+/// text-input-v3 behavior here has historically been inconsistent across
+/// versions and this is the ONLY place that consumes `ContentPurpose::Url`.
 /// Map the app's self-declared field purpose to our per-field gate.
 /// Terminal gets its own variant to force NonPreedit mode (preedit-everywhere
 /// commit_string works, but preedit underline breaks in terminals).
@@ -72,6 +79,20 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                 // silently lose it and a terminal would fall back to the delete
                 // path (which it ignores → "nhaân"). Capability tracking still
                 // resets each activation.
+                //
+                // ⚠️ `state.current_app_id` is written by `maybe_reconfigure`
+                // (called just above) from `rt.app_id()` — the MAIN thread's
+                // niri-focus-tracked value, delivered over a SEPARATE channel
+                // from this Wayland thread's own Activate/ContentType events.
+                // Chrome/Firefox's address-bar Url passthrough and kitty/
+                // terminal's NonPreedit forcing both key off
+                // `field_sensitivity`, which this block resets — so a lagging
+                // `rt.app_id()` (main thread hasn't caught up yet) means this
+                // reset silently doesn't fire on a genuine app switch. Verified
+                // working 2026-07-10 with both threads live; if you change how
+                // `current_app_id` is populated (compositor/niri.rs, main.rs's
+                // focus pipeline), re-test an actual app switch into a browser
+                // AND into a terminal, not just one or the other.
                 if state.current_app_id != prev_app {
                     state.field_sensitivity = FieldSensitivity::Normal;
                 }
@@ -128,7 +149,18 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                     );
                     state.engine.reset();
                     state.reset_word_state();
-                    if let Some(im) = state.input_method.clone() {
+                    // ⚠️ Mode-aware, same rule as `finalize_word`/
+                    // `on_physical_click`/`maybe_reconfigure`'s app-switch
+                    // branch: NonPreedit/live mode (terminals) never calls
+                    // set_preedit_string in the first place — raw keys are
+                    // forwarded live and ARE already real text on screen.
+                    // Sending an empty set_preedit_string here anyway is a
+                    // spurious protocol message and reproduces the exact
+                    // "nhảy chữ theo con trỏ" symptom this block exists to
+                    // prevent (confirmed live on kitty, 2026-07-10 — a first
+                    // cut of the app-switch fix made this same mistake).
+                    let live = state.engine.mode() == ImeMode::NonPreedit && state.viet.ready();
+                    if !live && let Some(im) = state.input_method.clone() {
                         state.set_preedit(&im, "");
                     }
                 }

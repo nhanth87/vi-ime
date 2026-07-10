@@ -19,6 +19,7 @@ mod game_detector;
 mod godmod;
 mod ipc;
 mod learning;
+mod legacy_grab;
 mod notify;
 mod plugin;
 mod rivals;
@@ -76,11 +77,7 @@ fn main() {
         let method = ConfigManager::new(Some(conf))
             .map(|m| m.setting().input_method)
             .unwrap_or(crate::config::InputMethod::Telex);
-        let engine_method = match method {
-            crate::config::InputMethod::Telex => crate::engine::InputMethod::Telex,
-            crate::config::InputMethod::Vni => crate::engine::InputMethod::Vni,
-            crate::config::InputMethod::Smart => crate::engine::InputMethod::Smart,
-        };
+        let engine_method = engine_input_method(method);
         let _log_guard = init_tracing();
         if let Err(e) = evdev_mode::run(engine_method) {
             eprintln!("vi-ime evdev: {e}");
@@ -298,6 +295,10 @@ fn main() {
     let mut last_focus_change = Instant::now();
     let mut current_app_id: Option<String> = None;
     let mut current_focus = FocusEvent::default();
+    // Engaged only while focus sits on an app zwp_input_method_v2 can't
+    // reach (LibreOffice, OnlyOffice/XWayland — see legacy_grab.rs).
+    // Dropping it releases the evdev grab immediately.
+    let mut legacy_grab: Option<legacy_grab::LegacyGrab> = None;
     while let Ok(event) = rx.recv() {
         match event {
             DaemonEvent::Focus(new_focus) => {
@@ -320,6 +321,14 @@ fn main() {
                     godmod::set_app(app_id);
                 }
                 if app_changed {
+                    let wants_legacy = current_app_id.as_deref().is_some_and(legacy_grab::is_legacy_app);
+                    match (wants_legacy, legacy_grab.is_some()) {
+                        (true, false) => {
+                            legacy_grab = Some(legacy_grab::LegacyGrab::start(engine_input_method(config_manager.setting().input_method)));
+                        }
+                        (false, true) => legacy_grab = None,
+                        _ => {}
+                    }
                     adapt.on_focus_change();
                     // Publish the focused app to the IME thread so per-app
                     // plugin routing + AppPlugin lifecycle hooks fire there
@@ -434,6 +443,14 @@ fn browser_title<'a>(app_id: &Option<String>, focus: &'a FocusEvent) -> Option<&
         .as_deref()
         .filter(|id| AppCategory::classify(id) == AppCategory::Browser)
         .and(focus.title.as_deref())
+}
+
+fn engine_input_method(m: crate::config::InputMethod) -> crate::engine::InputMethod {
+    match m {
+        crate::config::InputMethod::Telex => crate::engine::InputMethod::Telex,
+        crate::config::InputMethod::Vni => crate::engine::InputMethod::Vni,
+        crate::config::InputMethod::Smart => crate::engine::InputMethod::Smart,
+    }
 }
 
 fn get_config_path() -> PathBuf {

@@ -16,7 +16,9 @@
 //! bug still lets you switch VT (Ctrl+Alt+F3) or `pkill vi-daemon` from another
 //! machine/SSH. Never auto-enabled.
 
+use std::os::fd::AsRawFd;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use evdev::{Device, EventType, InputEvent, KeyCode};
 use evdev::uinput::VirtualDevice;
@@ -31,6 +33,124 @@ impl Drop for Grabbed {
     fn drop(&mut self) {
         let _ = self.0.ungrab();
     }
+}
+
+fn grab_all_keyboards() -> Vec<Grabbed> {
+    let mut keyboards: Vec<Grabbed> = Vec::new();
+    for (path, dev) in evdev::enumerate() {
+        let is_kbd = dev
+            .supported_keys()
+            .is_some_and(|k| k.contains(KeyCode::KEY_A) && k.contains(KeyCode::KEY_Z));
+        if is_kbd {
+            let mut dev = dev;
+            match dev.grab() {
+                Ok(()) => keyboards.push(Grabbed(dev)),
+                Err(e) => warn!("evdev: cannot grab {:?}: {e} (need group `input`?)", path),
+            }
+        }
+    }
+    keyboards
+}
+
+fn build_uinput_mirror() -> Result<VirtualDevice, Box<dyn std::error::Error>> {
+    let mut keys = evdev::AttributeSet::<KeyCode>::new();
+    for code in 1u16..=248 {
+        keys.insert(KeyCode::new(code));
+    }
+    Ok(VirtualDevice::builder()?
+        .name("vi-ime evdev virtual keyboard")
+        .with_keys(&keys)?
+        .build()?)
+}
+
+/// Scoped variant for the automatic per-app fallback (see `legacy_grab.rs`):
+/// same buffer-and-commit composition core as `run()`, but polls each
+/// keyboard fd with a short timeout instead of blocking forever, so it can
+/// be released the instant focus leaves the app it was engaged for — this
+/// runs ALONGSIDE the normal Wayland IM thread, only for the apps that
+/// protocol can't reach (XWayland clients, LibreOffice's VCL text-input).
+/// Returns (ungrabs everything) when `stop` is set or a device errors out.
+pub fn run_scoped(method: InputMethod, stop: &AtomicBool) {
+    let Some(injector) = Injector::detect() else {
+        warn!("evdev fallback: no Unicode typer found — install `wtype` or `xdotool`");
+        return;
+    };
+
+    let mut keyboards = grab_all_keyboards();
+    if keyboards.is_empty() {
+        warn!("evdev fallback: no grabbable keyboard (need group `input`?) — staying passthrough");
+        return;
+    }
+
+    let mut ui = match build_uinput_mirror() {
+        Ok(ui) => ui,
+        Err(e) => {
+            error!("evdev fallback: cannot create uinput mirror: {e}");
+            return;
+        }
+    };
+
+    let mut engine = NonPreeditEngine::new(method, ImeMode::NonPreedit);
+    let mut shift = false;
+
+    'outer: while !stop.load(Ordering::Relaxed) {
+        let mut pfds: Vec<libc::pollfd> = keyboards
+            .iter()
+            .map(|k| libc::pollfd { fd: k.0.as_raw_fd(), events: libc::POLLIN, revents: 0 })
+            .collect();
+        // 200ms timeout: the stop flag (set the instant focus leaves the
+        // app) is checked at least 5x/sec even with zero key traffic.
+        let n = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, 200) };
+        if n <= 0 {
+            continue;
+        }
+        for (i, kbd) in keyboards.iter_mut().enumerate() {
+            if pfds[i].revents & libc::POLLIN == 0 {
+                continue;
+            }
+            let events: Vec<InputEvent> = match kbd.0.fetch_events() {
+                Ok(evs) => evs.collect(),
+                Err(e) => {
+                    error!("evdev fallback: read error: {e}");
+                    break 'outer;
+                }
+            };
+            for ev in events {
+                if ev.event_type() != EventType::KEY {
+                    continue;
+                }
+                let code = KeyCode::new(ev.code());
+                let value = ev.value();
+
+                if matches!(code, KeyCode::KEY_LEFTSHIFT | KeyCode::KEY_RIGHTSHIFT) {
+                    shift = value != 0;
+                    emit(&mut ui, code, value);
+                    continue;
+                }
+
+                let ch = key_to_char(code, shift);
+                let is_letterish = ch.is_some();
+                if !is_letterish {
+                    if value != 0 {
+                        flush(&mut engine, &injector);
+                    }
+                    emit(&mut ui, code, value);
+                    continue;
+                }
+
+                if value == 0 {
+                    continue;
+                }
+                let Some(ch) = ch else { continue };
+                if let NonPreeditAction::CommitWithBackspace { text, .. } = engine.push_key(ch) {
+                    injector.type_text(&text);
+                }
+            }
+        }
+    }
+    // Flush a half-typed word rather than lose it, then keyboards drop
+    // (ungrab) and the uinput mirror is torn down as this function returns.
+    flush(&mut engine, &injector);
 }
 
 /// Entry point for `--evdev`. Blocks forever (or until error). Never returns Ok

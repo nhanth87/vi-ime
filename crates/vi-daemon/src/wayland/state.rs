@@ -200,13 +200,53 @@ impl ImeAppState {
         // Read the focused app_id while `rt` is still borrowed (its borrow
         // ends here); the plugin lifecycle is driven from it below.
         let new_app_id = rt.app_id();
-        // Finalize pending text first (R8).
+        let app_switched = new_app_id != self.current_app_id;
+        // ⚠️ PREEDIT-JUMP-WITH-CURSOR GUARD — read before touching this block.
+        // `generation` bumps for TWO different reasons and they must NOT be
+        // handled the same way:
+        //   1. App focus actually changed (user alt-tabbed / clicked another
+        //      window). By the time we see this, the app's OWN cursor has
+        //      already moved elsewhere — this is exactly `Deactivate`'s
+        //      situation (dispatch.rs), which is R8 "Drop, Don't Commit":
+        //      committing here would land the half-typed word at whatever
+        //      the new cursor position is, i.e. "preedit nhảy theo con trỏ".
+        //   2. A live setting changed (tray toggle, setting.conf edit) while
+        //      staying in the SAME app/field — cursor hasn't moved, so
+        //      finalizing via a real commit is correct and loses no text.
+        // Confirmed live 2026-07-10: before the niri focus-tracking fix
+        // (compositor/niri.rs), `new_app_id` was always `None` so branch 1
+        // never actually fired on a real app switch — this conflict was
+        // dormant. Fixing focus-tracking exposed it. If you touch either
+        // this function or `Deactivate` in dispatch.rs, keep both agreeing
+        // on drop-vs-commit for the same real-world event (app switch).
+        //
+        // ⚠️ SECOND REGRESSION, fixed same day: the drop branch below MUST
+        // stay mode-aware like `finalize_word`/`on_physical_click` already
+        // are. NonPreedit/live mode (terminals — kitty, foot, alacritty…)
+        // never calls `set_preedit_string` in the first place (raw keys are
+        // forwarded live, ARE already real text on screen) — sending an
+        // empty `set_preedit_string` + `commit()` to an app that never asked
+        // for one is a spurious protocol message, and on at least kitty it
+        // visibly manifested as the SAME "nhảy chữ theo con trỏ" symptom
+        // this whole guard exists to prevent. A first cut of this fix called
+        // `set_preedit` unconditionally and reintroduced the bug for
+        // terminals within the hour — don't repeat that.
         if self.engine.has_pending() {
-            let Some(im) = self.input_method.clone() else {
-                return; // no proxy yet — defer until we can commit safely
-            };
-            info!("[RECONFIG] finalize pending word before applying new config");
-            self.commit_pending_then(&im, None);
+            let live = self.engine.mode() == ImeMode::NonPreedit && self.viet.ready();
+            if app_switched {
+                info!("[RECONFIG] app switched mid-composition — drop, don't commit (R8)");
+                self.engine.reset();
+                self.reset_word_state();
+                if !live && let Some(im) = self.input_method.clone() {
+                    self.set_preedit(&im, "");
+                }
+            } else {
+                let Some(im) = self.input_method.clone() else {
+                    return; // no proxy yet — defer until we can commit safely
+                };
+                info!("[RECONFIG] finalize pending word before applying new config");
+                self.commit_pending_then(&im, None);
+            }
         }
         runtime::apply_snapshot(&mut self.engine, &snap);
         let was_enabled = self.ime_enabled;

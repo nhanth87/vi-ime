@@ -11,12 +11,6 @@ use tracing::warn;
 use crate::compositor::FocusEvent;
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct NiriWindows {
-    #[serde(rename = "Windows")]
-    pub(crate) windows: Vec<NiriWindow>,
-}
-
-#[derive(Debug, Deserialize)]
 pub(crate) struct NiriWindow {
     #[serde(default)]
     pub(crate) app_id: Option<String>,
@@ -30,10 +24,18 @@ pub(crate) struct NiriWindow {
 
 /// Parse `niri msg --json windows` output into the focused window's
 /// FocusEvent. Pure function — unit-testable without niri running.
+///
+/// `niri msg --json windows` returns a bare JSON array (`[{...}, {...}]`),
+/// NOT `{"Windows": [...]}` — that wrapped shape is only how the
+/// `WindowsChanged` EVENT-STREAM tag looks. Confirmed live against niri
+/// 26.04 2026-07-10: the wrapped-struct parse silently failed on every
+/// single call (`serde_json::from_str().ok()` swallows the mismatch),
+/// meaning `current_app_id` in main.rs's focus loop was **always None** —
+/// per-app profile switching, the app-support probe, and (before this
+/// session) the auto evdev-fallback trigger never actually saw an app_id.
 pub(crate) fn parse_focused(json: &str) -> Option<FocusEvent> {
-    let windows: NiriWindows = serde_json::from_str(json).ok()?;
+    let windows: Vec<NiriWindow> = serde_json::from_str(json).ok()?;
     windows
-        .windows
         .into_iter()
         .find(|w| w.is_focused == Some(true))
         .map(|w| FocusEvent { app_id: w.app_id, title: w.title, pid: w.pid })
@@ -78,7 +80,7 @@ enum StreamEnd {
 /// Follow one `niri msg event-stream` child until it ends.
 fn follow_stream(binary: &str, tx: &std::sync::mpsc::Sender<FocusEvent>) -> StreamEnd {
     let mut child = match Command::new(binary)
-        .arg("msg").arg("event-stream")
+        .arg("msg").arg("--json").arg("event-stream")
         .stdout(Stdio::piped()).stderr(Stdio::null()).spawn()
     {
         Ok(c) => c,

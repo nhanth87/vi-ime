@@ -87,6 +87,40 @@ if [ "${1:-}" = "settings" ]; then
     shift
     exec "$HERE/usr/bin/vi-settings" "$@"
 fi
+
+# One-shot commands that never touch the keyboard don't need /dev/input —
+# skip the group dance entirely for them.
+case "${1:-}" in
+    --doctor|--take-over|--stop-rivals|--switch|--toggle|--mode|--status)
+        exec "$HERE/usr/bin/vi-ime" "$@"
+        ;;
+esac
+
+# evdev fallback (LibreOffice/OnlyOffice auto-grab, plus `--evdev`) needs
+# read access to /dev/input/eventN — gated by the `input` group on every
+# mainstream distro (deliberately: raw keyboard read = keylogging risk, so
+# it's never auto-granted like joystick/webcam uaccess is). Without it the
+# daemon still runs fine for every app reachable via zwp_input_method_v2 —
+# this is a soft upgrade, never a hard requirement.
+if command -v id >/dev/null 2>&1 && ! id -nG "$USER" 2>/dev/null | grep -qw input; then
+    echo "vi-ime: chưa ở nhóm 'input' — LibreOffice/OnlyOffice sẽ không gõ được"
+    echo "        (evdev fallback cần đọc /dev/input). Xin quyền một lần..."
+    ADDED=1
+    if command -v pkexec >/dev/null 2>&1; then
+        pkexec usermod -aG input "$USER" || ADDED=0
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo usermod -aG input "$USER" || ADDED=0
+    else
+        echo "vi-ime: không tìm thấy pkexec/sudo — bỏ qua, chạy như bình thường."
+        ADDED=0
+    fi
+    if [ "$ADDED" = "1" ] && command -v sg >/dev/null 2>&1; then
+        # usermod takes effect for NEW sessions only — `sg` re-execs this
+        # process with the group active right now, no logout needed.
+        echo "vi-ime: đã vào nhóm 'input' — áp dụng ngay, không cần đăng nhập lại."
+        exec sg input -c "exec \"$HERE/usr/bin/vi-ime\" $(printf '%q ' "$@")"
+    fi
+fi
 exec "$HERE/usr/bin/vi-ime" "$@"
 APPRUN
 chmod +x "$APPDIR/AppRun"
@@ -123,6 +157,19 @@ if [ -f "$OUT" ]; then
     echo ""
     echo -e "  Chạy daemon:    ${CYAN}$OUT${NC}"
     echo -e "  Mở settings:    ${CYAN}$OUT settings${NC}"
+    echo ""
+    warn "Chưa bundle thư viện GTK3/libayatana-appindicator3 (tray icon)."
+    echo "       AppImage này KHÔNG tự chứa — máy chạy nó vẫn cần sẵn:"
+    echo "         gtk3, libayatana-appindicator3, libdbusmenu-gtk3"
+    echo "       Thiếu 1 trong 3 → vi-ime KHÔNG khởi động được (kể cả gõ"
+    echo "       tiếng Việt, không chỉ mất tray) — dynamic linker chặn"
+    echo "       ngay khi nạp binary, trước khi main() chạy."
+    echo "       Cố tình không bundle: GTK3 gần như luôn có sẵn trên desktop"
+    echo "       Linux, và bundle cả stack GTK/X11 (~70 thư viện) sẽ làm"
+    echo "       AppImage phình to + dễ vỡ theming trên máy đích — đi ngược"
+    echo "       tinh thần 'siêu nhẹ' của vi-im. Muốn AppImage tự chứa hoàn"
+    echo "       toàn (kể cả trên máy thiếu appindicator3): cần refactor"
+    echo "       tray sang dlopen lúc chạy thay vì link tĩnh — chưa làm."
 else
     echo "appimagetool did not produce $OUT — see output above."
     exit 1
