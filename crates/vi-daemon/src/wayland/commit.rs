@@ -28,15 +28,6 @@ impl ImeAppState {
         self.reset_word_state();
     }
 
-    /// Finalize pending text, then replay a key (used by R8 reconfigure and
-    /// by shortcut/navigation passthrough).
-    pub(crate) fn commit_pending_then(&mut self, im: &ZwpInputMethodV2, replay: Option<u32>) {
-        self.finalize_word(im);
-        if let Some(kc) = replay {
-            self.vk.tap(kc);
-        }
-    }
-
     /// Send a preedit update (classic Preedit mode only). Protocol cursor
     /// offsets are UTF-8 BYTES; (len, len) puts the caret at the end.
     pub(crate) fn set_preedit(&mut self, im: &ZwpInputMethodV2, s: &str) {

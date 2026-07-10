@@ -141,21 +141,39 @@ chạy tay và grep log. Đã fix: thêm `--json` vào cả `event-stream` lẫn
 trả về **mảng JSON trần** `[...]`, không phải `{"Windows":[...]}` (đó là
 hình dạng của event-stream tag `WindowsChanged`, không phải command output).
 
-**Bài học 1 — hai path "gõ dở + app đổi focus" PHẢI đồng thuận Drop-vs-Commit:**
-`Deactivate` (dispatch.rs) tuân R8 (Drop, Don't Commit — cursor app đã dịch
-chuyển, commit vào đó là sai vị trí). Nhưng `maybe_reconfigure()` (state.rs,
-gọi mỗi `process_key` + `Activate` khi generation đổi) lại LUÔN `commit_pending_then`
-bất kể generation đổi vì app-switch hay chỉ vì đổi setting cùng app — mâu
-thuẫn triết lý y hệt, và tồn tại ÂM THẦM suốt vì `current_app_id` luôn `None`
-(app_switched luôn `false`) do bug ở trên. Fix `niri.rs` xong là **đánh
-thức** luôn bug thứ hai này. Rule: trong `maybe_reconfigure`, phải tách
-`app_switched = new_app_id != self.current_app_id` — app đổi → Drop
-(giống Deactivate); CÙNG app chỉ đổi setting (tray/tệp config) → Commit
-(không mất chữ). Đừng gộp hai case này lại.
+**Bài học 1 — `maybe_reconfigure` KHÔNG được cố "commit an toàn" nữa, chỉ
+Drop, giống mọi nhánh ngắt-ngang khác. Lịch sử 3 lần vá liên tiếp trong
+CÙNG MỘT BUỔI (2026-07-10), đọc kỹ trước khi thêm lại bất kỳ điều kiện nào
+vào block này:**
+1. Bản gốc: LUÔN `commit_pending_then` trước khi áp config mới, bất kể
+   generation đổi vì app-switch hay chỉ đổi setting cùng app. Nằm im vì
+   `current_app_id` luôn `None` (bug niri `--json` ở trên) nên nhánh
+   app-switch coi như chết. Fix niri.rs xong → đánh thức bug này: commit
+   pending text vào app MỚI (cursor app cũ không liên quan gì) → "nhảy
+   theo con trỏ".
+2. Vá lần 1: tách `app_switched` — app đổi thì Drop (giống Deactivate),
+   cùng app thì vẫn Commit. Ý đúng, nhưng nhánh Drop gọi
+   `set_preedit(&im, "")` **vô điều kiện** — với NonPreedit/terminal, app
+   chưa từng nhận `set_preedit_string` thật nên đây là message thừa →
+   **y hệt triệu chứng "nhảy chữ"**, xác nhận lại trên kitty trong vòng
+   1 tiếng.
+3. Vá lần 2: thêm check `live = engine.mode()==NonPreedit && viet.ready()`
+   trước khi gọi `set_preedit`, verify sống trên kitty (chữ thô giữ
+   nguyên, không nhân đôi, không nhảy) — **nhưng user vẫn báo lỗi lặp
+   lại sau đó.**
+4. **Quyết định cuối (đang áp dụng):** bỏ hẳn phân biệt app-switch-vs-
+   same-app, bỏ hẳn `commit_pending_then` (đã xóa khỏi commit.rs — không
+   còn nơi nào gọi). `maybe_reconfigure` giờ LUÔN Drop khi có pending,
+   y hệt `Deactivate`/`on_physical_click`/`Event::Done`'s external_change
+   — GIỐNG NHAU cả 4 chỗ, không có case đặc biệt nào. Lý do: mỗi lần thêm
+   điều kiện "commit an toàn khi X" là một chỗ mới để sai; bỏ hẳn câu hỏi
+   đó là cách duy nhất để 4 chỗ này hết lệch nhau. Giá phải trả: đổi
+   Telex/VNI giữa chừng một từ sẽ làm mất từ đó thay vì hoàn tất nó —
+   chấp nhận được, vì mọi ngắt-ngang khác trong file này đã hành xử y hệt
+   từ trước và không ai phàn nàn.
 
 **Bài học 2 — MỌI nơi gọi `set_preedit()` sau một sự kiện "ngắt ngang"
-(app switch, external cursor change, click) PHẢI mode-aware, giống pattern
-đã có sẵn ở `finalize_word`/`on_physical_click`:**
+(reconfigure, external cursor change, click) PHẢI mode-aware:**
 ```rust
 let live = self.engine.mode() == ImeMode::NonPreedit && self.viet.ready();
 if !live { /* mới được gọi set_preedit(&im, "") */ }
@@ -164,13 +182,18 @@ NonPreedit/live mode (terminal — kitty/foot/alacritty) không BAO GIỜ gọi
 `set_preedit_string` thật — phím thô forward trực tiếp, chữ trên màn ĐÃ
 LÀ text thật. Gửi `set_preedit_string("",0,0)` + `commit()` cho app không
 hề yêu cầu là một protocol message thừa — xác nhận trực tiếp trên kitty: y
-hệt triệu chứng "nhảy chữ theo con trỏ". **Lần sửa đầu tiên cho bài học 1
-ở trên đã phạm đúng lỗi này** (gọi `set_preedit` vô điều kiện) — vá xong
-bug cũ lại đẻ bug mới trong cùng buổi. Ba chỗ hiện đã đúng pattern này:
-`finalize_word`/`on_physical_click` (commit.rs, actions.rs), `maybe_reconfigure`
-app-switch branch, và `Event::Done`'s external_change branch (dispatch.rs).
-Thêm chỗ gọi `set_preedit` mới ở bất kỳ nhánh "ngắt ngang" nào → bắt buộc
-check `live` y hệt.
+hệt triệu chứng "nhảy chữ theo con trỏ" (xem Bài học 1, vá lần 1). Ba chỗ
+hiện đúng pattern này: `finalize_word`/`on_physical_click` (commit.rs,
+actions.rs), `maybe_reconfigure` (state.rs), `Event::Done`'s
+external_change (dispatch.rs). Thêm chỗ gọi `set_preedit` mới ở bất kỳ
+nhánh "ngắt ngang" nào → bắt buộc check `live` y hệt.
+
+**Notify "app chưa nhận bộ gõ" đã bị GỠ BỎ (2026-07-10)** — user thấy phiền,
+và về bản chất nó noisy: app được focus nhưng không có ô nhập liệu (chỉ
+bấm nút toolbar) cũng never-Activate giống hệt app thật sự lỗi, không có
+tín hiệu nào để phân biệt hai case. Đừng thêm lại popup này ở `notify.rs`
+trừ khi tìm được cách phân biệt hai case trên; log `[UNSUPPORTED]` trong
+`learning.rs::probe_timeout` vẫn còn, dùng cho `--doctor`.
 
 **Bài học 3 — `field_sensitivity` (Terminal ép NonPreedit, Url passthrough
 cho Chrome/Firefox address bar, Secure cho password) reset về `Normal` mỗi

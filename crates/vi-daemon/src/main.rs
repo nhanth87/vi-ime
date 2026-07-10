@@ -53,13 +53,11 @@ fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
 }
 
 use crate::engine::fast_engine::CompositorKind;
-use crate::engine::AppSupport;
 
 use crate::compositor::{AppCategory, FocusEvent};
 use crate::config::ConfigManager;
 use crate::events::DaemonEvent;
 use crate::learning::Adaptation;
-use crate::notify::Notifier;
 use crate::sync::resolved_to_snapshot;
 use crate::wayland::RuntimeConfig;
 
@@ -219,11 +217,6 @@ fn main() {
     // App-support probe delays (single blocking thread, R15-safe).
     let probe_tx = events::spawn_probe_timer(tx.clone());
 
-    // Advice notifications (once per app per session, throttled in Adaptation).
-    let notifier = Notifier::new(Box::new(|_support: AppSupport| {
-        // Tray color hook — wired when vi-tray grows a support indicator.
-    }));
-
     // Config-file watch (inotify, event-driven)
     events::spawn_config_watch(config_manager.path(), tx.clone());
 
@@ -370,11 +363,14 @@ fn main() {
             }
 
             DaemonEvent::ProbeTimeout(app_id) => {
-                if let Some(advice) =
-                    adapt.probe_timeout(&app_id, current_app_id.as_deref(), current_focus.pid)
-                {
-                    notifier.notify_advice(&app_id, &advice);
-                }
+                // User-facing popup removed 2026-07-10 (annoying, and the
+                // "unsupported" verdict is inherently noisy — a focused app
+                // with no editable field also never Activates, so this
+                // fires just as often for a perfectly fine app you merely
+                // clicked without an input field as for a genuinely broken
+                // one). Keep computing + logging the advice ([UNSUPPORTED]
+                // below) for `--doctor`/troubleshooting; just don't pop it.
+                adapt.probe_timeout(&app_id, current_app_id.as_deref(), current_focus.pid);
             }
 
             DaemonEvent::ConfigChanged => {
