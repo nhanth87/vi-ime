@@ -136,7 +136,7 @@ impl EvdevTyper {
                 warn!("[EVDEV-TYPER] >{MAX_UNIQUE} ký tự khác nhau trong một lần gõ — bỏ qua");
                 return false;
             }
-            assigned.push((ch, FIRST_CODE + assigned.len() as u32));
+            assigned.push((ch, crate::wayland::viet_typer::SAFE_CODES[assigned.len()]));
         }
 
         let keymap = build_keymap(&assigned);

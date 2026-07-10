@@ -165,6 +165,23 @@ impl ImeAppState {
         }
     }
 
+    /// Live-echo mode: gõ thẳng từng glyph qua viet_typer (per-word keymap).
+    /// CHỈ cho terminal đã biết (KNOWN_TERMINALS — probe burst-safe, áp
+    /// keymap đồng bộ). Blink/Electron áp `wl_keyboard.keymap` trễ vô hạn
+    /// định (repro 2026-07-10: "tu72"→"phò", 'ấ' ở code 28 thành Enter tự
+    /// gửi message) — NonPreedit ở app thường = buffer ÂM THẦM + commit_string
+    /// ở word boundary (đúng nghĩa R2), KHÔNG live echo, KHÔNG underline.
+    /// MỌI nhánh cần phân biệt live/preedit PHẢI gọi hàm này — đừng inline
+    /// lại predicate (R16 bài học 2: 6 chỗ từng lệch nhau).
+    pub(crate) fn live_echo(&self) -> bool {
+        self.engine.mode() == ImeMode::NonPreedit
+            && self.viet.ready()
+            && self.current_app_id.as_deref().is_some_and(|id| {
+                let id = id.to_lowercase();
+                crate::compositor::KNOWN_TERMINALS.contains(&id.as_str())
+            })
+    }
+
     /// ms left until the idle auto-commit fires, or None when unarmed.
     /// Armed ONLY while a composition exists solely as preedit (non-live):
     /// live mode's text is already real, nothing to lose on a click.
@@ -172,7 +189,7 @@ impl ImeAppState {
         if !self.active || !self.engine.has_pending() {
             return None;
         }
-        if self.engine.mode() == ImeMode::NonPreedit && self.viet.ready() {
+        if self.live_echo() {
             return None;
         }
         let elapsed = self.last_key_at?.elapsed().as_millis();
@@ -271,7 +288,7 @@ impl ImeAppState {
         // as any other interruption; that trade already exists everywhere
         // else in this file and users haven't complained about IT.
         if self.engine.has_pending() {
-            let live = self.engine.mode() == ImeMode::NonPreedit && self.viet.ready();
+            let live = self.live_echo();
             info!("[RECONFIG] reconfigure mid-composition — drop, don't commit (R8)");
             self.engine.reset();
             self.reset_word_state();

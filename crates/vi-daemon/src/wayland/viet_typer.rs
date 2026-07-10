@@ -32,11 +32,21 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboar
 /// wl_keyboard keymap format: xkb_v1.
 pub(crate) const KEYMAP_FORMAT_XKB_V1: u32 = 1;
 
-/// Safe evdev codes for injected keys: the main typing rows ('1'..'=',
-/// QWERTY row…). Nothing here doubles as a navigation/media key anywhere.
-pub(crate) const FIRST_CODE: u32 = 2;
-const LAST_CODE: u32 = 33;
-pub(crate) const MAX_UNIQUE: usize = (LAST_CODE - FIRST_CODE + 1) as usize; // 32
+/// Safe evdev codes for injected keys: the main typing rows, EXCLUDING the
+/// codes that mean something to apps regardless of keymap when the client
+/// applies our keymap late (Blink/Electron lag, R17): 14=BACKSPACE,
+/// 15=TAB, 28=ENTER, 29=LEFTCTRL. Field bug 2026-07-10 khuya: grow-only
+/// cache dồn ký tự mới lên code cao → 'ấ' được gán code 28 → app hiểu là
+/// Enter → "gõ 'mất' là nó tự commit thành dấu enter" (tự gửi message
+/// giữa từ). Per-word keymap cũ không bao giờ chạm code 28 nên lỗi này
+/// chỉ lộ ra sau khi có cache.
+pub(crate) const SAFE_CODES: [u32; 28] = [
+    2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, // digit row '1'..'='
+    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, // qwerty row + [ ]
+    30, 31, 32, 33, // a s d f
+];
+pub(crate) const FIRST_CODE: u32 = SAFE_CODES[0];
+pub(crate) const MAX_UNIQUE: usize = SAFE_CODES.len(); // 28
 
 /// Generate a minimal keymap for this word's unique chars. `'\u{0008}'`
 /// maps to the BackSpace keysym (used by the evdev fallback typer — U0008
@@ -161,7 +171,7 @@ impl VietTyper {
             }
             for ch in &needed {
                 if !self.cached_map.contains_key(ch) {
-                    let code = FIRST_CODE + self.cached_map.len() as u32;
+                    let code = SAFE_CODES[self.cached_map.len()];
                     self.cached_map.insert(*ch, code);
                 }
             }

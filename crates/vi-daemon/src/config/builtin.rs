@@ -12,25 +12,21 @@ use crate::config::types::{AppConfig, ImeMode};
 
 /// Builtin per-app profiles: (app_id, mode). Kept lowercase.
 ///
-/// Terminals/editors → NonPreedit (no preedit underline).
-/// Browsers/chat → Preedit (visual feedback while composing).
+/// CHỈ liệt kê app mà mode là YÊU CẦU ĐÚNG ĐẮN (không phải "default đẹp"):
+/// builtin app ĐÈ global (R13), nên mỗi entry ở đây là một app mà toggle
+/// mode toàn cục của user không còn tác dụng. Browsers/chat từng nằm đây
+/// với Preedit "cho có feedback" — đã gỡ 2026-07-10 khuya: từ khi
+/// NonPreedit ngoài terminal là buffer-âm-thầm + commit_string (an toàn
+/// trên Blink, xem `live_echo`), không còn lý do đúng đắn nào để chặn
+/// toggle của user ở browser/chat ("gõ trong chrome bị gạch đít cho
+/// non-preedit" — user báo ngay trong ngày).
 ///
 /// Terminals are NOT listed here — `builtin_app_profile` checks
 /// `compositor::KNOWN_TERMINALS` first (single source of truth shared
 /// with `AppCategory::classify` and `TerminalPlugin`), so every terminal
 /// in that list gets NonPreedit without needing a duplicate entry here.
 const BUILTIN_APPS: &[(&str, ImeMode)] = &[
-    // ── Browsers ──
-    ("chromium-browser", ImeMode::Preedit),
-    ("chromium", ImeMode::Preedit),
-    ("google-chrome", ImeMode::Preedit),
-    ("firefox", ImeMode::Preedit),
-    ("firefox-esr", ImeMode::Preedit),
-    ("zen-browser", ImeMode::Preedit),
-    ("zen", ImeMode::Preedit),
-    ("brave-browser", ImeMode::Preedit),
-    ("vivaldi-stable", ImeMode::Preedit),
-    // ── Editors/IDEs ──
+    // ── Editors/IDEs: preedit-underline đánh nhau với autocomplete/vim ──
     ("code", ImeMode::NonPreedit),
     ("code-oss", ImeMode::NonPreedit),
     ("codium", ImeMode::NonPreedit),
@@ -39,13 +35,6 @@ const BUILTIN_APPS: &[(&str, ImeMode)] = &[
     ("sublime_text", ImeMode::NonPreedit),
     ("jetbrains-idea", ImeMode::NonPreedit),
     ("jetbrains-rustrover", ImeMode::NonPreedit),
-    // ── Chat ──
-    ("discord", ImeMode::Preedit),
-    ("slack", ImeMode::Preedit),
-    ("telegram-desktop", ImeMode::Preedit),
-    ("org.telegram.desktop", ImeMode::Preedit),
-    ("signal", ImeMode::Preedit),
-    ("element", ImeMode::Preedit),
 ];
 
 /// Builtin per-site profiles: (title substring, mode). Rich-text web editors

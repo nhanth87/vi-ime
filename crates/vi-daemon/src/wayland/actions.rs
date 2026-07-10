@@ -186,7 +186,12 @@ impl ImeAppState {
         keycode: u32,
         im: &ZwpInputMethodV2,
     ) {
-        let live = self.engine.mode() == ImeMode::NonPreedit && self.viet.ready();
+        let live = self.live_echo();
+        // NonPreedit ngoài terminal = buffer ÂM THẦM (R2): không live echo
+        // (Blink áp keymap trễ — repro 2026-07-10), không set_preedit
+        // (user chọn NonPreedit chính vì không muốn gạch chân). Từ hiện
+        // nguyên khối qua commit_string ở word boundary.
+        let silent = !live && self.engine.mode() == ImeMode::NonPreedit;
 
         match action {
             NonPreeditAction::Buffer | NonPreeditAction::UpdatePreedit(_) => {
@@ -197,7 +202,7 @@ impl ImeAppState {
                     // char shorter.
                     let target = self.engine.inner().preedit_output();
                     self.sync_shown(&target);
-                } else {
+                } else if !silent {
                     let s = self.engine.inner().preedit_string().to_string();
                     self.set_preedit(im, &s);
                 }
@@ -222,7 +227,8 @@ impl ImeAppState {
                 if live {
                     // Word fully deleted by backspace — remove what we own.
                     self.sync_shown("");
-                } else {
+                } else if !silent {
+                    // Silent buffer never showed anything — nothing to clear.
                     self.set_preedit(im, "");
                 }
             }
@@ -247,7 +253,7 @@ impl ImeAppState {
             return;
         }
         info!("[CLICK] chuột click khi đang gõ dở — drop composition NGAY (R8)");
-        let live = self.engine.mode() == ImeMode::NonPreedit && self.viet.ready();
+        let live = self.live_echo();
         if !live
             && let Some(im) = self.input_method.clone()
         {
