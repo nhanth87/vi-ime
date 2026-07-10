@@ -24,7 +24,6 @@ mod plugin;
 mod rivals;
 mod sync;
 mod tray;
-mod tray_icon;
 mod telemetry;
 mod wayland;
 
@@ -124,14 +123,14 @@ fn main() {
             mgr.setting_mut().input_method = new;
             mgr.save().ok();
             println!("Switched to {new}");
-            notify_popup("vi-ime", &format!("🔤 {new}"));
+            notify::popup("vi-ime", &format!("🔤 {new}"));
         }
         if args.iter().any(|a| a == "--toggle") {
             let en = !mgr.setting().enabled;
             mgr.setting_mut().enabled = en;
             mgr.save().ok();
             println!("IME {}", if en { "enabled" } else { "disabled" });
-            notify_popup("vi-ime", if en { "🟢 Bật" } else { "🔴 Tắt" });
+            notify::popup("vi-ime", if en { "🟢 Bật" } else { "🔴 Tắt" });
         }
         if args.iter().any(|a| a == "--mode") {
             use crate::config::ImeMode;
@@ -142,7 +141,7 @@ fn main() {
             mgr.setting_mut().ime_mode = new;
             mgr.save().ok();
             println!("Mode → {new}");
-            notify_popup("vi-ime", &format!("📋 {new}"));
+            notify::popup("vi-ime", &format!("📋 {new}"));
         }
         if args.iter().any(|a| a == "--status") {
             let s = mgr.setting();
@@ -253,7 +252,7 @@ fn main() {
     }
 
     // Popup startup mode
-    notify_popup("vi-ime", &format!(
+    notify::popup("vi-ime", &format!(
         "{} · {} · {}",
         setting.input_method,
         setting.ime_mode,
@@ -335,9 +334,14 @@ fn main() {
                 // Game auto-detection: if the focused process looks like a
                 // game, push game_mode into the shared runtime config so
                 // the IME thread enters raw passthrough mode.
-                let game_detected = focus_pid
-                    .map(game_detector::is_game_process)
-                    .unwrap_or(false);
+                // niri provides a PID → /proc inspection. Sway/Hyprland/river
+                // (wlr foreign-toplevel) give no PID, so fall back to the
+                // app_id / window class (steam, lutris, steam_app_*, …).
+                let game_detected = match (focus_pid, current_app_id.as_deref()) {
+                    (Some(pid), _) => game_detector::is_game_process(pid),
+                    (None, Some(app_id)) => game_detector::is_game_app_id(app_id),
+                    (None, None) => false,
+                };
                 if game_detected {
                     info!(
                         "[GAME-DETECT] pid={:?} looks like a game — enabling game mode",
@@ -442,11 +446,4 @@ fn get_config_path() -> PathBuf {
         let local = std::env::current_dir().unwrap_or_default().join("setting.conf");
         if local.exists() { local } else { ConfigManager::default_path() }
     }
-}
-
-/// Show a desktop notification via notify-send (best-effort, non-blocking).
-fn notify_popup(title: &str, body: &str) {
-    let _ = std::process::Command::new("notify-send")
-        .args([title, body, "--icon=input-keyboard", "--expire-time=3000"])
-        .spawn();
 }

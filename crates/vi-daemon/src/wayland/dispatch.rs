@@ -12,22 +12,24 @@ use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::{
     ChangeCause, ContentPurpose,
 };
 
+use crate::engine::ImeMode;
 use crate::wayland::feedback::ImeFeedback;
 use crate::wayland::state::{FieldSensitivity, ImeAppState};
 use crate::wayland::{ImUserData, KeyboardGrabUserData};
 
 /// Map the app's self-declared field purpose to our per-field gate.
-/// Terminal is mapped to Normal — we use commit_string everywhere
-/// (preedit-everywhere), no per-app guessing needed.
+/// Terminal gets its own variant to force NonPreedit mode (preedit-everywhere
+/// commit_string works, but preedit underline breaks in terminals).
 fn sensitivity_of(purpose: ContentPurpose) -> FieldSensitivity {
     match purpose {
         // Security-critical: engine off, never logged. Non-negotiable.
         ContentPurpose::Password | ContentPurpose::Pin => FieldSensitivity::Secure,
         // URL fields: passthrough keys so browser autocomplete works.
         ContentPurpose::Url => FieldSensitivity::Url,
-        // Terminal, Digits, Number etc. → Normal (preedit works everywhere).
-        ContentPurpose::Terminal
-        | ContentPurpose::Digits
+        // Terminal: force NonPreedit mode (unless user explicitly chose otherwise).
+        ContentPurpose::Terminal => FieldSensitivity::Terminal,
+        // Digits, Number etc. → Normal (preedit works everywhere).
+        ContentPurpose::Digits
         | ContentPurpose::Number
         | ContentPurpose::Phone
         | ContentPurpose::Date
@@ -190,7 +192,7 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                     WEnum::Unknown(_) => FieldSensitivity::Normal,
                 };
                 if sens != state.field_sensitivity {
-                    info!("[CONTENT-TYPE] field sensitivity → {sens:?}");
+                    info!("[CONTENT-TYPE] field sensitivity → {sens:?} (had_pending={})", state.engine.has_pending());
                     state.field_sensitivity = sens;
                     // The ContentType event often arrives AFTER the first
                     // keystroke already entered the engine (seen live:
@@ -198,12 +200,25 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                     // passthrough class would strand that pending key —
                     // the "address bar / password loses the first char"
                     // bug. Flush it as real text before going raw.
-                    if sens != FieldSensitivity::Normal
+                    // BUT: don't finalize for Terminal - we want to keep composing.
+                    let should_finalize = matches!(sens, FieldSensitivity::Secure | FieldSensitivity::Url)
+                        
                         && state.engine.has_pending()
-                        && let Some(im) = state.input_method.clone()
-                    {
-                        info!("[CONTENT-TYPE] flushing pending first key(s) before passthrough");
-                        state.finalize_word(&im);
+                        && state.input_method.is_some();
+                    if should_finalize {
+                        info!("[CONTENT-TYPE] flushing pending first key(s) before passthrough (sens={sens:?})");
+                        state.finalize_word(&state.input_method.as_ref().unwrap().clone());
+                    }
+                    // If field is Terminal, enforce NonPreedit immediately (unless user explicitly chose).
+                    if sens == FieldSensitivity::Terminal && !state.mode_from_user {
+                        // If there's pending text composed in Preedit mode, finalize it
+                        // in the new NonPreedit mode to avoid commit errors on click/cursor move.
+                        if state.engine.has_pending() && state.input_method.is_some() {
+                            info!("[CONTENT-TYPE] Terminal field with pending text → finalizing in NonPreedit mode");
+                            state.finalize_word(&state.input_method.as_ref().unwrap().clone());
+                        }
+                        state.engine.set_mode(ImeMode::NonPreedit);
+                        info!("[CONTENT-TYPE] Terminal field → forcing NonPreedit mode");
                     }
                 }
             }

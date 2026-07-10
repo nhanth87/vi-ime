@@ -11,12 +11,6 @@ description = "Vietnamese IME daemon — main binary, wires all subsystems"
 name = "vi-ime"
 path = "src/main.rs"
 
-# vi-status: legacy standalone status window, superseded by the SNI tray.
-# Kept (not deleted) pending confirmation; no longer auto-spawned.
-[[bin]]
-name = "vi-status"
-path = "src/status_window.rs"
-
 [dependencies]
 unicode-normalization = "0.1"
 wayland-client = "0.31"
@@ -28,7 +22,11 @@ libc = "0.2"
 evdev = "0.13"
 # System-tray icon (StatusNotifierItem) — fcitx-style tray + menu. Sync/thread
 # based (0.2) to match the daemon's threading model (no async runtime).
-ksni = "0.2"
+# ksni = "0.2"  # Replaced by appindicator3 for better panel compatibility
+appindicator3 = "0.3"
+gtk = { version = "0.18", features = ["v3_24"] }
+gdk = "0.18"
+glib = "0.18"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"

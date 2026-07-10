@@ -222,11 +222,12 @@ FloatingWindow {
             Heading { text: "Trạng thái" }
             RowLayout { spacing: 10
                 Switch {
-                    // checked là BINDING theo win.enabled; user gạt thì chỉ
-                    // gửi lệnh — trạng thái thật quay về qua refreshState,
-                    // nên công tắc luôn khớp daemon (kể cả khi lệnh fail).
+                    // checked là BINDING thuần theo win.enabled (read-only).
+                    // User gạt -> gửi lệnh setConfig. Trạng thái thực quay về
+                    // qua refreshState() (timer 2s hoặc onConnectedChanged).
+                    // KHÔNG gán lại checked ở đây — sẽ phá vỡ binding!
                     checked: win.enabled
-                    onToggled: { win.setConfig({ enabled: checked }); checked = Qt.binding(function () { return win.enabled }) }
+                    onToggled: { win.setConfig({ enabled: checked }) }
                 }
                 Text { text: win.enabled ? "🟢 Đang hoạt động" : "🔴 Đã tắt"
                        color: win.enabled ? "#9ece6a" : "#f7768e"
@@ -237,7 +238,6 @@ FloatingWindow {
         }
 
         // ── Tab 2: Ứng dụng ──────────────────────────────────────
-                // ── Tab 2: Ứng dụng ──────────────────────────────────────
         ColumnLayout {
             spacing: 16 // Tăng khoảng cách để thoáng giao diện
             

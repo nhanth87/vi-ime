@@ -231,6 +231,26 @@ mod tests {
         assert_eq!(e.preedit_string(), "nhàn");
     }
 
+    #[test]
+    fn vni_tone_nang_first_word() {
+        // "d9u5" → "đụ" (VNI: d=đ, 9=quality, u=vowel, 5=dấu nặng)
+        let mut e = Engine::new(InputMethod::Vni);
+        for ch in "d9u5".chars() {
+            let _ = e.push_key(ch);
+        }
+        assert_eq!(e.preedit_string(), "đụ");
+    }
+
+    #[test]
+    fn vni_tone_nang_after_space() {
+        // "d9u5 " → "đụ " (space commits the word)
+        let mut e = Engine::new(InputMethod::Vni);
+        for ch in "d9u5 ".chars() {
+            let _ = e.push_key(ch);
+        }
+        assert!(!e.has_preedit());
+    }
+
     // ── English restore (R9) ──
 
     #[test]

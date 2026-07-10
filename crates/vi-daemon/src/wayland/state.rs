@@ -12,6 +12,7 @@ use wayland_protocols_misc::zwp_input_method_v2::client::{
 };
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;
 use crate::engine::fast_engine::{CompositorKind, NonPreeditEngine};
+use crate::engine::ImeMode;
 use crate::plugin::PluginManager;
 
 use crate::wayland::feedback::{FeedbackFn, ImeFeedback};
@@ -37,6 +38,9 @@ pub(crate) enum FieldSensitivity {
     /// URL fields (address bar): passthrough raw keys so browser
     /// autocomplete can see them. Vietnamese composition disabled.
     Url,
+    /// Terminal fields: force NonPreedit mode (commit_string works, preedit underline breaks).
+    /// This overrides user config unless mode_from_user is explicitly set.
+    Terminal,
 }
 
 // ============================================================================
@@ -214,6 +218,12 @@ impl ImeAppState {
             "[RECONFIG] gen={} enabled={} method={:?} mode={:?} output={:?}",
             snap.generation, snap.enabled, snap.method, snap.mode, snap.output
         );
+        // Terminal enforcement: if field is Terminal and user didn't explicitly
+        // choose a mode, force NonPreedit (preedit underline breaks in terminals).
+        if self.field_sensitivity == FieldSensitivity::Terminal && !self.mode_from_user {
+            self.engine.set_mode(ImeMode::NonPreedit);
+            info!("[RECONFIG] Terminal field → forcing NonPreedit mode");
+        }
         // App focus changed → drive the AppPlugin lifecycle (on_blur old /
         // on_focus new) and update the app_id used for per-app plugin routing
         // in pre_process_key/post_process_action. The config layer (R13) stays

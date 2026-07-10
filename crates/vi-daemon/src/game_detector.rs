@@ -78,6 +78,35 @@ pub fn is_game_process(pid: i32) -> bool {
     check_by_exe(&exe_lower)
 }
 
+/// Detect a game by its `app_id` / window class alone — for compositors whose
+/// focus IPC does not provide a PID (wlr foreign-toplevel on Sway/Hyprland/
+/// river). The class string is the only signal we get there, so we match the
+/// same game-platform substrings used for the exe path (`check_by_exe`) plus
+/// the launcher/store reverse-DNS and Steam's per-game window ids.
+///
+/// Examples that resolve true:
+/// - `com.valvesoftware.Steam`, `org.lutris.Lutris`, `com.heroicgameslauncher.hgl`
+/// - `steam_app_1234560` (a running Steam game window)
+/// - `wine`, `proton`, `gamescope` (any prefix)
+pub fn is_game_app_id(app_id: &str) -> bool {
+    let a = app_id.to_lowercase();
+    if a.is_empty() {
+        return false;
+    }
+    // Same platform substrings as the exe-path check (steam, lutris, heroic,
+    // bottles, proton, wine, gamescope, Epic, GOG, Ubisoft, Battle.net, …).
+    if check_by_exe(&a) {
+        return true;
+    }
+    // Steam's per-game windows are named `steam_app_<appid>`.
+    if a.starts_with("steam_app_") {
+        return true;
+    }
+    // Any known game comm name appearing as a substring of the class
+    // (e.g. a game that advertises its binary name as the app_id).
+    GAME_COMMS.iter().any(|g| a == *g || a.contains(g))
+}
+
 /// Check by `comm` name alone (unit-testable without /proc).
 pub fn check_by_comm(comm_lower: &str) -> bool {
     for name in GAME_COMMS {
@@ -114,3 +143,52 @@ fn read_exe(pid: i32) -> String {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_id_launcher_reverse_dns() {
+        assert!(is_game_app_id("com.valvesoftware.Steam"));
+        assert!(is_game_app_id("org.lutris.Lutris"));
+        assert!(is_game_app_id("com.heroicgameslauncher.hgl"));
+    }
+
+    #[test]
+    fn app_id_steam_game_window() {
+        assert!(is_game_app_id("steam_app_1234560"));
+        assert!(is_game_app_id("STEAM_APP_999"));
+    }
+
+    #[test]
+    fn app_id_plain_comm() {
+        assert!(is_game_app_id("cs2"));
+        assert!(is_game_app_id("eldenring"));
+        assert!(is_game_app_id("wine-preloader"));
+    }
+
+    #[test]
+    fn app_id_non_game() {
+        assert!(!is_game_app_id(""));
+        assert!(!is_game_app_id("org.wezfurlong.wezterm"));
+        assert!(!is_game_app_id("foot"));
+        assert!(!is_game_app_id("firefox"));
+    }
+
+    #[test]
+    fn pid_comm_game() {
+        // check_by_comm matches the known comm list.
+        assert!(check_by_comm("cs2"));
+        assert!(check_by_comm("wineserver"));
+        assert!(!check_by_comm("kitty"));
+    }
+
+    #[test]
+    fn exe_substring_game() {
+        assert!(check_by_exe("/home/user/.steam/steam/steamapps/common/Game/Game.x86_64"));
+        assert!(check_by_exe("/mnt/games/Proton 9/proton"));
+        assert!(!check_by_exe("/usr/bin/foot"));
+    }
+}
+

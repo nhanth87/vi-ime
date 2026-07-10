@@ -5,6 +5,17 @@
 
 use crate::engine::AppSupport;
 
+/// Desktop toast for a user-initiated state change (tray click, CLI
+/// `--switch`/`--toggle`/`--mode`) — best-effort, non-blocking, silent if
+/// no notification daemon is running. Uses vi-im's own icon (installed by
+/// `tray::install_icons` at startup) so the toast is recognizable even
+/// with no title text visible in compact notification styles.
+pub fn popup(title: &str, body: &str) {
+    let _ = std::process::Command::new("notify-send")
+        .args([title, body, "--icon=vi-im", "--expire-time=3000"])
+        .spawn();
+}
+
 /// Minimal notifier — logs to stderr, calls tray callback.
 /// DBus notification is done via shell `notify-send`.
 pub struct Notifier {

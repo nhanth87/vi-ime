@@ -144,20 +144,46 @@ systemctl --user start vi-ime  # Bắt đầu gõ tiếng Việt
 
 ```bash
 # Đổi phương thức gõ ngay lập tức (không cần restart)
-vi-daemon --switch       # Telex ↔ VNI
-vi-daemon --toggle        # Bật/tắt IME
-vi-daemon --status        # Xem trạng thái hiện tại
+vi-ime --switch          # Telex ↔ VNI ↔ Tự do
+vi-ime --toggle          # Bật/tắt IME
+vi-ime --status          # Xem trạng thái hiện tại
 
 # Debug mode — xem mọi phím
-RUST_LOG=debug vi-daemon
+RUST_LOG=debug vi-ime
 
 # Godmod — ghi log từng keystroke
-VI_GODMOD=1 vi-daemon
+VI_GODMOD=1 vi-ime
 # Log: ~/.local/share/vi-ime/godmod/
 
 # Restart sau khi sửa setting.conf
 systemctl --user restart vi-ime
 ```
+
+---
+
+## 📟 Tray & Trạng Thái
+
+vi-im đăng ký một **StatusNotifierItem** (fcitx-style) qua `ksni` — không cần
+GTK/Qt dependency. Click phải vào icon để mở menu:
+
+- **Radio Telex / VNI / Tự do** — đổi phương thức gõ.
+- **Radio Preedit (gạch chân) / NonPreedit (gõ thẳng)** — đổi chế độ hiển thị.
+- **Checkmark 🟢 Đang bật / 🔴 Đang tắt** — bật/tắt IME.
+- **Cài đặt…** — mở cửa sổ QML `vi-settings` (riêng biệt, daemon chỉ spawn).
+- **Thoát vi-im**.
+
+**Icon tự vẽ (không phụ thuộc font):** một tile vuông bo góc với glyph bitmap
+hand-authored (`tray_icon.rs`) — `'V'` **xanh** khi bật tiếng Việt, `'E'` **đỏ**
+khi tắt (English passthrough). Host nào không tìm được icon theo theme sẽ nhận
+ngay raw ARGB32 pixmap, nên V/E luôn hiển thị trên mọi bar wlroots.
+
+**Refresh tức thì:** mọi thay đổi (click menu, CLI `vi-ime --switch`, cửa sổ
+Settings, hoặc sửa `setting.conf` bằng tay) đều đẩy một tín hiệu vào luồng
+forwarder → gọi `handle.update()` của ksni ngay lập tức, re-emit icon + menu
+qua DBus. Không đợi poll 2 giây, không "đứng hình" trên host lạ.
+
+> Không có host (bar không hỗ trợ tray)? IME vẫn chạy bình thường — chỉ thiếu
+> icon. Dùng CLI `vi-ime --switch/--toggle/--status` thay thế.
 
 ---
 
@@ -181,23 +207,23 @@ verification.
 - **Rust:** 1.80+
 - **Thư viện hệ thống:** `libxkbcommon libwayland-dev` 
 - **Cửa sổ Settings:** cần **Quickshell upstream** (có module `Quickshell.Ipc`) —
-  Settings mở ra dạng **cửa sổ nổi** (FloatingWindow) tự float + center trên
-  Niri/Hyprland/Sway (zero-config, không cần sửa config compositor). Một số fork
-  (vd. noctalia-qs) thiếu `Quickshell.Ipc` nên `main.qml` không map được.
+Settings mở ra dạng **cửa sổ nổi** (FloatingWindow) tự float + center trên
+Niri/Hyprland/Sway (zero-config, không cần sửa config compositor). Một số fork
+(vd. noctalia-qs) thiếu `Quickshell.Ipc` nên `main.qml` không map được.
 
 ---
 
 ## 🗺️ Roadmap
 
 
-| Phase | Nội dung                                     | Trạng thái     |
-| ----- | -------------------------------------------- | -------------- |
-| 1     | Unified binary `vi-im` + tray icon           | ✅ Done         |
-| 2     | **Smart mode** (mixed VNI/Telex auto-detect) | ✅ Done         |
-| 3     | Tray-only config menu                        | 🔨 In progress |
-| 4     | **Burst commit** — ibus-style 300ms window   | 📋 Planned     |
-| 5     | Test suite + AGENTS.md compliance            | ✅ Done         |
-| 6     | **Game Mode** — auto-detect + Ctrl+Shift+G   | 📋 Planned     |
+| Phase | Nội dung                                     | Trạng thái        |
+| ----- | -------------------------------------------- | ----------------- |
+| 1     | Unified binary `vi-im` + tray icon           | ✅ Done            |
+| 2     | **Smart mode** (mixed VNI/Telex auto-detect) | ✅ Done            |
+| 3     | Tray-only config menu                        | ✅ Done            |
+| 4     | **Burst commit** — ibus-style 300ms window   | ✅ Done (&lt;12ms) |
+| 5     | Test suite + AGENTS.md compliance            | ✅ Done            |
+| 6     | **Game Mode** — auto-detect + Ctrl+Shift+G   | ✅ Partial         |
 
 
 ---
@@ -213,33 +239,3 @@ verification.
 | `AGENTS.md`                      | Design contract cho AI agents       |
 
 
----
-
-
-
----
-## 📜 License
-
-vi-im is dual-licensed under **GPL v3.0** or a **commercial license**.
-
-- **Commercial use:** Contact copyright holder for proprietary licensing
-- **Open source users:** GPL v3.0 (see [LICENSE](./LICENSE))
-
-```
-SPDX-License-Identifier: GPL-3.0-or-later OR Commercial
-Copyright (c) 2024-2026 vi-im contributors
-```
-
----
-
-## 🔧 Recent Fixes (2026-07-08)
-
-- **Fix: `vi-settings` QML crash** — Quickshell parser rejects `;` after
-  grouped property blocks (`font {...}; color`). Broke properties into
-  separate lines on `Heading`, header `Text`, ComboBox `background`, and
-  `RowLayout` blocks. Settings window launches correctly now.
-- **Fix: Double characters when typing** — `set_preedit("")` before
-  `commit_string()` caused doubling in terminals (foot, kitty, etc.) that
-  auto-commit preedit on clear. Removed redundant `set_preedit("")` call
-  in `apply_action` (`CommitWithBackspace`) and `finalize_word`. Per
-  protocol spec, `commit_string` already replaces the current preedit.

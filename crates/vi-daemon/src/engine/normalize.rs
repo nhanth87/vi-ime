@@ -24,6 +24,7 @@ pub struct NormResult {
 }
 
 /// Last modifier applied, for the double-key undo rule.
+#[derive(Debug)]
 enum LastMod {
     None,
     /// Tone key (s/f/r/x/j, 1-5, z) that set the current tone.
@@ -34,6 +35,7 @@ enum LastMod {
 }
 
 pub fn normalize(lower_keys: &[char], method: InputMethod) -> NormResult {
+    tracing::debug!("[NORMALIZE] input: {:?}, method: {:?}", lower_keys, method);
     let mut out: Vec<char> = Vec::with_capacity(lower_keys.len());
     let mut tone = Tone::Level;
     let mut last = LastMod::None;
@@ -41,6 +43,7 @@ pub fn normalize(lower_keys: &[char], method: InputMethod) -> NormResult {
     let mut has_vowel = false;
 
     for &ch in lower_keys {
+        tracing::debug!("[NORMALIZE] processing ch='{}' has_vowel={} last={:?} out={:?}", ch, has_vowel, last, out);
         if undo {
             out.push(ch); // literal mode after an explicit undo
             continue;
@@ -182,16 +185,19 @@ fn vni_tone(ch: char) -> Option<Tone> {
 
 fn tone_for_key(ch: char, method: InputMethod, has_vowel: bool) -> Option<Tone> {
     if !has_vowel {
+        tracing::debug!("[NORMALIZE] tone_for_key: ch={:?} method={:?} has_vowel=false -> rejecting (no vowel yet)", ch, method);
         return None;
     }
     // Smart (Tự do): accept tones from BOTH VNI digits AND Telex modifiers.
     // (The old version matched Smart together with Telex only — VNI digits
     // never toned in "Tự do".)
-    match method {
+    let result = match method {
         InputMethod::Telex => telex_tone(ch),
         InputMethod::Vni => vni_tone(ch),
         InputMethod::Smart => telex_tone(ch).or_else(|| vni_tone(ch)),
-    }
+    };
+    tracing::debug!("[NORMALIZE] tone_for_key: ch={:?} method={:?} has_vowel=true -> {:?}", ch, method, result);
+    result
 }
 
 /// Telex doubling: aa→â, ee→ê, oo→ô (circumflex algebra), dd→đ (stroke).

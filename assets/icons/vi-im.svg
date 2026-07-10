@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
   <rect x="0" y="0" width="64" height="64" rx="14" ry="14" fill="#2E86DE"/>
-  <text x="32.0" y="34.0" text-anchor="middle" dominant-baseline="central"
+  <text x="32.0" y="44.992" text-anchor="middle"
         font-family="DejaVu Sans, Noto Sans, Arial, sans-serif" font-weight="bold"
         font-size="37" fill="#FFFFFF">V</text>
 </svg>
