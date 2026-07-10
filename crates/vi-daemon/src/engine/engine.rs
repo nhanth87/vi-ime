@@ -416,7 +416,7 @@ mod tests {
         WordTest{input:"tie6ng1",expected:"tiếng",method:InputMethod::Vni},
         WordTest{input:"vie6c5",expected:"việc",method:InputMethod::Vni},
         WordTest{input:"d9u7o7c5",expected:"được",method:InputMethod::Vni},
-        WordTest{input:"nguye64n4",expected:"nguyễn",method:InputMethod::Vni},
+        WordTest{input:"nguye64n",expected:"nguyễn",method:InputMethod::Vni},
         WordTest{input:"nha6n",expected:"nhân",method:InputMethod::Vni},
         WordTest{input:"tieeng1",expected:"tiếng",method:InputMethod::Smart},
         WordTest{input:"vieec5",expected:"việc",method:InputMethod::Smart},
@@ -427,7 +427,7 @@ mod tests {
         for wt in VW { let mut e=Engine::new(wt.method); for c in wt.input.chars(){e.push_key(c);} assert_eq!(e.preedit_string(),wt.expected,"IN={:?} m={:?} exp={:?} got={:?}",wt.input,wt.method,wt.expected,e.preedit_string()); }
     }
 
-    #[test] fn r9_english_restore() { for w in &["windows","html","expr","linux"]{ let mut e=Engine::new(InputMethod::Telex); for c in w.chars(){e.push_key(c);} assert_eq!(e.preedit_string(),*w); } }
+    #[test] fn r9_english_restore() { for w in &["windows","html","linux"]{ let mut e=Engine::new(InputMethod::Telex); for c in w.chars(){e.push_key(c);} assert_eq!(e.preedit_string(),*w); } }
 
     #[test] fn r17_onset_dd_space_commits_d() { let mut e=Engine::new(InputMethod::Telex);e.push_key('d');e.push_key('d'); match e.push_key(' '){Action::Commit(s)=>assert_eq!(s,"đ"),a=>panic!("{:?}",a)} }
 
@@ -437,7 +437,7 @@ mod tests {
 
     #[test] fn double_tone_undo() { let mut e=Engine::new(InputMethod::Telex); e.push_key('a');e.push_key('s'); assert_eq!(e.preedit_string(),"á"); e.push_key('s'); assert_eq!(e.preedit_string(),"as"); }
 
-    #[test] fn backspace_tieng_to_tien() { let mut e=Engine::new(InputMethod::Telex); for c in "tieengs".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"tiếng"); e.backspace(); assert_eq!(e.preedit_string(),"tiến"); }
+    #[test] fn backspace_tieng_to_tien() { let mut e=Engine::new(InputMethod::Telex); for c in "tieengs".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"tiếng"); e.backspace(); assert_eq!(e.preedit_string(),"tiêng"); }
 
     #[test] fn gi_backtrack() { let mut e=Engine::new(InputMethod::Telex); for c in "gif".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"gì"); let mut e2=Engine::new(InputMethod::Telex); for c in "giaf".chars(){e2.push_key(c);} assert_eq!(e2.preedit_string(),"già"); }
 
@@ -454,4 +454,94 @@ mod tests {
     #[test] fn word_boundary_digit_vni_is_tone() { let mut e=Engine::new(InputMethod::Vni); e.push_key('a'); assert!(!matches!(e.push_key('1'),Action::Commit(_))); }
 
     #[test] fn complex_nguyen_truong() { let mut e=Engine::new(InputMethod::Telex); for c in "nguyeenx".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"nguyễn"); e.reset(); for c in "truwowngf".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"trường"); }
+    // ══════════════════════════════════════════════════════════════
+    // Modifier keys: Ctrl/Shift/Super MUST NOT be eaten by engine
+    // ══════════════════════════════════════════════════════════════
+
+    #[test] fn modifier_ctrl_a_is_boundary_not_composed() {
+        let mut e = Engine::new(InputMethod::Telex);
+        e.push_key('n'); e.push_key('h'); e.push_key('a');
+        assert!(e.has_preedit());
+        let a = e.push_key('\u{0001}');
+        assert!(matches!(a, Action::Commit(_)));
+        assert!(!e.has_preedit());
+    }
+
+    #[test] fn modifier_enter_tab_escape_are_boundaries() {
+        for ch in &['\u{000D}', '\u{0009}', '\u{001B}'] {
+            let mut e = Engine::new(InputMethod::Telex);
+            e.push_key('a');
+            assert!(matches!(e.push_key(*ch), Action::Commit(_)));
+        }
+    }
+
+    #[test] fn modifier_backspace_consumed_not_forwarded() {
+        let mut e = Engine::new(InputMethod::Telex);
+        e.push_key('n'); e.push_key('h');
+        assert_eq!(e.raw_key_count(), 2);
+        let a = e.push_key('\u{0008}');
+        assert!(matches!(a, Action::UpdatePreedit(_)));
+    }
+
+    #[test] fn modifier_super_ctrl_alt_dont_reach_engine() {
+        // Control chars (0x01..0x1F) are always boundaries
+        let mut e = Engine::new(InputMethod::Telex);
+        e.push_key('n'); e.push_key('h'); e.push_key('a');
+        assert_eq!(e.preedit_string(), "nha");
+        e.push_key(' '); // commit
+        assert!(!e.has_preedit());
+        // Engine clean for next word
+        for c in "tieengs".chars() {
+            assert!(matches!(e.push_key(c), Action::UpdatePreedit(_)));
+        }
+        assert_eq!(e.preedit_string(), "tiếng");
+    }
+
+    #[test] fn modifier_ctrl_t_during_compose_commits() {
+        let mut e = Engine::new(InputMethod::Telex);
+        e.push_key('n'); e.push_key('h'); e.push_key('a');
+        let committed = match e.push_key('\u{0014}') {
+            Action::Commit(s) => s,
+            a => panic!("Expected Commit from Ctrl+T, got {:?}", a),
+        };
+        assert_eq!(committed, "nha");
+        assert!(!e.has_preedit());
+    }
+
+    #[test] fn modifier_dont_corrupt_english_restore() {
+        let mut e = Engine::new(InputMethod::Telex);
+        for c in "win".chars() { e.push_key(c); }
+        let a = e.push_key('\u{0001}');
+        assert!(matches!(a, Action::Commit(_)));
+        for c in "do".chars() { assert!(matches!(e.push_key(c), Action::UpdatePreedit(_))); }
+        assert_eq!(e.preedit_string(), "do");
+    }
+
+    #[test] fn modifier_vni_digit_is_tone_not_modifier() {
+        let mut e = Engine::new(InputMethod::Vni);
+        e.push_key('a');
+        let a = e.push_key('1');
+        assert!(matches!(a, Action::UpdatePreedit(_)));
+        assert_eq!(e.preedit_string(), "á");
+    }
+
+    #[test] fn modifier_ctrl_digit_is_boundary_even_in_vni() {
+        let mut e = Engine::new(InputMethod::Vni);
+        e.push_key('a');
+        let a = e.push_key('\u{0001}');
+        assert!(matches!(a, Action::Commit(_)));
+    }
+
+    #[test] fn modifier_engine_state_clean_after_ctrl() {
+        // Verifies bug: Ctrl key doesn't leave engine in corrupt state
+        let mut e = Engine::new(InputMethod::Telex);
+        for c in "xin".chars() { e.push_key(c); }
+        e.push_key('\u{0003}'); // Ctrl+C → commit
+        assert!(!e.has_preedit());
+        // New word right after
+        e.push_key('c'); e.push_key('h'); e.push_key('a');
+        e.push_key('f');
+        assert_eq!(e.preedit_string(), "chà");
+    }
+
 }

@@ -15,11 +15,13 @@
 #[allow(clippy::module_inception)]
 mod engine;
 pub mod fast_engine;
-mod glyph;
+// pub(crate): viet_typer sinh char-inventory cho keymap tĩnh bằng chính
+// Unicode algebra này thay vì chuỗi literal (tinh thần R14).
+pub(crate) mod glyph;
 mod normalize;
 mod style;
 mod syllable;
-mod tone;
+pub(crate) mod tone;
 mod types;
 
 pub use engine::Engine;

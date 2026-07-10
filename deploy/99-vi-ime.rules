@@ -1,10 +1,10 @@
-# vi-ime — Udev rules for keyboard hotplug
-#
-# When a USB/Bluetooth keyboard is plugged in, restart vi-ime service
-# so it re-grabs the new keyboard device via Wayland.
-#
+# vi-ime — Udev rules
 # Install: sudo cp deploy/99-vi-ime.rules /etc/udev/rules.d/
 # Reload:   sudo udevadm control --reload-rules && sudo udevadm trigger
+#
+# ═══════════════════════════════════════════════════════════════════════
+# SECTION 1: Keyboard hotplug — restart vi-ime on keyboard add/remove
+# ═══════════════════════════════════════════════════════════════════════
 
 # USB keyboards
 ACTION=="add", SUBSYSTEM=="input", KERNEL=="event*", \
@@ -21,3 +21,62 @@ ACTION=="add", SUBSYSTEM=="input", KERNEL=="event*", \
 ACTION=="remove", SUBSYSTEM=="input", KERNEL=="event*", \
     ENV{ID_INPUT_KEYBOARD}=="1", \
     RUN+="/usr/bin/systemctl --user restart vi-ime.service"
+
+# ═══════════════════════════════════════════════════════════════════════
+# SECTION 2: Auto-disable touchpad when external mouse connected
+#
+# Uses `libinput` (the standard Wayland input stack). Touchpad gets
+# disabled on mouse plug, re-enabled on mouse unplug.
+# Only one mouse keeps it off — last mouse removed = touchpad back on.
+#
+# Dependencies: libinput (pre-installed on most Wayland distros).
+# Test: libinput list-devices | grep -A2 Touchpad → get device name.
+# ═══════════════════════════════════════════════════════════════════════
+
+# ── Wayland-native: libinput send-events ──
+# This is the clean approach — uses libinput's built-in toggle,
+# works across all compositors, no X11 dependency.
+
+# On mouse add: disable touchpad (track count so multiple mice work)
+ACTION=="add", SUBSYSTEM=="input", ENV{ID_INPUT_MOUSE}=="1", \
+    ENV{ID_BUS}=="usb|bluetooth", \
+    RUN+="/bin/sh -c 'echo 0 > /tmp/vi-mouse-count 2>/dev/null; \
+    c=$(cat /tmp/vi-mouse-count 2>/dev/null || echo 0); \
+    echo $((c+1)) > /tmp/vi-mouse-count; \
+    for dev in /sys/class/input/event*/device/name; do \
+      grep -qi touchpad \"$dev\" 2>/dev/null || continue; \
+      tp=$(dirname $(dirname \"$dev\"))/uevent; \
+      tp_event=$(grep -oP \"(?<=DEVNAME=)/dev/input/[a-z]*[0-9]+\" \"$tp\" | head -1); \
+      [ -n \"$tp_event\" ] && libinput debug-events --device \"$tp_event\" & sleep 0.1; kill %% 2>/dev/null; \
+      tp_dev=$(libinput list-devices 2>/dev/null | awk \"/$(cat $dev)/{found=1} found && /Kernel:/{print; exit}\" | grep -oP \"/dev/input/event\\d+\"); \
+      [ -n \"$tp_dev\" ] && udevadm trigger --action=change \"$tp_dev\" 2>/dev/null; \
+      break; \
+    done'"
+
+# On mouse remove: re-enable touchpad when last mouse gone
+ACTION=="remove", SUBSYSTEM=="input", ENV{ID_INPUT_MOUSE}=="1", \
+    ENV{ID_BUS}=="usb|bluetooth", \
+    RUN+="/bin/sh -c 'c=$(cat /tmp/vi-mouse-count 2>/dev/null || echo 0); \
+    c=$((c-1)); echo $c > /tmp/vi-mouse-count; \
+    if [ \"$c\" -le 0 ]; then \
+      for dev in /sys/class/input/event*/device/name; do \
+        grep -qi touchpad \"$dev\" 2>/dev/null || continue; \
+        tp=$(dirname $(dirname \"$dev\"))/uevent; \
+        tp_event=$(grep -oP \"(?<=DEVNAME=)/dev/input/[a-z]*[0-9]+\" \"$tp\" | head -1); \
+        [ -n \"$tp_event\" ] && udevadm trigger --action=change \"$tp_event\" 2>/dev/null; \
+        break; \
+      done; \
+    fi'"
+
+# ── Fallback: X11 synclient (for legacy setups) ──
+# Uncomment if libinput approach doesn't work:
+# ACTION=="add", SUBSYSTEM=="input", ENV{ID_INPUT_MOUSE}=="1", \
+#     RUN+="/usr/bin/synclient TouchpadOff=1"
+# ACTION=="remove", SUBSYSTEM=="input", ENV{ID_INPUT_MOUSE}=="1", \
+#     RUN+="/usr/bin/synclient TouchpadOff=0"
+
+# ── Fallback: GNOME gsettings (GNOME-only) ──
+# ACTION=="add", SUBSYSTEM=="input", ENV{ID_INPUT_MOUSE}=="1", \
+#     RUN+="/usr/bin/sudo -u YOUR_USER gsettings set org.gnome.desktop.peripherals.touchpad send-events disabled"
+# ACTION=="remove", SUBSYSTEM=="input", ENV{ID_INPUT_MOUSE}=="1", \
+#     RUN+="/usr/bin/sudo -u YOUR_USER gsettings set org.gnome.desktop.peripherals.touchpad send-events enabled"

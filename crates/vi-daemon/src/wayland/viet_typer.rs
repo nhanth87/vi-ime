@@ -54,8 +54,6 @@ pub(crate) const MAX_UNIQUE: usize = 28;
 /// Modifier masks per level (xkb real mods: Shift=0x1, Mod3=0x20, Mod5=0x80).
 const LEVEL_MASKS: [u32; 8] = [0, 0x1, 0x80, 0x81, 0x20, 0x21, 0xA0, 0xA1];
 
-/// Toàn bộ chữ Việt có dấu (thường). Hoa sinh bằng to_uppercase.
-const VIET_LOWER: &str = "àáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵăâđêôơư";
 
 /// Generate a minimal keymap for this word's unique chars. `'\u{0008}'`
 /// maps to the BackSpace keysym (used by the evdev fallback typer — U0008
@@ -97,12 +95,45 @@ pub(crate) fn memfd_keymap(text: &str) -> Option<(OwnedFd, u32)> {
 /// Everything the static keymap covers: printable ASCII + Vietnamese
 /// (both cases). Engine output can only ever contain these (raw keys are
 /// ASCII; rendered syllables are Vietnamese).
+///
+/// SINH bằng chính Unicode algebra của engine (glyph.rs) — không có chuỗi
+/// literal liệt kê bảng chữ (tinh thần R14): nguyên âm quality qua
+/// `apply_quality`, tone qua `compose(tone_mark)`. Engine ngôn ngữ mới
+/// (multilang vision) mở rộng algebra là inventory tự theo.
 fn char_inventory() -> Vec<char> {
+    use crate::engine::glyph;
+    use crate::engine::tone::Tone;
+
     let mut v: Vec<char> = (0x20u8..0x7f).map(|b| b as char).collect(); // 95
-    v.extend(VIET_LOWER.chars()); // 67
-    for c in VIET_LOWER.chars() {
-        v.extend(c.to_uppercase()); // 67
+
+    // Nguyên âm nền: ASCII + biến thể quality sinh bằng algebra
+    // (a→â/ă, e→ê, o→ô/ơ, u→ư; các cặp vô nghĩa tự trả None).
+    let mut vowels: Vec<char> = vec!['a', 'e', 'i', 'o', 'u', 'y'];
+    for base in ['a', 'e', 'o', 'u'] {
+        for mark in [glyph::CIRCUMFLEX, glyph::BREVE, glyph::HORN] {
+            if let Some(c) = glyph::apply_quality(base, mark) {
+                vowels.push(c);
+            }
+        }
     }
+
+    let mut viet: Vec<char> = Vec::with_capacity(67);
+    if let Some(dd) = glyph::apply_quality('d', glyph::STROKE) {
+        viet.push(dd); // đ — ngoại lệ duy nhất của algebra (R14)
+    }
+    for &vw in &vowels {
+        if !vw.is_ascii() {
+            viet.push(vw); // â ă ê ô ơ ư (quality, chưa tone)
+        }
+        for tone in [Tone::Acute, Tone::Grave, Tone::Hook, Tone::Tilde, Tone::Dot] {
+            if let Some(c) = glyph::tone_mark(tone).and_then(|m| glyph::compose(vw, m)) {
+                viet.push(c); // 12 nguyên âm × 5 tone = 60
+            }
+        }
+    }
+    let upper: Vec<char> = viet.iter().flat_map(|c| c.to_uppercase()).collect();
+    v.extend(viet);
+    v.extend(upper);
     v
 }
 
@@ -284,8 +315,20 @@ mod tests {
     #[test]
     fn static_keymap_covers_engine_output() {
         let (text, map) = build_static_keymap();
+        // Inventory sinh bằng algebra phải phủ đúng bảng chữ Việt đầy đủ
+        // (chuỗi tham chiếu literal CHỈ nằm trong test — R14 cấm table ở
+        // engine path, không cấm oracle trong test).
+        const REF: &str = "àáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồốổỗộ\
+                           ờớởỡợùúủũụừứửữựỳýỷỹỵăâđêôơư";
+        let inv = char_inventory();
+        for ch in REF.chars().filter(|c| !c.is_whitespace()) {
+            assert!(inv.contains(&ch), "algebra thiếu {ch:?}");
+            for up in ch.to_uppercase() {
+                assert!(inv.contains(&up), "algebra thiếu {up:?}");
+            }
+        }
         // Mọi ký tự engine có thể sinh ra đều phải có slot.
-        for ch in char_inventory() {
+        for ch in inv {
             assert!(map.contains_key(&ch), "thiếu {ch:?} trong bảng tĩnh");
         }
         assert!(map.contains_key(&'\u{0008}'));
