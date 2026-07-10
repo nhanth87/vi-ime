@@ -6,6 +6,7 @@
 //! best-effort: any error just means "no advice".
 
 use std::fs;
+use std::path::Path;
 
 /// What we could read about a process.
 #[derive(Debug, Clone, Default)]
@@ -26,14 +27,36 @@ pub fn read_proc(pid: i32) -> Option<ProcInfo> {
     Some(ProcInfo { exe, cmdline })
 }
 
+/// Does the directory containing `exe` look like an electron-builder /
+/// electron-packager output? Checked live 2026-07-10 against an app whose
+/// binary and cmdline contain no "electron" substring at all (renamed
+/// product, e.g. `orca-ide --no-sandbox`) yet is unmistakably Electron —
+/// `strings` on the binary shows `electron::fuses` symbols, and the install
+/// dir sits right next to it with the files below. These three are bundled
+/// by every mainstream Electron packaging tool regardless of product name:
+///   - `LICENSE.electron.txt`  — Electron's own MIT notice, always shipped
+///   - `chrome-sandbox`        — the setuid sandbox helper binary
+///   - `resources/app.asar`    — the packaged app archive
+/// Far more reliable than string-matching the exe path/cmdline for
+/// "electron", which misses any app that renames its binary/install dir.
+fn looks_like_electron_dir(exe_path: &str) -> bool {
+    let Some(dir) = Path::new(exe_path).parent() else { return false };
+    dir.join("LICENSE.electron.txt").is_file()
+        || dir.join("chrome-sandbox").is_file()
+        || dir.join("resources").join("app.asar").is_file()
+}
+
 /// Electron apps need explicit flags to speak Wayland text-input; without
 /// them the IME never sees an Activate. Returns actionable Vietnamese
 /// advice when the process looks like Electron AND the flag is missing.
-/// Pure — unit-testable.
+/// Pure (besides the directory-marker stat calls) — unit-testable with a
+/// synthetic ProcInfo pointing at a real or fake path.
 pub fn electron_advice(info: &ProcInfo) -> Option<String> {
     let hay = format!("{} {}", info.exe, info.cmdline).to_lowercase();
-    let looks_electron =
-        hay.contains("electron") || hay.contains("app.asar") || hay.contains("--ozone-platform");
+    let looks_electron = hay.contains("electron")
+        || hay.contains("app.asar")
+        || hay.contains("--ozone-platform")
+        || looks_like_electron_dir(&info.exe);
     if !looks_electron {
         return None;
     }
