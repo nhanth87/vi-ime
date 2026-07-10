@@ -3,239 +3,77 @@ SPDX-License-Identifier: GPL-3.0-or-later OR Commercial
 Copyright (c) 2024-2026 vi-im contributors
 -->
 
-# 🇻🇳 vi-im — Bộ Gõ Tiếng Việt Thế Hệ Mới Cho Wayland
+# vi-im — Bộ gõ tiếng Việt cho Wayland
 
-> **Không còn là Unikey/Vietkey.** vi-im dùng **NFD Engine** (Neutral Function
-> Dispatching) — kiến trúc toán học thuần túy dựa trên Unicode Combining
-> Diacritical Marks, không lookup table cứng nhắc, không phụ thuộc engine C++
-> 20 năm tuổi.
->
-> Built for **Niri · Hyprland · Sway · COSMIC · River**. Zero IBus. Zero Fcitx.
+Bộ gõ tiếng Việt viết mới hoàn toàn bằng Rust, nói chuyện thẳng với
+`zwp_input_method_v2` — không qua IBus, không qua Fcitx. Zero-config: cài
+là gõ được, tự nhận diện app đang focus để chọn cách hiển thị phù hợp.
 
----
+Chạy trên mọi compositor **wlroots**: niri, Hyprland, Sway, COSMIC. (GNOME/KDE
+không hỗ trợ đủ `input-method-v2` nên không nằm trong phạm vi dự án.)
 
-## ⚡ Tại Sao vi-im Nhanh Hơn Mọi Bộ Gõ Khác?
+## Tính năng
 
+- **3 kiểu gõ**: Telex, VNI, và **Tự do** (trộn cả hai trong cùng một từ)
+- **2 chế độ hiển thị**:
+  - *Preedit* — gạch chân khi đang gõ, giống bộ gõ truyền thống
+  - *NonPreedit* — gõ tới đâu hiện tới đó như Unikey trên Windows, không gạch
+    chân, dùng bàn phím ảo với keymap sinh động theo từng từ (không phụ thuộc
+    `delete_surrounding_text`, vốn nhiều app/terminal hỗ trợ không đầy đủ)
+- **Tự thích ứng theo app**: terminal, trình duyệt, trang web (Facebook,
+  Google Docs...) mỗi loại có cấu hình mặc định hợp lý sẵn — chỉnh tay khi
+  cần qua `setting.conf` hoặc cửa sổ Cài đặt
+- **Tray icon** (StatusNotifierItem qua libappindicator3/GTK): đổi kiểu gõ,
+  chế độ hiển thị, bật/tắt ngay từ menu chuột phải
+- **An toàn**: trường mật khẩu/PIN tắt hẳn engine, không log phím
+- **Click chuột khi đang gõ dở**: tự phát hiện qua evdev, không để chữ commit
+  nhầm vị trí con trỏ mới (cần user ở nhóm `input` — installer sẽ hỏi)
 
-| Engine cũ (Unikey/Vietkey)          | vi-im (NFD Engine)                          |
-| ----------------------------------- | ------------------------------------------- |
-| Lookup table 55+ entries, O(n) scan | Unicode NFD math, O(1) composition          |
-| 20 năm code C++ monolithic          | Rust 2024, zero-cost abstraction            |
-| Phụ thuộc IBus/Fcitx daemon         | Native Wayland protocol, **zero middleman** |
-| Không phân biệt được app Game/Code  | Auto-detect Game Mode, Terminal, Browser    |
-| Phân biệt Anh-Việt thô sơ           | **Telemetry ML** tự học thói quen gõ        |
-
-
----
-
-## 🧠 Core Engine: NFD Mathematical Dispatch
-
-Bỏ hoàn toàn bảng tra cứu nguyên âm (`VOWEL_CLUSTERS`, 55 entries). Thay bằng
-**MỘT path NFD toán học Unicode tổ hợp** cho MỌI kiểu gõ (Telex, VNI, Smart):
-
-```
-raw_keys → normalize (Telex/VNI + undo) → decompose (predicate ngữ âm)
-             → tone placement (thuật toán) → NFC compose (glyph) → commit
-                     │                              │
-            onset/nucleus/coda              1 vowel → trên nó
-            = danh sách category            coda → nguyên âm cuối
-            (KHÔNG map char→char)           diphthong → nguyên âm chất lượng
-            backtrack gi/qu                 hoặc oa/oe/uy theo ToneStyle
-```
-
-Vị trí dấu là **thuật toán thuần**, không phải data offset; mỗi dấu do Unicode
-NFC compose sinh ra (không bảng char→char, ngoại lệ duy nhất: đ). Case được giữ
-(Việt/VIỆT). Từ không tạo âm tiết Việt hợp lệ → commit RAW keys (windows→windows).
-
-**Mỗi keystroke re-parse toàn bộ từ ≤12 chars trong nanosecond.** Parse, don't
-mutate — raw keys là single source of truth.
-
----
-
-## 🎯 3 Phương Thức + Smart Mode
-
-
-| Mode         | Mô tả                                                           |
-| ------------ | --------------------------------------------------------------- |
-| **Telex**    | Gõ truyền thống: `toanf` → toàn, `vietj` → việt                 |
-| **VNI**      | Gõ số: `to6an2` → toàn, `viet5` → việt                          |
-| **Smart** 🔥 | **Tự detect VNI/Telex trong cùng một từ.** Gõ `to6ans` → engine |
-|              | nhận ra `6` là VNI circumflex, `s` là Telex sắc → "toán".       |
-|              | Conflict? Telex luôn thắng (người Việt quen hơn).               |
-
-
----
-
-## 🛡️ Auto-Detect: Biết Bạn Đang Ở Đâu
-
-vi-im **không gõ tiếng Việt vào game** hay terminal code:
-
-
-| Context                   | Hành vi                                                      |
-| ------------------------- | ------------------------------------------------------------ |
-| 🎮 **Game**               | Tự tắt IME, passthrough toàn bộ phím (Ctrl+Shift+G override) |
-| 💻 **Terminal / Code**    | Ép NonPreedit, không popup gây lag                           |
-| 🔒 **Password field**     | Tắt engine, không log, không telemetry                       |
-| 🌐 **Chrome / Firefox**   | Per-site config: gõ Việt trên Facebook, Anh trên GitHub      |
-| 🐧 **X11 app (XWayland)** | Virtual keyboard bridge, hoạt động trong suốt                |
-
-
----
-
-## 📊 Telemetry: Tự Phân Biệt Tiếng Anh / Tiếng Việt
-
-Không dùng heuristic đếm phím thô sơ. vi-im dùng **phonotactic validation**:
-
-- Từ không parse được thành âm tiết Việt hợp lệ → **commit nguyên văn** (English pass-through)
-- Học theo app: gõ Anh trong VSCode? Engine tự giảm trigger Việt
-- Protocol signal từ Wayland (`SurroundingText`, `DoneAck`, `ContentType`)
-→ adaptation engine tự điều chỉnh
-
-**Không bao giờ gửi telemetry ra ngoài.** Mọi thứ chạy local trong
-`~/.local/share/vi-ime/`.
-
----
-
-## 🏗️ Kiến Trúc 9 Crates, 0 Circular Deps
-
-```
-┌──────────────────────────────────────────────────────────┐
-│  vi-daemon (root)                                        │
-│  ┌─────────┐  ┌──────────┐  ┌───────────┐  ┌──────────┐  │
-│  │vi-config│  │ vi-tray  │  │vi-compos- │  │vi-plugin │  │
-│  │4-layer  │  │QML qs    │  │itor-ipc   │  │hooks     │  │
-│  │config   │  │+ menu    │  │niri/hypr  │  │pre/post  │  │
-│  └─────────┘  └──────────┘  └───────────┘  └──────────┘  │
-│       ▲            ▲              ▲               ▲      │
-│       └────────────┼──────────────┼───────────────┘      │
-│                    │              │                      │
-│  ┌─────────────────▼──────────────▼─────────────────────┐│
-│  │ vi-wayland-im (Wayland thread)                       ││
-│  │ zwp_input_method_v2 + keyboard_grab + virtual_kb     ││
-│  └──────────────────────┬───────────────────────────────┘│
-│                         │                                │
-│  ┌──────────────────────▼───────────────────────────────┐│
-│  │ vi-engine (leaf crate — zero deps)                   ││
-│  │ NFD Engine + Parser + Smart Mode + Unicode algebra   ││
-│  └──────────────────────────────────────────────────────┘│
-└──────────────────────────────────────────────────────────┘
-```
-
-**Zero CPU idle:** daemon main loop = 1 `rx.recv()` blocking. Không poll, không
-timer, không wakeup khi không gõ.
-
----
-
-## 🚀 Quick Start
+## Cài đặt
 
 ```bash
-# 3 lệnh — xong
-./deploy/compile.sh        # Build từ source
-./deploy/install.sh         # Cài vào ~/.local/bin + systemd
-systemctl --user start vi-ime  # Bắt đầu gõ tiếng Việt
-
-# Gõ bình thường. Không cần bật app, không cần switch language.
-# Tray icon sẽ xuất hiện — click phải để đổi method.
+git clone https://github.com/nhanth87/vi-im.git
+cd vi-im
+./deploy/install.sh
 ```
 
----
-
-## 🎮 Điều Khiển
+Hoặc build tay + chạy AppImage (không cần cài vào hệ thống):
 
 ```bash
-# Đổi phương thức gõ ngay lập tức (không cần restart)
-vi-ime --switch          # Telex ↔ VNI ↔ Tự do
-vi-ime --toggle          # Bật/tắt IME
-vi-ime --status          # Xem trạng thái hiện tại
-
-# Debug mode — xem mọi phím
-RUST_LOG=debug vi-ime
-
-# Godmod — ghi log từng keystroke
-VI_GODMOD=1 vi-ime
-# Log: ~/.local/share/vi-ime/godmod/
-
-# Restart sau khi sửa setting.conf
-systemctl --user restart vi-ime
+cargo build --release
+./scripts/build-appimage.sh
+./vi-im-x86_64.AppImage           # chạy daemon
+./vi-im-x86_64.AppImage settings  # mở cửa sổ Cài đặt
 ```
 
----
-
-## 📟 Tray & Trạng Thái
-
-vi-im đăng ký một **StatusNotifierItem** (fcitx-style) qua `ksni` — không cần
-GTK/Qt dependency. Click phải vào icon để mở menu:
-
-- **Radio Telex / VNI / Tự do** — đổi phương thức gõ.
-- **Radio Preedit (gạch chân) / NonPreedit (gõ thẳng)** — đổi chế độ hiển thị.
-- **Checkmark 🟢 Đang bật / 🔴 Đang tắt** — bật/tắt IME.
-- **Cài đặt…** — mở cửa sổ QML `vi-settings` (riêng biệt, daemon chỉ spawn).
-- **Thoát vi-im**.
-
-**Icon tự vẽ (không phụ thuộc font):** một tile vuông bo góc với glyph bitmap
-hand-authored (`tray_icon.rs`) — `'V'` **xanh** khi bật tiếng Việt, `'E'` **đỏ**
-khi tắt (English passthrough). Host nào không tìm được icon theo theme sẽ nhận
-ngay raw ARGB32 pixmap, nên V/E luôn hiển thị trên mọi bar wlroots.
-
-**Refresh tức thì:** mọi thay đổi (click menu, CLI `vi-ime --switch`, cửa sổ
-Settings, hoặc sửa `setting.conf` bằng tay) đều đẩy một tín hiệu vào luồng
-forwarder → gọi `handle.update()` của ksni ngay lập tức, re-emit icon + menu
-qua DBus. Không đợi poll 2 giây, không "đứng hình" trên host lạ.
-
-> Không có host (bar không hỗ trợ tray)? IME vẫn chạy bình thường — chỉ thiếu
-> icon. Dùng CLI `vi-ime --switch/--toggle/--status` thay thế.
-
----
-
-## 🧪 Test Suite
+## Điều khiển
 
 ```bash
-cargo test --workspace    # 198 tests, all pass
+vi-ime --switch    # đổi kiểu gõ: Telex ↔ VNI ↔ Tự do
+vi-ime --toggle    # bật/tắt
+vi-ime --mode      # đổi Preedit ↔ NonPreedit
+vi-ime --status    # xem trạng thái hiện tại
+vi-ime --doctor    # chẩn đoán cấu hình từng lớp
 ```
 
-**Coverage:** Telex parser, VNI parser, Smart conflict resolution, NFD tone
-placement, glide onset stripping, word boundary detection, NFC output
-verification.
+Hoặc dùng menu chuột phải trên tray icon — mọi thay đổi ghi thẳng vào
+`setting.conf`, daemon tự reload (inotify), không cần restart.
 
----
+## Yêu cầu hệ thống
 
-## 📦 Yêu Cầu
+- Compositor wlroots hỗ trợ `zwp_input_method_v2` + `zwp_virtual_keyboard_v1`
+- Rust 1.80+, `libxkbcommon`, `libwayland-dev`, GTK3 + libappindicator3
+  (cho tray icon)
+- Cửa sổ Cài đặt cần Quickshell (module `Quickshell.Io`)
 
-- **Compositor:** Niri, Hyprland, Sway, River, COSMIC (hỗ trợ `zwp_input_method_v2`), partial support KDE(KWIN) - tested steamdeck only
-- **Không hỗ trợ:** GNOME (Mutter) compositor này không implement  
-đầy đủ input-method protocol
-- **Rust:** 1.80+
-- **Thư viện hệ thống:** `libxkbcommon libwayland-dev` 
-- **Cửa sổ Settings:** cần **Quickshell upstream** (có module `Quickshell.Ipc`) —
-Settings mở ra dạng **cửa sổ nổi** (FloatingWindow) tự float + center trên
-Niri/Hyprland/Sway (zero-config, không cần sửa config compositor). Một số fork
-(vd. noctalia-qs) thiếu `Quickshell.Ipc` nên `main.qml` không map được.
+## Kiến trúc
 
----
+Workspace 2 crate: `vi-daemon` (binary chính — engine, Wayland, tray, config,
+telemetry) và `vi-settings` (launcher cửa sổ QML). Engine tiếng Việt là một
+đường xử lý toán học duy nhất trên Unicode NFD/NFC cho cả ba kiểu gõ — không
+bảng tra nguyên âm cứng.
 
-## 🗺️ Roadmap
+## Giấy phép
 
-
-| Phase | Nội dung                                     | Trạng thái        |
-| ----- | -------------------------------------------- | ----------------- |
-| 1     | Unified binary `vi-im` + tray icon           | ✅ Done            |
-| 2     | **Smart mode** (mixed VNI/Telex auto-detect) | ✅ Done            |
-| 3     | Tray-only config menu                        | ✅ Done            |
-| 4     | **Burst commit** — ibus-style 300ms window   | ✅ Done (&lt;12ms) |
-| 5     | Test suite + AGENTS.md compliance            | ✅ Done            |
-| 6     | **Game Mode** — auto-detect + Ctrl+Shift+G   | ✅ Partial         |
-
-
----
-
-## 📁 Tài Liệu
-
-
-| File                             | Nội dung                            |
-| -------------------------------- | ----------------------------------- |
-| `docs/VI_IM_DESIGN.md`           | Kiến trúc tổng thể, rules, file map |
-| `docs/UNIFIED_SMART_IME_PLAN.md` | Kế hoạch 6 phases chi tiết          |
-| `docs/smart-method.md`           | NFD Engine + Smart mode code specs  |
-| `AGENTS.md`                      | Design contract cho AI agents       |
-
-
+Dual-license: **GPL v3.0** (mã nguồn mở) hoặc **giấy phép thương mại**
+(liên hệ tác giả). Xem [LICENSE](./LICENSE).

@@ -16,3 +16,11 @@ skills-lock.json
 
 # Packed assets (generated from assets/)
 assets.zip
+
+# Working notes / dev docs — not part of the shipped project, kept local
+/docs/
+CODE_GUIDE.md
+
+# Root install.sh duplicates deploy/install.sh (the tracked, canonical
+# installer) — kept locally as a scratch copy, not pushed.
+/install.sh
