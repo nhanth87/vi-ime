@@ -25,6 +25,62 @@ pub struct FocusEvent {
     pub pid: Option<i32>,
 }
 
+/// Terminal emulator app_ids — the SINGLE source of truth (lowercase, as
+/// reported over Wayland `xdg_toplevel.app_id` / `wl_surface`). Consumed by
+/// [`AppCategory::classify`] (this file), `plugin::TerminalPlugin`
+/// (routes NonPreedit + swallows the ContentType=Terminal signal) and
+/// `config::builtin::builtin_app_profile` (day-one NonPreedit default) —
+/// keeping it in exactly one place means adding a terminal here is enough,
+/// no need to touch three files in lockstep.
+///
+/// Comprehensive on purpose: every terminal here gets NonPreedit by
+/// default, and terminals are consistently the app category where preedit
+/// underline support is worst across the Wayland ecosystem (most either
+/// don't implement text-input-v3 at all, or implement it without
+/// `delete_surrounding_text`, which is what preedit-everywhere depends on
+/// for the live-diff word). Getting a NEW terminal wrong just means an
+/// underline the user didn't ask for — getting it right on day one avoids
+/// the exact "chữ chồng nhau" class of bug this project has chased
+/// repeatedly. Case-insensitive: `classify`/`builtin_app_profile` both
+/// lowercase before matching, so list entries stay lowercase here.
+pub const KNOWN_TERMINALS: &[&str] = &[
+    // ── wlroots-native / GPU-accelerated ──
+    "foot", "footclient",
+    "kitty",
+    "alacritty",
+    "wezterm", "wezterm-gui", "org.wezfurlong.wezterm",
+    "com.mitchellh.ghostty",
+    "rio",
+    "contour",
+    "wayst",
+    // ── DE-integrated ──
+    "konsole", "org.kde.konsole",
+    "gnome-terminal", "gnome-terminal-server", "org.gnome.terminal",
+    "org.gnome.ptyxis",        // Ptyxis — new GNOME default, replacing gnome-terminal
+    "xfce4-terminal",
+    "mate-terminal",
+    "lxterminal", "qterminal",
+    "deepin-terminal",
+    "io.elementary.terminal",
+    "com.gexperts.tilix",
+    "com.raggesilver.blackbox", // Blackbox
+    "org.codeberg.dnkl.foot",   // foot, some distros package it under this id
+    // ── Drop-down / quake-style ──
+    "guake", "yakuake", "tilda",
+    // ── Classic / X11 (via XWayland — still hit input-method-v2 through the
+    //    compositor's Xwayland bridge on niri/Sway/Hyprland) ──
+    "xterm", "uxterm", "urxvt", "rxvt", "st", "eterm",
+    // ── Feature-rich / other ──
+    "terminator",
+    "terminology",
+    "sakura",
+    "termite",
+    "tabby",
+    "warp", "dev.warp.warp",
+    "hyper",
+    "cool-retro-term",
+];
+
 /// Application category for automatic IME mode selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppCategory {
@@ -39,10 +95,7 @@ impl AppCategory {
     /// Classify an app_id into a category.
     pub fn classify(app_id: &str) -> Self {
         let id = app_id.to_lowercase();
-        if matches!(id.as_str(),
-            "foot" | "footclient" | "kitty" | "alacritty" | "wezterm" | "wezterm-gui"
-            | "org.wezfurlong.wezterm" | "terminator" | "gnome-terminal" | "konsole"
-            | "xfce4-terminal" | "com.mitchellh.ghostty" | "rio" | "warp" | "tabby") {
+        if KNOWN_TERMINALS.contains(&id.as_str()) {
             return AppCategory::Terminal;
         }
         if matches!(id.as_str(),

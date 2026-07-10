@@ -7,25 +7,19 @@
 //! day-one typing good; the learned layer then improves on it at runtime and
 //! the user layer overrides both. Matching is case-insensitive on app_id.
 
+use crate::compositor::KNOWN_TERMINALS;
 use crate::config::types::{AppConfig, ImeMode};
 
 /// Builtin per-app profiles: (app_id, mode). Kept lowercase.
 ///
 /// Terminals/editors → NonPreedit (no preedit underline).
 /// Browsers/chat → Preedit (visual feedback while composing).
+///
+/// Terminals are NOT listed here — `builtin_app_profile` checks
+/// `compositor::KNOWN_TERMINALS` first (single source of truth shared
+/// with `AppCategory::classify` and `TerminalPlugin`), so every terminal
+/// in that list gets NonPreedit without needing a duplicate entry here.
 const BUILTIN_APPS: &[(&str, ImeMode)] = &[
-    // ── Terminals ──
-    ("foot", ImeMode::NonPreedit),
-    ("footclient", ImeMode::NonPreedit),
-    ("kitty", ImeMode::NonPreedit),
-    ("alacritty", ImeMode::NonPreedit),
-    ("wezterm", ImeMode::NonPreedit),
-    ("org.wezfurlong.wezterm", ImeMode::NonPreedit),
-    ("com.mitchellh.ghostty", ImeMode::NonPreedit),
-    ("konsole", ImeMode::NonPreedit),
-    ("gnome-terminal", ImeMode::NonPreedit),
-    ("xfce4-terminal", ImeMode::NonPreedit),
-    ("rio", ImeMode::NonPreedit),
     // ── Browsers ──
     ("chromium-browser", ImeMode::Preedit),
     ("chromium", ImeMode::Preedit),
@@ -72,6 +66,9 @@ fn mode_config(m: ImeMode) -> AppConfig {
 /// Builtin profile for an app_id (case-insensitive exact match).
 pub fn builtin_app_profile(app_id: &str) -> Option<AppConfig> {
     let id = app_id.to_lowercase();
+    if KNOWN_TERMINALS.contains(&id.as_str()) {
+        return Some(mode_config(ImeMode::NonPreedit));
+    }
     BUILTIN_APPS
         .iter()
         .find(|(k, _)| *k == id)

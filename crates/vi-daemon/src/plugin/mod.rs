@@ -92,11 +92,8 @@ pub struct TerminalPlugin;
 impl AppPlugin for TerminalPlugin {
     fn name(&self) -> &str { "TerminalPlugin" }
     fn handles_app(&self, id: &str) -> bool {
-        let id = id.to_lowercase();
-        matches!(id.as_str(),
-            "foot" | "footclient" | "kitty" | "alacritty" | "wezterm" | "wezterm-gui"
-            | "org.wezfurlong.wezterm" | "terminator" | "gnome-terminal" | "konsole"
-            | "xfce4-terminal" | "com.mitchellh.ghostty" | "rio" | "warp" | "tabby")
+        // Single source of truth: compositor::KNOWN_TERMINALS.
+        crate::compositor::AppCategory::classify(id) == crate::compositor::AppCategory::Terminal
     }
     fn on_focus(&mut self, _id: &str) {}
     fn on_blur(&mut self, _id: &str) {}
