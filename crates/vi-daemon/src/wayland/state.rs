@@ -165,21 +165,16 @@ impl ImeAppState {
         }
     }
 
-    /// Live-echo mode: gõ thẳng từng glyph qua viet_typer (per-word keymap).
-    /// CHỈ cho terminal đã biết (KNOWN_TERMINALS — probe burst-safe, áp
-    /// keymap đồng bộ). Blink/Electron áp `wl_keyboard.keymap` trễ vô hạn
-    /// định (repro 2026-07-10: "tu72"→"phò", 'ấ' ở code 28 thành Enter tự
-    /// gửi message) — NonPreedit ở app thường = buffer ÂM THẦM + commit_string
-    /// ở word boundary (đúng nghĩa R2), KHÔNG live echo, KHÔNG underline.
-    /// MỌI nhánh cần phân biệt live/preedit PHẢI gọi hàm này — đừng inline
-    /// lại predicate (R16 bài học 2: 6 chỗ từng lệch nhau).
+    /// Live-echo mode: gõ thẳng từng glyph qua viet_typer. An toàn trên MỌI
+    /// app từ khi viet_typer dùng keymap TĨNH 8-level (upload một lần, không
+    /// bao giờ đổi — Blink áp keymap trễ vô hạn định nên mọi biến thể keymap
+    /// động đều đã fail thực địa, xem viet_typer.rs). Khi không có virtual
+    /// keyboard (viet not ready), NonPreedit rơi về buffer âm thầm +
+    /// commit_string (apply_action). MỌI nhánh cần phân biệt live/preedit
+    /// PHẢI gọi hàm này — đừng inline lại predicate (R16 bài học 2: 6 chỗ
+    /// từng lệch nhau).
     pub(crate) fn live_echo(&self) -> bool {
-        self.engine.mode() == ImeMode::NonPreedit
-            && self.viet.ready()
-            && self.current_app_id.as_deref().is_some_and(|id| {
-                let id = id.to_lowercase();
-                crate::compositor::KNOWN_TERMINALS.contains(&id.as_str())
-            })
+        self.engine.mode() == ImeMode::NonPreedit && self.viet.ready()
     }
 
     /// ms left until the idle auto-commit fires, or None when unarmed.

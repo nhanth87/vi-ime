@@ -6,19 +6,23 @@
 //! channel mixing: commit_string (text-input) does not stay ordered against
 //! virtual-keyboard events, and delete_surrounding_text is silently ignored
 //! by some apps. The only channel with guaranteed ordering AND universal
-//! app support is wl_keyboard itself — so the word conversion happens
-//! there: raw keys forward live (live style) and at the word boundary we
-//! send Backspace × n followed by the composed characters typed here.
+//! app support is wl_keyboard itself — so the word conversion happens here.
 //!
-//! **Per-word dynamic keymap** (field-tested 2026-07-09): a static keymap
-//! spanning keycodes up to 170 lost exactly the chars that landed on
-//! special evdev codes (â→107=KEY_END, đ→162…) while è(113)/ê(118)
-//! survived — apps/compositors treat some hardware codes specially no
-//! matter what the keymap says. So instead, before each word we upload a
-//! tiny keymap that maps ONLY that word's unique chars onto the proven-safe
-//! typing-row codes 2..=33, exactly like wtype. keymap + key events travel
-//! on the same object, so ordering is guaranteed end-to-end. Any Unicode
-//! char works (multilang-ready), no preedit → no underline.
+//! **STATIC 8-level keymap (kiến trúc cuối, 2026-07-10 khuya):** hai đời
+//! trước đều chết:
+//! - keymap tĩnh trải keycode tới 170: các code đặc biệt ăn chữ
+//!   (â→107=KEY_END, đ→162 — field 2026-07-09);
+//! - keymap ĐỘNG per-word/cached trên dải an toàn 2..33: Blink/Electron áp
+//!   `wl_keyboard.keymap` trễ VÔ HẠN ĐỊNH → tap keycode mới giải mã theo
+//!   keymap cũ ("tu72"→"phò", 'ấ' trúng code 28 = Enter tự gửi message —
+//!   field 2026-07-10, không pacing nào cứu nổi).
+//! Giải cả hai ràng buộc cùng lúc: chỉ dùng 36 keycode an toàn (hàng phím
+//! chữ/số, loại BS/Tab/Enter/Ctrl) nhưng mỗi key mang 8 LEVEL (type VIIM:
+//! Shift/Mod3/Mod5) → 280 slot, đủ toàn bộ ASCII + chữ Việt hoa/thường.
+//! Keymap upload MỘT LẦN khi tạo typer rồi KHÔNG BAO GIỜ đổi — Blink áp
+//! trễ cũng chỉ trễ một lần trước từ đầu tiên. Level chọn bằng
+//! `vk.modifiers(depressed)` ngay trước tap, trên CÙNG object nên ordering
+//! được protocol bảo đảm (y hệt cách gõ chữ hoa bằng Shift).
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -35,18 +39,23 @@ pub(crate) const KEYMAP_FORMAT_XKB_V1: u32 = 1;
 /// Safe evdev codes for injected keys: the main typing rows, EXCLUDING the
 /// codes that mean something to apps regardless of keymap when the client
 /// applies our keymap late (Blink/Electron lag, R17): 14=BACKSPACE,
-/// 15=TAB, 28=ENTER, 29=LEFTCTRL. Field bug 2026-07-10 khuya: grow-only
-/// cache dồn ký tự mới lên code cao → 'ấ' được gán code 28 → app hiểu là
-/// Enter → "gõ 'mất' là nó tự commit thành dấu enter" (tự gửi message
-/// giữa từ). Per-word keymap cũ không bao giờ chạm code 28 nên lỗi này
-/// chỉ lộ ra sau khi có cache.
-pub(crate) const SAFE_CODES: [u32; 28] = [
+/// 15=TAB, 28=ENTER, 29=LEFTCTRL. KHÔNG BAO GIỜ gán ký tự vào 4 code đó
+/// dù keymap có remap ("gõ 'mất' là nó tự commit thành dấu enter",
+/// field 2026-07-10 khuya).
+pub(crate) const SAFE_CODES: [u32; 36] = [
     2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, // digit row '1'..'='
     16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, // qwerty row + [ ]
-    30, 31, 32, 33, // a s d f
+    30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, // home row a..' + `
 ];
 pub(crate) const FIRST_CODE: u32 = SAFE_CODES[0];
-pub(crate) const MAX_UNIQUE: usize = SAFE_CODES.len(); // 28
+/// Per-call unique-char cap for the evdev fallback typer (per-word keymap).
+pub(crate) const MAX_UNIQUE: usize = 28;
+
+/// Modifier masks per level (xkb real mods: Shift=0x1, Mod3=0x20, Mod5=0x80).
+const LEVEL_MASKS: [u32; 8] = [0, 0x1, 0x80, 0x81, 0x20, 0x21, 0xA0, 0xA1];
+
+/// Toàn bộ chữ Việt có dấu (thường). Hoa sinh bằng to_uppercase.
+const VIET_LOWER: &str = "àáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵăâđêôơư";
 
 /// Generate a minimal keymap for this word's unique chars. `'\u{0008}'`
 /// maps to the BackSpace keysym (used by the evdev fallback typer — U0008
@@ -85,67 +94,142 @@ pub(crate) fn memfd_keymap(text: &str) -> Option<(OwnedFd, u32)> {
     Some((f.into(), text.len() as u32 + 1))
 }
 
+/// Everything the static keymap covers: printable ASCII + Vietnamese
+/// (both cases). Engine output can only ever contain these (raw keys are
+/// ASCII; rendered syllables are Vietnamese).
+fn char_inventory() -> Vec<char> {
+    let mut v: Vec<char> = (0x20u8..0x7f).map(|b| b as char).collect(); // 95
+    v.extend(VIET_LOWER.chars()); // 67
+    for c in VIET_LOWER.chars() {
+        v.extend(c.to_uppercase()); // 67
+    }
+    v
+}
+
+/// Build the ONE static keymap: key <K2> = BackSpace (ONE_LEVEL), the rest
+/// of SAFE_CODES carry 8 chars each via type VIIM. Returns (keymap_text,
+/// char → (evdev code, level 0-based)).
+fn build_static_keymap() -> (String, HashMap<char, (u32, u8)>) {
+    let inv = char_inventory();
+    let mut map: HashMap<char, (u32, u8)> = HashMap::new();
+    map.insert('\u{0008}', (SAFE_CODES[0], 0));
+
+    let mut codes = String::new();
+    let mut syms = String::new();
+    for code in SAFE_CODES {
+        codes.push_str(&format!("<K{code}> = {};\n", code + 8));
+    }
+    syms.push_str(&format!("key <K{}> {{ [ BackSpace ] }};\n", SAFE_CODES[0]));
+
+    for (slot, chunk) in inv.chunks(8).enumerate() {
+        // Slot 0 of SAFE_CODES is BackSpace — chars start at slot+1.
+        let Some(&code) = SAFE_CODES.get(slot + 1) else {
+            warn!("[VIET-TYPER] bảng ký tự tràn {} keycode — cắt bớt", SAFE_CODES.len());
+            break;
+        };
+        let mut levels: Vec<String> = Vec::with_capacity(8);
+        for (li, &ch) in chunk.iter().enumerate() {
+            map.insert(ch, (code, li as u8));
+            levels.push(format!("U{:04X}", ch as u32));
+        }
+        while levels.len() < 8 {
+            levels.push("NoSymbol".into());
+        }
+        syms.push_str(&format!(
+            "key <K{code}> {{ type[Group1]=\"VIIM\", symbols[Group1]=[ {} ] }};\n",
+            levels.join(", ")
+        ));
+    }
+
+    let text = format!(
+        "xkb_keymap {{\n\
+         xkb_keycodes \"vi\" {{ minimum = 8; maximum = 255;\n{codes}}};\n\
+         xkb_types \"vi\" {{ include \"complete\"\n\
+         type \"VIIM\" {{\n\
+           modifiers = Shift+Mod3+Mod5;\n\
+           map[Shift] = Level2;\n\
+           map[Mod5] = Level3;\n\
+           map[Shift+Mod5] = Level4;\n\
+           map[Mod3] = Level5;\n\
+           map[Shift+Mod3] = Level6;\n\
+           map[Mod3+Mod5] = Level7;\n\
+           map[Shift+Mod3+Mod5] = Level8;\n\
+           level_name[Level1] = \"1\"; level_name[Level2] = \"2\";\n\
+           level_name[Level3] = \"3\"; level_name[Level4] = \"4\";\n\
+           level_name[Level5] = \"5\"; level_name[Level6] = \"6\";\n\
+           level_name[Level7] = \"7\"; level_name[Level8] = \"8\";\n\
+         }};\n\
+         }};\n\
+         xkb_compatibility \"vi\" {{ include \"complete\" }};\n\
+         xkb_symbols \"vi\" {{\n{syms}}};\n\
+         }};\n"
+    );
+    (text, map)
+}
+
 pub(crate) struct VietTyper {
     vk: Option<ZwpVirtualKeyboardV1>,
     start: Instant,
-    /// Char→keycode cache from the last uploaded keymap. A new call to
-    /// `backspace_then_type` reuses this mapping (skipping keymap build +
-    /// memfd + upload) when all chars are already present — the common case
-    /// for consecutive keystrokes that share overlapping character sets.
-    /// Field bug 2026-07-10: rebuilding the keymap per keystroke caused
-    /// 15-30ms `[SLOW-KEY]` spikes on tone-key presses in terminal live mode.
-    cached_map: HashMap<char, u32>,
+    /// Static char → (keycode, level). Built once with the keymap.
+    map: HashMap<char, (u32, u8)>,
+    /// Modifier mask currently depressed on this keyboard (level selector).
+    cur_mask: u32,
 }
 
 impl VietTyper {
+    /// Upload the ONE static keymap immediately: Blink applies keymaps with
+    /// unbounded lag, so the upload must happen long before the first word,
+    /// not per-word (R17 — mọi biến thể keymap-động đều fail thực địa).
     pub(crate) fn new(vk: Option<ZwpVirtualKeyboardV1>) -> Self {
+        let mut map = HashMap::new();
+        if let Some(vk) = &vk {
+            let (text, m) = build_static_keymap();
+            match memfd_keymap(&text) {
+                Some((fd, size)) => {
+                    vk.keymap(KEYMAP_FORMAT_XKB_V1, fd.as_fd(), size);
+                    map = m;
+                }
+                None => warn!("[VIET-TYPER] memfd failed — live path tắt"),
+            }
+        }
         Self {
             vk,
             start: Instant::now(),
-            cached_map: HashMap::new(),
+            map,
+            cur_mask: 0,
         }
     }
 
-    /// The live path is usable (the second virtual keyboard exists).
+    /// The live path is usable (vk exists AND the static keymap uploaded).
     pub(crate) fn ready(&self) -> bool {
-        self.vk.is_some()
+        self.vk.is_some() && !self.map.is_empty()
     }
 
-    /// Type `s` by uploading a per-word keymap and tapping its keycodes.
-    /// All-or-nothing: returns false (typing nothing) when impossible.
+    /// Type `s` on the static keymap. All-or-nothing: false = nothing sent.
     pub(crate) fn type_str(&mut self, s: &str) -> bool {
         self.backspace_then_type(0, s, false)
     }
 
-    /// BackSpace × n, then type `s`, ALL on this one keyboard. Keymap is
-    /// cached across calls: consecutive keystrokes sharing the same char set
-    /// skip the keymap-build + memfd + upload round (field bug 2026-07-10:
-    /// 15-30ms SLOW-KEY spikes on tone-key presses in terminal live mode).
+    /// BackSpace × n, then type `s`, ALL on this one keyboard — keymap is
+    /// STATIC (uploaded once at creation), each char is (keycode, level) and
+    /// the level rides `vk.modifiers()` on the same object right before the
+    /// tap, so ordering is protocol-guaranteed end-to-end.
     ///
-    /// `paced` = flush + 15ms after each BackSpace. Default burst-mode is
-    /// fine for terminals (kitty/foot accept mixed BS+char bursts), but
-    /// VCL/gtk3 (LibreOffice) swallows such a burst WHOLE — probe-verified
-    /// 2026-07-10 (`scripts/vk-probe`) — so the caller passes `paced=true`
-    /// when the focused app is in that family. Latency only ever hits the
-    /// app that needs it.
+    /// `paced` = flush + 15ms after each tap. Burst-mode is fine for known
+    /// terminals; VCL/gtk3 swallows BS+char bursts whole (probe-verified
+    /// 2026-07-10) and Blink drops burst taps under load — non-terminal apps
+    /// pass `paced=true`.
     pub(crate) fn backspace_then_type(&mut self, backspaces: usize, s: &str, paced: bool) -> bool {
         let Some(vk) = &self.vk else { return false };
+        if self.map.is_empty() {
+            return false;
+        }
         if backspaces == 0 && s.is_empty() {
             return true;
         }
-
-        // Everything this call needs mapped: BackSpace (if any) + s's chars.
-        let mut needed: Vec<char> = Vec::new();
-        if backspaces > 0 {
-            needed.push('\u{0008}');
-        }
-        for ch in s.chars() {
-            if !needed.contains(&ch) {
-                needed.push(ch);
-            }
-        }
-        if needed.len() > MAX_UNIQUE {
-            warn!("[VIET-TYPER] >{MAX_UNIQUE} ký tự khác nhau trong một lần gõ — bỏ qua");
+        // All-or-nothing: verify coverage BEFORE sending anything.
+        if let Some(bad) = s.chars().find(|c| !self.map.contains_key(c)) {
+            warn!("[VIET-TYPER] ký tự ngoài bảng tĩnh: {bad:?} — không gõ được");
             return false;
         }
 
@@ -156,65 +240,82 @@ impl VietTyper {
             std::thread::sleep(std::time::Duration::from_millis(15));
         };
 
-        let missing = needed
-            .iter()
-            .filter(|c| !self.cached_map.contains_key(c))
-            .count();
-        if missing > 0 {
-            // Grow-only cache: EVICT everything when this call would spill
-            // past the safe keycode window (2..=33) — otherwise the first
-            // overflow would make every later word with a new char fail
-            // forever (and un-checked growth would assign keycodes beyond
-            // LAST_CODE, the known char-eating zone, R16 field lesson).
-            if self.cached_map.len() + missing > MAX_UNIQUE {
-                self.cached_map.clear();
-            }
-            for ch in &needed {
-                if !self.cached_map.contains_key(ch) {
-                    let code = SAFE_CODES[self.cached_map.len()];
-                    self.cached_map.insert(*ch, code);
-                }
-            }
-            let assigned: Vec<(char, u32)> =
-                self.cached_map.iter().map(|(c, k)| (*c, *k)).collect();
-            let keymap = build_keymap(&assigned);
-            let Some((fd, size)) = memfd_keymap(&keymap) else {
-                warn!("[VIET-TYPER] memfd failed — không gõ được từ này");
-                return false;
-            };
-            vk.keymap(KEYMAP_FORMAT_XKB_V1, fd.as_fd(), size);
-            // Keymap-apply beat (repro 2026-07-10): Electron/Chromium áp
-            // keymap TRỄ MỘT NHỊP — tap keycode mới trong cùng burst giải
-            // mã theo keymap cũ → ký tự biến mất ("quà"→"q", "kẹ"→"k").
-            // Flush + 15ms sau upload để client kịp áp trước tap đầu tiên.
-            if paced {
-                pace(vk);
-            }
-        }
-
         let mut t = self.start.elapsed().as_millis() as u32;
-        for _ in 0..backspaces {
-            let code = self.cached_map[&'\u{0008}'];
-            vk.key(t, code, 1);
+        let mut mask_now = self.cur_mask;
+        let mut tap = |vk: &ZwpVirtualKeyboardV1, code: u32, level: u8, mask_now: &mut u32, t: &mut u32| {
+            let want = LEVEL_MASKS[level as usize];
+            if *mask_now != want {
+                vk.modifiers(want, 0, 0, 0);
+                *mask_now = want;
+            }
+            vk.key(*t, code, 1);
             vk.key(t.wrapping_add(1), code, 0);
-            t = t.wrapping_add(2);
+            *t = t.wrapping_add(2);
+        };
+
+        for _ in 0..backspaces {
+            let (code, level) = self.map[&'\u{0008}'];
+            tap(vk, code, level, &mut mask_now, &mut t);
             if paced {
                 pace(vk);
             }
         }
         for ch in s.chars() {
-            let code = self.cached_map[&ch];
-            vk.key(t, code, 1);
-            vk.key(t.wrapping_add(1), code, 0);
-            t = t.wrapping_add(2);
-            // Paced mode spaces EVERY tap, not just BackSpace: field case
-            // 2026-07-10 "cua73"→screen "cưử" — the op BS→pause→"ửa" burst
-            // still lost the char AFTER the first ('a'); the probe mode
-            // that passes on VCL paces all taps (`scripts/vk-probe` paced).
+            let (code, level) = self.map[&ch];
+            tap(vk, code, level, &mut mask_now, &mut t);
             if paced {
                 pace(vk);
             }
         }
+        // Never leave synthetic modifiers depressed on the seat.
+        if mask_now != 0 {
+            vk.modifiers(0, 0, 0, 0);
+            mask_now = 0;
+        }
+        self.cur_mask = mask_now;
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn static_keymap_covers_engine_output() {
+        let (text, map) = build_static_keymap();
+        // Mọi ký tự engine có thể sinh ra đều phải có slot.
+        for ch in char_inventory() {
+            assert!(map.contains_key(&ch), "thiếu {ch:?} trong bảng tĩnh");
+        }
+        assert!(map.contains_key(&'\u{0008}'));
+        // Không slot nào rơi vào keycode nguy hiểm (BS/Tab/Enter/Ctrl).
+        for (ch, (code, level)) in &map {
+            assert!(
+                SAFE_CODES.contains(code),
+                "{ch:?} nằm ở code {code} ngoài SAFE_CODES"
+            );
+            assert!(!matches!(code, 14 | 15 | 28 | 29), "{ch:?} ở code nguy hiểm {code}");
+            assert!(*level < 8);
+        }
+        // Keymap phải compile được bằng xkbcommon thật (nếu có xkbcli).
+        if std::path::Path::new("/usr/bin/xkbcli").exists() {
+            use std::io::Write as _;
+            use std::process::{Command, Stdio};
+            let mut child = Command::new("/usr/bin/xkbcli")
+                .args(["compile-keymap", "--from-xkb"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn xkbcli");
+            child.stdin.as_mut().unwrap().write_all(text.as_bytes()).unwrap();
+            let out = child.wait_with_output().unwrap();
+            assert!(
+                out.status.success(),
+                "keymap tĩnh không compile: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
     }
 }

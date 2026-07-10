@@ -362,4 +362,96 @@ mod tests {
         let _ = e.push_key(' ');
         assert!(!e.has_preedit());
     }
+
+    // ══════════════════════════════════════════════════════════════
+    // Regression: R10 + R17 50-test suite
+    // ══════════════════════════════════════════════════════════════
+
+    use crate::engine::style::ToneStyle;
+
+    struct WordTest { input: &'static str, expected: &'static str, method: InputMethod }
+    const VW: &[WordTest] = &[
+        WordTest{input:"as",expected:"á",method:InputMethod::Telex},
+        WordTest{input:"af",expected:"à",method:InputMethod::Telex},
+        WordTest{input:"ar",expected:"ả",method:InputMethod::Telex},
+        WordTest{input:"ax",expected:"ã",method:InputMethod::Telex},
+        WordTest{input:"aj",expected:"ạ",method:InputMethod::Telex},
+        WordTest{input:"a1",expected:"á",method:InputMethod::Vni},
+        WordTest{input:"a2",expected:"à",method:InputMethod::Vni},
+        WordTest{input:"a3",expected:"ả",method:InputMethod::Vni},
+        WordTest{input:"a4",expected:"ã",method:InputMethod::Vni},
+        WordTest{input:"a5",expected:"ạ",method:InputMethod::Vni},
+        WordTest{input:"aas",expected:"ấ",method:InputMethod::Telex},
+        WordTest{input:"ees",expected:"ế",method:InputMethod::Telex},
+        WordTest{input:"oos",expected:"ố",method:InputMethod::Telex},
+        WordTest{input:"ows",expected:"ớ",method:InputMethod::Telex},
+        WordTest{input:"uws",expected:"ứ",method:InputMethod::Telex},
+        WordTest{input:"aws",expected:"ắ",method:InputMethod::Telex},
+        WordTest{input:"aaf",expected:"ầ",method:InputMethod::Telex},
+        WordTest{input:"eef",expected:"ề",method:InputMethod::Telex},
+        WordTest{input:"aar",expected:"ẩ",method:InputMethod::Telex},
+        WordTest{input:"uwx",expected:"ữ",method:InputMethod::Telex},
+        WordTest{input:"awj",expected:"ặ",method:InputMethod::Telex},
+        WordTest{input:"eej",expected:"ệ",method:InputMethod::Telex},
+        WordTest{input:"dd",expected:"đ",method:InputMethod::Telex},
+        WordTest{input:"d9",expected:"đ",method:InputMethod::Vni},
+        WordTest{input:"ngh",expected:"ngh",method:InputMethod::Telex},
+        WordTest{input:"tieengs",expected:"tiếng",method:InputMethod::Telex},
+        WordTest{input:"vieecj",expected:"việc",method:InputMethod::Telex},
+        WordTest{input:"dduwowcj",expected:"được",method:InputMethod::Telex},
+        WordTest{input:"bieets",expected:"biết",method:InputMethod::Telex},
+        WordTest{input:"thieeus",expected:"thiếu",method:InputMethod::Telex},
+        WordTest{input:"phuwowng",expected:"phương",method:InputMethod::Telex},
+        WordTest{input:"truwowngf",expected:"trường",method:InputMethod::Telex},
+        WordTest{input:"chuyeenr",expected:"chuyển",method:InputMethod::Telex},
+        WordTest{input:"nguyeenx",expected:"nguyễn",method:InputMethod::Telex},
+        WordTest{input:"lieeuj",expected:"liệu",method:InputMethod::Telex},
+        WordTest{input:"kieeur",expected:"kiểu",method:InputMethod::Telex},
+        WordTest{input:"mieengj",expected:"miệng",method:InputMethod::Telex},
+        WordTest{input:"nhuwngx",expected:"những",method:InputMethod::Telex},
+        WordTest{input:"tuyeetj",expected:"tuyệt",method:InputMethod::Telex},
+        WordTest{input:"nhaan",expected:"nhân",method:InputMethod::Telex},
+        WordTest{input:"cuwar",expected:"cửa",method:InputMethod::Telex},
+        WordTest{input:"hafng",expected:"hàng",method:InputMethod::Telex},
+        WordTest{input:"tie6ng1",expected:"tiếng",method:InputMethod::Vni},
+        WordTest{input:"vie6c5",expected:"việc",method:InputMethod::Vni},
+        WordTest{input:"d9u7o7c5",expected:"được",method:InputMethod::Vni},
+        WordTest{input:"nguye64n4",expected:"nguyễn",method:InputMethod::Vni},
+        WordTest{input:"nha6n",expected:"nhân",method:InputMethod::Vni},
+        WordTest{input:"tieeng1",expected:"tiếng",method:InputMethod::Smart},
+        WordTest{input:"vieec5",expected:"việc",method:InputMethod::Smart},
+        WordTest{input:"nha6n",expected:"nhân",method:InputMethod::Smart},
+    ];
+
+    #[test] fn regression_100_words_corpus() {
+        for wt in VW { let mut e=Engine::new(wt.method); for c in wt.input.chars(){e.push_key(c);} assert_eq!(e.preedit_string(),wt.expected,"IN={:?} m={:?} exp={:?} got={:?}",wt.input,wt.method,wt.expected,e.preedit_string()); }
+    }
+
+    #[test] fn r9_english_restore() { for w in &["windows","html","expr","linux"]{ let mut e=Engine::new(InputMethod::Telex); for c in w.chars(){e.push_key(c);} assert_eq!(e.preedit_string(),*w); } }
+
+    #[test] fn r17_onset_dd_space_commits_d() { let mut e=Engine::new(InputMethod::Telex);e.push_key('d');e.push_key('d'); match e.push_key(' '){Action::Commit(s)=>assert_eq!(s,"đ"),a=>panic!("{:?}",a)} }
+
+    #[test] fn case_viet() { let mut e=Engine::new(InputMethod::Telex); for c in "VIEETJ".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"VIỆT"); let mut e2=Engine::new(InputMethod::Telex); for c in "Vieetj".chars(){e2.push_key(c);} assert_eq!(e2.preedit_string(),"Việt"); }
+
+    #[test] fn tone_hoa_classic_modern() { let mut e=Engine::new(InputMethod::Telex); for c in "hoaf".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"hòa"); let mut e2=Engine::new(InputMethod::Telex); e2.set_tone_style(ToneStyle::Modern); for c in "hoaf".chars(){e2.push_key(c);} assert_eq!(e2.preedit_string(),"hoà"); }
+
+    #[test] fn double_tone_undo() { let mut e=Engine::new(InputMethod::Telex); e.push_key('a');e.push_key('s'); assert_eq!(e.preedit_string(),"á"); e.push_key('s'); assert_eq!(e.preedit_string(),"as"); }
+
+    #[test] fn backspace_tieng_to_tien() { let mut e=Engine::new(InputMethod::Telex); for c in "tieengs".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"tiếng"); e.backspace(); assert_eq!(e.preedit_string(),"tiến"); }
+
+    #[test] fn gi_backtrack() { let mut e=Engine::new(InputMethod::Telex); for c in "gif".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"gì"); let mut e2=Engine::new(InputMethod::Telex); for c in "giaf".chars(){e2.push_key(c);} assert_eq!(e2.preedit_string(),"già"); }
+
+    #[test] fn r8_deactivate_drops() { let mut e=Engine::new(InputMethod::Telex); for c in "nha".chars(){e.push_key(c);} assert!(e.has_preedit()); e.reset(); assert!(!e.has_preedit()); }
+
+    #[test] fn r17_backspace_shrinks() { let mut e=Engine::new(InputMethod::Telex); for c in "nhaa".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"nhâ"); e.backspace(); assert_eq!(e.preedit_string(),"nha"); }
+
+    #[test] fn vni_dau() { let mut e=Engine::new(InputMethod::Vni); for c in "d9a6u5".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"đậu"); }
+
+    #[test] fn smart_mixed() { let mut e=Engine::new(InputMethod::Smart); for c in "d9a6u5".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"đậu"); }
+
+    #[test] fn word_boundary_digit_telex_commits() { let mut e=Engine::new(InputMethod::Telex); e.push_key('a'); assert!(matches!(e.push_key('1'),Action::Commit(_))); }
+
+    #[test] fn word_boundary_digit_vni_is_tone() { let mut e=Engine::new(InputMethod::Vni); e.push_key('a'); assert!(!matches!(e.push_key('1'),Action::Commit(_))); }
+
+    #[test] fn complex_nguyen_truong() { let mut e=Engine::new(InputMethod::Telex); for c in "nguyeenx".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"nguyễn"); e.reset(); for c in "truwowngf".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"trường"); }
 }
