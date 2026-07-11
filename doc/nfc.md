@@ -1,4 +1,4 @@
-# Glyph Algorithm — NFD/NFC Unicode Algebra cho chữ Việt
+# Glyph Algorithm — NFD/NFC Normalization Form cho chữ Việt
 
 File [`crates/vi-daemon/src/engine/glyph.rs`](../crates/vi-daemon/src/engine/glyph.rs) là trái tim của engine VI-IME: thuật toán tạo chữ Unicode dựng sẵn (precomposed) bằng NFD/NFC composition, không dùng bảng tra cứu.
 
@@ -75,7 +75,7 @@ Unicode có precomposed form cho **toàn bộ 60 tổ hợp vowel×tone** của 
 
 Cộng với quality vowels (â, ê, ô, ă, ơ, ư) + đ/Đ = **toàn bộ bảng chữ cái tiếng Việt**.
 
-## So sánh Algebra NFD/C vs VOWEL
+## So sánh NFD/NFC vs VOWEL
 
 ### NFD/C (glyph.rs hiện tại)
 
@@ -106,7 +106,7 @@ Cộng với quality vowels (â, ê, ô, ă, ơ, ư) + đ/Đ = **toàn bộ bả
 
 ## Đánh giá tổng
 
-| Tiêu chí | Algebra NFD/C | VOWEL |
+| Tiêu chí | NFD/NFC | VOWEL |
 |---|---|---|
 | Tính đúng đắn | Chính xác tuyệt đối | Chính xác nếu không typo |
 | Audit được | Khó — phải hiểu NFC | Dễ — nhìn bảng là biết |
@@ -117,5 +117,5 @@ Cộng với quality vowels (â, ê, ô, ă, ơ, ư) + đ/Đ = **toàn bộ bả
 | Code size | ~20 dòng logic | hàng nghàn dòng code |
 
 **Kết luận:** 
-- Algebra NFD/C là lựa chọn đúng cho VI-IME vì tuân thủ triết lý NFD của toàn bộ engine và không có rủi ro typo. Cần bổ sung unit test cho toàn bộ 60 tổ hợp vowel×tone và thêm `debug_assert!` để bắt fail sớm.
+- NFD/NFC là lựa chọn đúng cho VI-IME vì tuân thủ triết lý NFD của toàn bộ engine và không có rủi ro typo. Cần bổ sung unit test cho toàn bộ 60 tổ hợp vowel×tone và thêm `debug_assert!` để bắt fail sớm.
 - NFD/C là thuật toán rất mới so với bảng tra vowel 20 năm tuổi, chưa dc nghiên cứu đầy đủ nên có thể còn sót lỗi, nếu có lỗi hãy giúp chạy doctor, collect log và tạo issue nhé.
