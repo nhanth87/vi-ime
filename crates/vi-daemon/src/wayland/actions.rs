@@ -7,10 +7,10 @@
 //! path that works on every Wayland app (terminal, browser, editor, game).
 //! Split from state.rs to keep both under the 300-line rule (R4).
 
+use crate::engine::{ImeMode, NonPreeditAction};
 use tracing::info;
 use wayland_client::Connection;
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_v2::ZwpInputMethodV2;
-use crate::engine::{ImeMode, NonPreeditAction};
 
 use crate::wayland::feedback::{ImeFeedback, PipelineStage};
 use crate::wayland::state::{FieldSensitivity, ImeAppState};
@@ -21,7 +21,10 @@ const MODIFIER_KEYS: [u32; 9] = [29, 42, 54, 56, 58, 97, 100, 125, 126];
 
 /// Engine-stage sample (helper keeps the call site short).
 fn vi_engine_stage(us: u32) -> ImeFeedback {
-    ImeFeedback::StageSample { stage: PipelineStage::Engine, us }
+    ImeFeedback::StageSample {
+        stage: PipelineStage::Engine,
+        us,
+    }
 }
 
 impl ImeAppState {
@@ -29,7 +32,9 @@ impl ImeAppState {
     /// sequences (the buffer holds keys while `waiting_for_done`).
     pub(crate) fn process_key(&mut self, keycode: u32, _conn: &Connection) {
         self.maybe_reconfigure();
-        let Some(im) = self.input_method.clone() else { return };
+        let Some(im) = self.input_method.clone() else {
+            return;
+        };
 
         // Physical-click guard (evdev watcher): a mouse click moved the
         // cursor but this app sends NO protocol signal for it. Drop the
@@ -105,6 +110,18 @@ impl ImeAppState {
         if keycode == 14 {
             // 14 = evdev KEY_BACKSPACE
             crate::godmod::log_backspace();
+            // ── Backspace during composition: route through engine ──
+            // When the engine is composing a word, backspace must shrink the
+            // raw_keys buffer (engine.push_key '\u{0008}') rather than
+            // finalize + passthrough, which would commit partial text.
+            if self.engine.has_pending() {
+                let action = self.engine.push_key('\u{0008}');
+                self.apply_action(action, keycode, &im);
+                return;
+            }
+            // No pending composition → pass through to app.
+            self.vk.press(keycode);
+            return;
         }
 
         let Some(ch) = self.xkb.keycode_to_char(keycode) else {
@@ -254,9 +271,7 @@ impl ImeAppState {
         }
         info!("[CLICK] chuột click khi đang gõ dở — drop composition NGAY (R8)");
         let live = self.live_echo();
-        if !live
-            && let Some(im) = self.input_method.clone()
-        {
+        if !live && let Some(im) = self.input_method.clone() {
             self.set_preedit(&im, "");
         }
         self.engine.reset();
@@ -297,8 +312,14 @@ impl ImeAppState {
             let id = id.to_lowercase();
             crate::compositor::KNOWN_TERMINALS.contains(&id.as_str())
         });
-        if !self.viet.backspace_then_type(shown.len() - common, &suffix, paced) {
-            tracing::warn!("[VIET-TYPER] không gõ được (bs={}, \"{suffix}\") — giữ nguyên", shown.len() - common);
+        if !self
+            .viet
+            .backspace_then_type(shown.len() - common, &suffix, paced)
+        {
+            tracing::warn!(
+                "[VIET-TYPER] không gõ được (bs={}, \"{suffix}\") — giữ nguyên",
+                shown.len() - common
+            );
         }
         self.shown_word.clear();
         self.shown_word.push_str(target);

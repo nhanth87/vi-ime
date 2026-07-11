@@ -47,6 +47,9 @@ pub enum DaemonEvent {
 /// slow compositor never causes a false verdict (R11).
 const PROBE_DELAY: std::time::Duration = std::time::Duration::from_millis(1500);
 
+/// Exported so the XWayland fallback log message in main.rs can reference it.
+pub const PROBE_DELAY_MS: u64 = 1500;
+
 /// One dedicated delay thread for app-support probes. The MAIN loop stays a
 /// pure recv (R15) — the sleep lives here, and the thread blocks on its own
 /// channel when idle (zero CPU). Rapid focus changes simply queue up;

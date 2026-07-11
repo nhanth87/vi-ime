@@ -27,13 +27,13 @@ mod notify;
 mod plugin;
 mod rivals;
 mod sync;
-mod tray;
 mod telemetry;
+mod tray;
 mod wayland;
 
 use std::path::PathBuf;
-use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -49,7 +49,9 @@ use tracing_subscriber::EnvFilter;
 fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
     let (writer, guard) = tracing_appender::non_blocking(std::io::stderr());
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .with_writer(writer)
         .init();
     guard
@@ -106,11 +108,17 @@ fn main() {
 
     // ── CLI control: switch/toggle/status (works without tray) ──
     let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == "--switch" || a == "--toggle" || a == "--mode" || a == "--status") {
+    if args
+        .iter()
+        .any(|a| a == "--switch" || a == "--toggle" || a == "--mode" || a == "--status")
+    {
         let conf = get_config_path();
         let mut mgr = match ConfigManager::new(Some(conf.clone())) {
             Ok(m) => m,
-            Err(e) => { eprintln!("Cannot load config: {e}"); return; }
+            Err(e) => {
+                eprintln!("Cannot load config: {e}");
+                return;
+            }
         };
         if args.iter().any(|a| a == "--switch") {
             let new = match mgr.setting().input_method {
@@ -143,8 +151,10 @@ fn main() {
         }
         if args.iter().any(|a| a == "--status") {
             let s = mgr.setting();
-            println!("vi-ime: {} · {} · {}",
-                s.input_method, s.ime_mode,
+            println!(
+                "vi-ime: {} · {} · {}",
+                s.input_method,
+                s.ime_mode,
                 if s.enabled { "Bật" } else { "Tắt" }
             );
         }
@@ -159,7 +169,9 @@ fn main() {
     // or RUST_LOG=debug. No-op otherwise, so the idle daemon stays zero-cost.
     let godmod_on = std::env::args().any(|a| a == "--godmod")
         || std::env::var("VI_GODMOD").is_ok()
-        || std::env::var("RUST_LOG").map(|v| v.contains("debug")).unwrap_or(false);
+        || std::env::var("RUST_LOG")
+            .map(|v| v.contains("debug"))
+            .unwrap_or(false);
     godmod::init(godmod_on);
     if godmod_on {
         info!("Godmod telemetry ON → ~/.local/share/vi-ime/godmod/");
@@ -167,7 +179,10 @@ fn main() {
 
     let config_path = get_config_path();
     let mut config_manager = match ConfigManager::new(Some(config_path.clone())) {
-        Ok(mgr) => { info!("Config loaded from {:?}", config_path); mgr }
+        Ok(mgr) => {
+            info!("Config loaded from {:?}", config_path);
+            mgr
+        }
         Err(e) => {
             error!("Failed to load config: {e}. Using defaults.");
             let temp_path = std::env::temp_dir().join("vi-ime-setting.conf");
@@ -226,11 +241,16 @@ fn main() {
     // IPC server for vi-settings (Unix socket, JSON protocol)
     let _ipc_handle = ipc::spawn_ipc_server(tx.clone(), None);
 
-
     info!(
         "vi-ime daemon started. IME: {}, Method: {}, Mode: {}, Compositor: {:?}",
-        if setting.enabled { "enabled" } else { "disabled" },
-        setting.input_method, setting.ime_mode, compositor
+        if setting.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        setting.input_method,
+        setting.ime_mode,
+        compositor
     );
 
     // Sole-IME check: a running rival owns the input-method seat first, so we
@@ -245,20 +265,23 @@ fn main() {
     }
 
     // Popup startup mode
-    notify::popup("vi-ime", &format!(
-        "{} · {} · {}",
-        setting.input_method,
-        setting.ime_mode,
-        if setting.enabled { "Bật" } else { "Tắt" }
-    ));
+    notify::popup(
+        "vi-ime",
+        &format!(
+            "{} · {} · {}",
+            setting.input_method,
+            setting.ime_mode,
+            if setting.enabled { "Bật" } else { "Tắt" }
+        ),
+    );
 
     // fcitx-style: register a StatusNotifierItem tray (icon + menu). The menu's
     // "Cài đặt…" opens the QML config floating window (vi-settings). Non-fatal
     // if no tray host is running — the IME keeps working regardless.
     {
-        let settings_exe = std::env::current_exe().ok().and_then(|exe| {
-            exe.parent().map(|dir| dir.join("vi-settings"))
-        });
+        let settings_exe = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.join("vi-settings")));
         tray::spawn(config_path.clone(), settings_exe);
     }
 
@@ -276,10 +299,7 @@ fn main() {
             let cb: crate::wayland::FeedbackFn = Box::new(move |fb| {
                 let _ = fb_tx.send(DaemonEvent::ImeFeedback(fb));
             });
-            match crate::wayland::run_ime_shared_with_feedback(
-                Arc::clone(&ime_runtime),
-                Some(cb),
-            ) {
+            match crate::wayland::run_ime_shared_with_feedback(Arc::clone(&ime_runtime), Some(cb)) {
                 Ok(()) => warn!("Wayland IME loop ended — reconnecting in 1s"),
                 Err(e) => error!("Wayland IME error: {e} — reconnecting in 1s"),
             }
@@ -313,11 +333,16 @@ fn main() {
                 let title = browser_title(&current_app_id, &current_focus);
                 if let Some(ref app_id) = current_app_id {
                     let cat = AppCategory::classify(app_id);
-                    info!("Focus changed: app_id={}, category={:?}, title={:?}", app_id, cat, title);
+                    info!(
+                        "Focus changed: app_id={}, category={:?}, title={:?}",
+                        app_id, cat, title
+                    );
                     godmod::set_app(app_id);
                 }
                 if app_changed {
-                    let wants_legacy = current_app_id.as_deref().is_some_and(legacy_grab::is_legacy_app);
+                    let wants_legacy = current_app_id
+                        .as_deref()
+                        .is_some_and(legacy_grab::is_legacy_app);
                     match (wants_legacy, legacy_grab.is_some()) {
                         (true, false) => {
                             legacy_grab = Some(legacy_grab::LegacyGrab::start(
@@ -357,7 +382,13 @@ fn main() {
                     );
                 }
                 runtime.set_game_mode(game_detected);
-                apply_config(&config_manager, &runtime, &adapt, &current_app_id, &current_focus);
+                apply_config(
+                    &config_manager,
+                    &runtime,
+                    &adapt,
+                    &current_app_id,
+                    &current_focus,
+                );
             }
 
             DaemonEvent::ImeFeedback(fb) => {
@@ -373,13 +404,24 @@ fn main() {
                 if matches!(fb, crate::wayland::feedback::ImeFeedback::Activated)
                     && legacy_grab.is_some()
                 {
-                    info!("[LEGACY-GRAB] app Activate qua Wayland — nhả evdev grab, protocol path xử lý");
+                    info!(
+                        "[LEGACY-GRAB] app Activate qua Wayland — nhả evdev grab, protocol path xử lý"
+                    );
                     legacy_grab = None;
                 }
                 let changed = adapt.handle_feedback(current_app_id.as_deref(), fb);
                 if changed {
-                    info!("learned suggestion changed for {:?} — re-resolving", current_app_id);
-                    apply_config(&config_manager, &runtime, &adapt, &current_app_id, &current_focus);
+                    info!(
+                        "learned suggestion changed for {:?} — re-resolving",
+                        current_app_id
+                    );
+                    apply_config(
+                        &config_manager,
+                        &runtime,
+                        &adapt,
+                        &current_app_id,
+                        &current_focus,
+                    );
                 }
             }
 
@@ -392,13 +434,44 @@ fn main() {
                 // one). Keep computing + logging the advice ([UNSUPPORTED]
                 // below) for `--doctor`/troubleshooting; just don't pop it.
                 adapt.probe_timeout(&app_id, current_app_id.as_deref(), current_focus.pid);
+
+                // XWayland fallback: Chrome/Chromium running in X11 mode
+                // (--ozone-platform=x11 or no Wayland flags) never sends
+                // zwp_input_method_v2 Activate. When the probe times out
+                // without an Activate, and the app is a known XWayland
+                // fallback candidate AND it's still focused, engage the
+                // evdev grab so the user can type Vietnamese in X11 Chrome.
+                // If the app is already handled (Wayland Activate arrived
+                // before probe timeout), legacy_grab is None — no-op.
+                let still_focused = current_app_id.as_deref() == Some(app_id.as_str());
+                if still_focused
+                    && legacy_grab.is_none()
+                    && legacy_grab::is_xwayland_fallback_app(&app_id)
+                {
+                    info!(
+                        "[XWAYLAND] {} did not Activate via Wayland after {}ms \
+                         — engaging evdev fallback (X11 mode detected)",
+                        app_id,
+                        events::PROBE_DELAY_MS
+                    );
+                    legacy_grab = Some(legacy_grab::LegacyGrab::start(
+                        engine_input_method(config_manager.setting().input_method),
+                        Arc::clone(&runtime),
+                    ));
+                }
             }
 
             DaemonEvent::ConfigChanged => {
                 match config_manager.reload_if_changed() {
                     Ok(true) => {
                         info!("setting.conf changed on disk — applying live");
-                        apply_config(&config_manager, &runtime, &adapt, &current_app_id, &current_focus);
+                        apply_config(
+                            &config_manager,
+                            &runtime,
+                            &adapt,
+                            &current_app_id,
+                            &current_focus,
+                        );
                     }
                     Ok(false) => {} // our own save() — mtime already tracked
                     Err(e) => warn!("Config reload error: {e}"),
@@ -417,18 +490,26 @@ fn main() {
             DaemonEvent::IpcWrite { command } => {
                 let resp = ipc::handle_write_command(&command, &mut config_manager);
                 if resp.error.is_none() {
-                    apply_config(&config_manager, &runtime, &adapt, &current_app_id, &current_focus);
+                    apply_config(
+                        &config_manager,
+                        &runtime,
+                        &adapt,
+                        &current_app_id,
+                        &current_focus,
+                    );
                 }
             }
-
         }
     }
     adapt.persist_now();
     if let Some(summary) = godmod::finish() {
         info!(
             "Godmod session: {} keys, {} commits ({} VN / {} EN), max latency {}µs",
-            summary.total_keystrokes, summary.commits,
-            summary.vietnamese_words, summary.english_words, summary.max_latency_us,
+            summary.total_keystrokes,
+            summary.commits,
+            summary.vietnamese_words,
+            summary.english_words,
+            summary.max_latency_us,
         );
     }
     info!("vi-ime daemon stopped");
@@ -446,11 +527,8 @@ fn apply_config(
     let setting = config_manager.setting();
     let title = browser_title(current_app_id, current_focus);
     let learned = adapt.learned_config(current_app_id.as_deref());
-    let resolved = setting.effective_config_layered(
-        current_app_id.as_deref(),
-        title,
-        learned.as_ref(),
-    );
+    let resolved =
+        setting.effective_config_layered(current_app_id.as_deref(), title, learned.as_ref());
     runtime.store(&resolved_to_snapshot(&resolved));
 }
 
@@ -477,7 +555,13 @@ fn get_config_path() -> PathBuf {
     if let Some(path) = config_arg {
         PathBuf::from(path)
     } else {
-        let local = std::env::current_dir().unwrap_or_default().join("setting.conf");
-        if local.exists() { local } else { ConfigManager::default_path() }
+        let local = std::env::current_dir()
+            .unwrap_or_default()
+            .join("setting.conf");
+        if local.exists() {
+            local
+        } else {
+            ConfigManager::default_path()
+        }
     }
 }

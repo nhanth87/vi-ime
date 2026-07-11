@@ -19,7 +19,6 @@ pub enum InputMethod {
     Smart,
 }
 
-
 impl std::fmt::Display for InputMethod {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -42,7 +41,6 @@ pub enum ImeMode {
     /// No preedit underline while composing.
     NonPreedit,
 }
-
 
 impl std::fmt::Display for ImeMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -84,7 +82,6 @@ pub enum OutputMode {
     /// Decomposed Unicode (NFD) — tổ hợp, e.g. ệ = e + ^ + .
     UnicodeToHop,
 }
-
 
 impl std::fmt::Display for OutputMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -135,6 +132,15 @@ pub struct Setting {
     /// Tone placement style (hòa vs hoà). Old configs default to Classic.
     #[serde(default)]
     pub tone_style: ToneStyle,
+    /// Autocorrect: fix common Vietnamese typos on commit.
+    #[serde(default = "default_true")]
+    pub autocorrect: bool,
+    /// Emoji shortcode expansion (e.g. ":smile:" → "😄").
+    #[serde(default = "default_true")]
+    pub emoji: bool,
+    /// Clipboard Vietnamese conversion (convert pasted text to correct Unicode).
+    #[serde(default = "default_true")]
+    pub clipboard_convert: bool,
     /// Per-app overrides. Key is app_id/class.
     #[serde(default)]
     pub app_configs: HashMap<String, AppConfig>,
@@ -148,6 +154,10 @@ fn default_ime_mode() -> ImeMode {
     ImeMode::Preedit
 }
 
+fn default_true() -> bool {
+    true
+}
+
 impl Default for Setting {
     fn default() -> Self {
         Self {
@@ -156,11 +166,12 @@ impl Default for Setting {
             output_mode: OutputMode::UnicodeDungSan,
             free_tone_placement: true,
             auto_detect_lang: true,
-            // Per-app adaptation on by default: the 4-layer resolution
-            // (user > learned > builtin > global) is the zero-config path.
             enable_per_app: true,
             ime_mode: ImeMode::Preedit,
             tone_style: ToneStyle::Classic,
+            autocorrect: true,
+            emoji: true,
+            clipboard_convert: true,
             app_configs: HashMap::new(),
             site_configs: HashMap::new(),
         }

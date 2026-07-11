@@ -22,8 +22,8 @@
 //! other app keeps using the normal (lower-latency, no external process)
 //! Wayland path untouched.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
 use tracing::info;
@@ -41,10 +41,36 @@ const LEGACY_APP_PREFIXES: &[&str] = &[
     "onlyoffice", // ONLYOFFICE Desktop Editors (X11/Qt under XWayland)
 ];
 
+/// Apps that need evdev fallback ONLY when running under XWayland (X11 mode).
+/// When these apps run native Wayland (--ozone-platform=wayland), they use
+/// zwp_text_input_v3 just fine — evdev fallback would CONFLICT.
+/// Detection: the compositor reports these as XWayland surfaces (no native
+/// Wayland text-input activation within the timeout window).
+const XWAYLAND_FALLBACK_PREFIXES: &[&str] = &[
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+    "brave-browser",
+    "brave",
+    "microsoft-edge",
+    "opera",
+    "vivaldi-stable",
+    "vivaldi",
+];
+
 /// Does this app_id need the evdev fallback instead of the Wayland path?
 pub fn is_legacy_app(app_id: &str) -> bool {
     let id = app_id.to_lowercase();
     LEGACY_APP_PREFIXES.iter().any(|p| id.starts_with(p))
+}
+
+/// Does this app_id need evdev fallback ONLY when running under XWayland?
+/// Called when the app has NOT sent Activate within the probe timeout,
+/// confirming it's running X11 mode (no zwp_text_input_v3).
+pub fn is_xwayland_fallback_app(app_id: &str) -> bool {
+    let id = app_id.to_lowercase();
+    XWAYLAND_FALLBACK_PREFIXES.iter().any(|p| id.starts_with(p))
 }
 
 /// Handle to a running fallback grab. Dropping it stops the grab thread and

@@ -23,6 +23,7 @@ mod style;
 mod syllable;
 pub(crate) mod tone;
 mod types;
+pub(crate) mod viet_dict;
 
 pub use engine::Engine;
 pub use style::ToneStyle;

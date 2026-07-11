@@ -63,29 +63,55 @@ impl Engine {
 
     // ── Config (signatures fixed — RuntimeConfig::apply_snapshot depends) ──
 
-    pub fn set_method(&mut self, method: InputMethod) { self.method = method; }
-    pub fn method(&self) -> InputMethod { self.method }
+    pub fn set_method(&mut self, method: InputMethod) {
+        self.method = method;
+    }
+    pub fn method(&self) -> InputMethod {
+        self.method
+    }
 
     /// English auto-restore: invalid syllables are displayed/committed as raw.
-    pub fn set_auto_detect(&mut self, enabled: bool) { self.auto_detect = enabled; }
-    pub fn auto_detect(&self) -> bool { self.auto_detect }
+    pub fn set_auto_detect(&mut self, enabled: bool) {
+        self.auto_detect = enabled;
+    }
+    pub fn auto_detect(&self) -> bool {
+        self.auto_detect
+    }
 
     /// Kept for config compatibility: phonotactic validation subsumes the
     /// old "strict tone" mode — tones only ever land on valid targets.
-    pub fn set_free_tone(&mut self, enabled: bool) { self.free_tone = enabled; }
-    pub fn free_tone(&self) -> bool { self.free_tone }
+    pub fn set_free_tone(&mut self, enabled: bool) {
+        self.free_tone = enabled;
+    }
+    pub fn free_tone(&self) -> bool {
+        self.free_tone
+    }
 
-    pub fn set_output_mode(&mut self, mode: OutputMode) { self.output_mode = mode; }
-    pub fn output_mode(&self) -> OutputMode { self.output_mode }
+    pub fn set_output_mode(&mut self, mode: OutputMode) {
+        self.output_mode = mode;
+    }
+    pub fn output_mode(&self) -> OutputMode {
+        self.output_mode
+    }
 
-    pub fn set_tone_style(&mut self, style: ToneStyle) { self.tone_style = style; }
-    pub fn tone_style(&self) -> ToneStyle { self.tone_style }
+    pub fn set_tone_style(&mut self, style: ToneStyle) {
+        self.tone_style = style;
+    }
+    pub fn tone_style(&self) -> ToneStyle {
+        self.tone_style
+    }
 
     // ── State queries ──
 
-    pub fn has_preedit(&self) -> bool { !self.raw_keys.is_empty() }
-    pub fn preedit_string(&self) -> &str { &self.display }
-    pub fn raw_key_count(&self) -> usize { self.raw_keys.len() }
+    pub fn has_preedit(&self) -> bool {
+        !self.raw_keys.is_empty()
+    }
+    pub fn preedit_string(&self) -> &str {
+        &self.display
+    }
+    pub fn raw_key_count(&self) -> usize {
+        self.raw_keys.len()
+    }
 
     /// Buffer formatted for committing: applies the output mode (NFC/NFD).
     pub fn preedit_output(&self) -> String {
@@ -93,6 +119,33 @@ impl Engine {
             OutputMode::UnicodeDungSan => self.display.clone(),
             OutputMode::UnicodeToHop => self.display.nfd().collect(),
         }
+    }
+
+    /// Smart mode commit: if the rendered word looks Vietnamese but the raw
+    /// keys form a known English/programming word, restore raw keys instead.
+    /// This extends R9 to handle false positives like test→tét, user→ủe.
+    fn smart_commit_output(&self) -> String {
+        use super::viet_dict;
+        // Only applies to Smart mode with auto_detect enabled
+        if self.method != InputMethod::Smart || !self.auto_detect {
+            return self.preedit_output();
+        }
+        // If already invalid (raw keys shown), just commit as-is
+        if !self.last_valid {
+            return self.preedit_output();
+        }
+        // Check if raw keys form a known English word — if so, restore raw
+        if viet_dict::is_english_word(&self.raw_keys) {
+            return self.raw_keys.iter().collect();
+        }
+        // Check if rendered base is actually a valid Vietnamese syllable
+        let base = viet_dict::strip_tones(&self.display);
+        if !viet_dict::is_viet_syllable(&base) {
+            // Rendered something that looks Vietnamese to the parser but
+            // isn't in the real dictionary — restore raw keys
+            return self.raw_keys.iter().collect();
+        }
+        self.preedit_output()
     }
 
     /// Hybrid-mode trigger: composition is ambiguous when the current word
@@ -104,12 +157,22 @@ impl Engine {
     // ── Key processing ──
 
     pub fn push_key(&mut self, ch: char) -> Action {
+        // Backspace during composition: shrink the raw_keys buffer rather than
+        // treating the control char as a word boundary (which would commit).
+        // This lets the Wayland action handler route keycode 14 through the
+        // engine on the normal push_key path.
+        if ch == '\u{0008}' {
+            return self.backspace();
+        }
+
         // Word boundary: commit what we have (boundary char handled by caller).
         if syllable::is_word_boundary(ch, self.method) {
             if self.has_preedit() {
                 // Validity-based restore (R9): the display already holds the
                 // raw keys verbatim when the word isn't a valid syllable.
-                let committed = self.preedit_output();
+                // Extended R9 for Smart mode: if rendered looks Vietnamese but
+                // raw keys are a known English word, restore raw.
+                let committed = self.smart_commit_output();
                 self.reset();
                 return Action::Commit(committed);
             }
@@ -369,105 +432,454 @@ mod tests {
 
     use crate::engine::style::ToneStyle;
 
-    struct WordTest { input: &'static str, expected: &'static str, method: InputMethod }
+    struct WordTest {
+        input: &'static str,
+        expected: &'static str,
+        method: InputMethod,
+    }
     const VW: &[WordTest] = &[
-        WordTest{input:"as",expected:"á",method:InputMethod::Telex},
-        WordTest{input:"af",expected:"à",method:InputMethod::Telex},
-        WordTest{input:"ar",expected:"ả",method:InputMethod::Telex},
-        WordTest{input:"ax",expected:"ã",method:InputMethod::Telex},
-        WordTest{input:"aj",expected:"ạ",method:InputMethod::Telex},
-        WordTest{input:"a1",expected:"á",method:InputMethod::Vni},
-        WordTest{input:"a2",expected:"à",method:InputMethod::Vni},
-        WordTest{input:"a3",expected:"ả",method:InputMethod::Vni},
-        WordTest{input:"a4",expected:"ã",method:InputMethod::Vni},
-        WordTest{input:"a5",expected:"ạ",method:InputMethod::Vni},
-        WordTest{input:"aas",expected:"ấ",method:InputMethod::Telex},
-        WordTest{input:"ees",expected:"ế",method:InputMethod::Telex},
-        WordTest{input:"oos",expected:"ố",method:InputMethod::Telex},
-        WordTest{input:"ows",expected:"ớ",method:InputMethod::Telex},
-        WordTest{input:"uws",expected:"ứ",method:InputMethod::Telex},
-        WordTest{input:"aws",expected:"ắ",method:InputMethod::Telex},
-        WordTest{input:"aaf",expected:"ầ",method:InputMethod::Telex},
-        WordTest{input:"eef",expected:"ề",method:InputMethod::Telex},
-        WordTest{input:"aar",expected:"ẩ",method:InputMethod::Telex},
-        WordTest{input:"uwx",expected:"ữ",method:InputMethod::Telex},
-        WordTest{input:"awj",expected:"ặ",method:InputMethod::Telex},
-        WordTest{input:"eej",expected:"ệ",method:InputMethod::Telex},
-        WordTest{input:"dd",expected:"đ",method:InputMethod::Telex},
-        WordTest{input:"d9",expected:"đ",method:InputMethod::Vni},
-        WordTest{input:"ngh",expected:"ngh",method:InputMethod::Telex},
-        WordTest{input:"tieengs",expected:"tiếng",method:InputMethod::Telex},
-        WordTest{input:"vieecj",expected:"việc",method:InputMethod::Telex},
-        WordTest{input:"dduwowcj",expected:"được",method:InputMethod::Telex},
-        WordTest{input:"bieets",expected:"biết",method:InputMethod::Telex},
-        WordTest{input:"thieeus",expected:"thiếu",method:InputMethod::Telex},
-        WordTest{input:"phuwowng",expected:"phương",method:InputMethod::Telex},
-        WordTest{input:"truwowngf",expected:"trường",method:InputMethod::Telex},
-        WordTest{input:"chuyeenr",expected:"chuyển",method:InputMethod::Telex},
-        WordTest{input:"nguyeenx",expected:"nguyễn",method:InputMethod::Telex},
-        WordTest{input:"lieeuj",expected:"liệu",method:InputMethod::Telex},
-        WordTest{input:"kieeur",expected:"kiểu",method:InputMethod::Telex},
-        WordTest{input:"mieengj",expected:"miệng",method:InputMethod::Telex},
-        WordTest{input:"nhuwngx",expected:"những",method:InputMethod::Telex},
-        WordTest{input:"tuyeetj",expected:"tuyệt",method:InputMethod::Telex},
-        WordTest{input:"nhaan",expected:"nhân",method:InputMethod::Telex},
-        WordTest{input:"cuwar",expected:"cửa",method:InputMethod::Telex},
-        WordTest{input:"hafng",expected:"hàng",method:InputMethod::Telex},
-        WordTest{input:"tie6ng1",expected:"tiếng",method:InputMethod::Vni},
-        WordTest{input:"vie6c5",expected:"việc",method:InputMethod::Vni},
-        WordTest{input:"d9u7o7c5",expected:"được",method:InputMethod::Vni},
-        WordTest{input:"nguye64n",expected:"nguyễn",method:InputMethod::Vni},
-        WordTest{input:"nha6n",expected:"nhân",method:InputMethod::Vni},
-        WordTest{input:"tieeng1",expected:"tiếng",method:InputMethod::Smart},
-        WordTest{input:"vieec5",expected:"việc",method:InputMethod::Smart},
-        WordTest{input:"nha6n",expected:"nhân",method:InputMethod::Smart},
+        WordTest {
+            input: "as",
+            expected: "á",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "af",
+            expected: "à",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "ar",
+            expected: "ả",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "ax",
+            expected: "ã",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "aj",
+            expected: "ạ",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "a1",
+            expected: "á",
+            method: InputMethod::Vni,
+        },
+        WordTest {
+            input: "a2",
+            expected: "à",
+            method: InputMethod::Vni,
+        },
+        WordTest {
+            input: "a3",
+            expected: "ả",
+            method: InputMethod::Vni,
+        },
+        WordTest {
+            input: "a4",
+            expected: "ã",
+            method: InputMethod::Vni,
+        },
+        WordTest {
+            input: "a5",
+            expected: "ạ",
+            method: InputMethod::Vni,
+        },
+        WordTest {
+            input: "aas",
+            expected: "ấ",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "ees",
+            expected: "ế",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "oos",
+            expected: "ố",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "ows",
+            expected: "ớ",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "uws",
+            expected: "ứ",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "aws",
+            expected: "ắ",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "aaf",
+            expected: "ầ",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "eef",
+            expected: "ề",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "aar",
+            expected: "ẩ",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "uwx",
+            expected: "ữ",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "awj",
+            expected: "ặ",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "eej",
+            expected: "ệ",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "dd",
+            expected: "đ",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "d9",
+            expected: "đ",
+            method: InputMethod::Vni,
+        },
+        WordTest {
+            input: "ngh",
+            expected: "ngh",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "tieengs",
+            expected: "tiếng",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "vieecj",
+            expected: "việc",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "dduwowcj",
+            expected: "được",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "bieets",
+            expected: "biết",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "thieeus",
+            expected: "thiếu",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "phuwowng",
+            expected: "phương",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "truwowngf",
+            expected: "trường",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "chuyeenr",
+            expected: "chuyển",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "nguyeenx",
+            expected: "nguyễn",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "lieeuj",
+            expected: "liệu",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "kieeur",
+            expected: "kiểu",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "mieengj",
+            expected: "miệng",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "nhuwngx",
+            expected: "những",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "tuyeetj",
+            expected: "tuyệt",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "nhaan",
+            expected: "nhân",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "cuwar",
+            expected: "cửa",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "hafng",
+            expected: "hàng",
+            method: InputMethod::Telex,
+        },
+        WordTest {
+            input: "tie6ng1",
+            expected: "tiếng",
+            method: InputMethod::Vni,
+        },
+        WordTest {
+            input: "vie6c5",
+            expected: "việc",
+            method: InputMethod::Vni,
+        },
+        WordTest {
+            input: "d9u7o7c5",
+            expected: "được",
+            method: InputMethod::Vni,
+        },
+        WordTest {
+            input: "nguye64n",
+            expected: "nguyễn",
+            method: InputMethod::Vni,
+        },
+        WordTest {
+            input: "nha6n",
+            expected: "nhân",
+            method: InputMethod::Vni,
+        },
+        WordTest {
+            input: "tieeng1",
+            expected: "tiếng",
+            method: InputMethod::Smart,
+        },
+        WordTest {
+            input: "vieec5",
+            expected: "việc",
+            method: InputMethod::Smart,
+        },
+        WordTest {
+            input: "nha6n",
+            expected: "nhân",
+            method: InputMethod::Smart,
+        },
     ];
 
-    #[test] fn regression_100_words_corpus() {
-        for wt in VW { let mut e=Engine::new(wt.method); for c in wt.input.chars(){e.push_key(c);} assert_eq!(e.preedit_string(),wt.expected,"IN={:?} m={:?} exp={:?} got={:?}",wt.input,wt.method,wt.expected,e.preedit_string()); }
+    #[test]
+    fn regression_100_words_corpus() {
+        for wt in VW {
+            let mut e = Engine::new(wt.method);
+            for c in wt.input.chars() {
+                e.push_key(c);
+            }
+            assert_eq!(
+                e.preedit_string(),
+                wt.expected,
+                "IN={:?} m={:?} exp={:?} got={:?}",
+                wt.input,
+                wt.method,
+                wt.expected,
+                e.preedit_string()
+            );
+        }
     }
 
-    #[test] fn r9_english_restore() { for w in &["windows","html","linux"]{ let mut e=Engine::new(InputMethod::Telex); for c in w.chars(){e.push_key(c);} assert_eq!(e.preedit_string(),*w); } }
+    #[test]
+    fn r9_english_restore() {
+        for w in &["windows", "html", "linux"] {
+            let mut e = Engine::new(InputMethod::Telex);
+            for c in w.chars() {
+                e.push_key(c);
+            }
+            assert_eq!(e.preedit_string(), *w);
+        }
+    }
 
-    #[test] fn r17_onset_dd_space_commits_d() { let mut e=Engine::new(InputMethod::Telex);e.push_key('d');e.push_key('d'); match e.push_key(' '){Action::Commit(s)=>assert_eq!(s,"đ"),a=>panic!("{:?}",a)} }
+    #[test]
+    fn r17_onset_dd_space_commits_d() {
+        let mut e = Engine::new(InputMethod::Telex);
+        e.push_key('d');
+        e.push_key('d');
+        match e.push_key(' ') {
+            Action::Commit(s) => assert_eq!(s, "đ"),
+            a => panic!("{:?}", a),
+        }
+    }
 
-    #[test] fn case_viet() { let mut e=Engine::new(InputMethod::Telex); for c in "VIEETJ".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"VIỆT"); let mut e2=Engine::new(InputMethod::Telex); for c in "Vieetj".chars(){e2.push_key(c);} assert_eq!(e2.preedit_string(),"Việt"); }
+    #[test]
+    fn case_viet() {
+        let mut e = Engine::new(InputMethod::Telex);
+        for c in "VIEETJ".chars() {
+            e.push_key(c);
+        }
+        assert_eq!(e.preedit_string(), "VIỆT");
+        let mut e2 = Engine::new(InputMethod::Telex);
+        for c in "Vieetj".chars() {
+            e2.push_key(c);
+        }
+        assert_eq!(e2.preedit_string(), "Việt");
+    }
 
-    #[test] fn tone_hoa_classic_modern() { let mut e=Engine::new(InputMethod::Telex); for c in "hoaf".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"hòa"); let mut e2=Engine::new(InputMethod::Telex); e2.set_tone_style(ToneStyle::Modern); for c in "hoaf".chars(){e2.push_key(c);} assert_eq!(e2.preedit_string(),"hoà"); }
+    #[test]
+    fn tone_hoa_classic_modern() {
+        let mut e = Engine::new(InputMethod::Telex);
+        for c in "hoaf".chars() {
+            e.push_key(c);
+        }
+        assert_eq!(e.preedit_string(), "hòa");
+        let mut e2 = Engine::new(InputMethod::Telex);
+        e2.set_tone_style(ToneStyle::Modern);
+        for c in "hoaf".chars() {
+            e2.push_key(c);
+        }
+        assert_eq!(e2.preedit_string(), "hoà");
+    }
 
-    #[test] fn double_tone_undo() { let mut e=Engine::new(InputMethod::Telex); e.push_key('a');e.push_key('s'); assert_eq!(e.preedit_string(),"á"); e.push_key('s'); assert_eq!(e.preedit_string(),"as"); }
+    #[test]
+    fn double_tone_undo() {
+        let mut e = Engine::new(InputMethod::Telex);
+        e.push_key('a');
+        e.push_key('s');
+        assert_eq!(e.preedit_string(), "á");
+        e.push_key('s');
+        assert_eq!(e.preedit_string(), "as");
+    }
 
-    #[test] fn backspace_tieng_to_tien() { let mut e=Engine::new(InputMethod::Telex); for c in "tieengs".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"tiếng"); e.backspace(); assert_eq!(e.preedit_string(),"tiêng"); }
+    #[test]
+    fn backspace_tieng_to_tien() {
+        let mut e = Engine::new(InputMethod::Telex);
+        for c in "tieengs".chars() {
+            e.push_key(c);
+        }
+        assert_eq!(e.preedit_string(), "tiếng");
+        e.backspace();
+        assert_eq!(e.preedit_string(), "tiêng");
+    }
 
-    #[test] fn gi_backtrack() { let mut e=Engine::new(InputMethod::Telex); for c in "gif".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"gì"); let mut e2=Engine::new(InputMethod::Telex); for c in "giaf".chars(){e2.push_key(c);} assert_eq!(e2.preedit_string(),"già"); }
+    #[test]
+    fn gi_backtrack() {
+        let mut e = Engine::new(InputMethod::Telex);
+        for c in "gif".chars() {
+            e.push_key(c);
+        }
+        assert_eq!(e.preedit_string(), "gì");
+        let mut e2 = Engine::new(InputMethod::Telex);
+        for c in "giaf".chars() {
+            e2.push_key(c);
+        }
+        assert_eq!(e2.preedit_string(), "già");
+    }
 
-    #[test] fn r8_deactivate_drops() { let mut e=Engine::new(InputMethod::Telex); for c in "nha".chars(){e.push_key(c);} assert!(e.has_preedit()); e.reset(); assert!(!e.has_preedit()); }
+    #[test]
+    fn r8_deactivate_drops() {
+        let mut e = Engine::new(InputMethod::Telex);
+        for c in "nha".chars() {
+            e.push_key(c);
+        }
+        assert!(e.has_preedit());
+        e.reset();
+        assert!(!e.has_preedit());
+    }
 
-    #[test] fn r17_backspace_shrinks() { let mut e=Engine::new(InputMethod::Telex); for c in "nhaa".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"nhâ"); e.backspace(); assert_eq!(e.preedit_string(),"nha"); }
+    #[test]
+    fn r17_backspace_shrinks() {
+        let mut e = Engine::new(InputMethod::Telex);
+        for c in "nhaa".chars() {
+            e.push_key(c);
+        }
+        assert_eq!(e.preedit_string(), "nhâ");
+        e.backspace();
+        assert_eq!(e.preedit_string(), "nha");
+    }
 
-    #[test] fn vni_dau() { let mut e=Engine::new(InputMethod::Vni); for c in "d9a6u5".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"đậu"); }
+    #[test]
+    fn vni_dau() {
+        let mut e = Engine::new(InputMethod::Vni);
+        for c in "d9a6u5".chars() {
+            e.push_key(c);
+        }
+        assert_eq!(e.preedit_string(), "đậu");
+    }
 
-    #[test] fn smart_mixed() { let mut e=Engine::new(InputMethod::Smart); for c in "d9a6u5".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"đậu"); }
+    #[test]
+    fn smart_mixed() {
+        let mut e = Engine::new(InputMethod::Smart);
+        for c in "d9a6u5".chars() {
+            e.push_key(c);
+        }
+        assert_eq!(e.preedit_string(), "đậu");
+    }
 
-    #[test] fn word_boundary_digit_telex_commits() { let mut e=Engine::new(InputMethod::Telex); e.push_key('a'); assert!(matches!(e.push_key('1'),Action::Commit(_))); }
+    #[test]
+    fn word_boundary_digit_telex_commits() {
+        let mut e = Engine::new(InputMethod::Telex);
+        e.push_key('a');
+        assert!(matches!(e.push_key('1'), Action::Commit(_)));
+    }
 
-    #[test] fn word_boundary_digit_vni_is_tone() { let mut e=Engine::new(InputMethod::Vni); e.push_key('a'); assert!(!matches!(e.push_key('1'),Action::Commit(_))); }
+    #[test]
+    fn word_boundary_digit_vni_is_tone() {
+        let mut e = Engine::new(InputMethod::Vni);
+        e.push_key('a');
+        assert!(!matches!(e.push_key('1'), Action::Commit(_)));
+    }
 
-    #[test] fn complex_nguyen_truong() { let mut e=Engine::new(InputMethod::Telex); for c in "nguyeenx".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"nguyễn"); e.reset(); for c in "truwowngf".chars(){e.push_key(c);} assert_eq!(e.preedit_string(),"trường"); }
+    #[test]
+    fn complex_nguyen_truong() {
+        let mut e = Engine::new(InputMethod::Telex);
+        for c in "nguyeenx".chars() {
+            e.push_key(c);
+        }
+        assert_eq!(e.preedit_string(), "nguyễn");
+        e.reset();
+        for c in "truwowngf".chars() {
+            e.push_key(c);
+        }
+        assert_eq!(e.preedit_string(), "trường");
+    }
     // ══════════════════════════════════════════════════════════════
     // Modifier keys: Ctrl/Shift/Super MUST NOT be eaten by engine
     // ══════════════════════════════════════════════════════════════
 
-    #[test] fn modifier_ctrl_a_is_boundary_not_composed() {
+    #[test]
+    fn modifier_ctrl_a_is_boundary_not_composed() {
         let mut e = Engine::new(InputMethod::Telex);
-        e.push_key('n'); e.push_key('h'); e.push_key('a');
+        e.push_key('n');
+        e.push_key('h');
+        e.push_key('a');
         assert!(e.has_preedit());
         let a = e.push_key('\u{0001}');
         assert!(matches!(a, Action::Commit(_)));
         assert!(!e.has_preedit());
     }
 
-    #[test] fn modifier_enter_tab_escape_are_boundaries() {
+    #[test]
+    fn modifier_enter_tab_escape_are_boundaries() {
         for ch in &['\u{000D}', '\u{0009}', '\u{001B}'] {
             let mut e = Engine::new(InputMethod::Telex);
             e.push_key('a');
@@ -475,18 +887,23 @@ mod tests {
         }
     }
 
-    #[test] fn modifier_backspace_consumed_not_forwarded() {
+    #[test]
+    fn modifier_backspace_consumed_not_forwarded() {
         let mut e = Engine::new(InputMethod::Telex);
-        e.push_key('n'); e.push_key('h');
+        e.push_key('n');
+        e.push_key('h');
         assert_eq!(e.raw_key_count(), 2);
         let a = e.push_key('\u{0008}');
         assert!(matches!(a, Action::UpdatePreedit(_)));
     }
 
-    #[test] fn modifier_super_ctrl_alt_dont_reach_engine() {
+    #[test]
+    fn modifier_super_ctrl_alt_dont_reach_engine() {
         // Control chars (0x01..0x1F) are always boundaries
         let mut e = Engine::new(InputMethod::Telex);
-        e.push_key('n'); e.push_key('h'); e.push_key('a');
+        e.push_key('n');
+        e.push_key('h');
+        e.push_key('a');
         assert_eq!(e.preedit_string(), "nha");
         e.push_key(' '); // commit
         assert!(!e.has_preedit());
@@ -497,9 +914,12 @@ mod tests {
         assert_eq!(e.preedit_string(), "tiếng");
     }
 
-    #[test] fn modifier_ctrl_t_during_compose_commits() {
+    #[test]
+    fn modifier_ctrl_t_during_compose_commits() {
         let mut e = Engine::new(InputMethod::Telex);
-        e.push_key('n'); e.push_key('h'); e.push_key('a');
+        e.push_key('n');
+        e.push_key('h');
+        e.push_key('a');
         let committed = match e.push_key('\u{0014}') {
             Action::Commit(s) => s,
             a => panic!("Expected Commit from Ctrl+T, got {:?}", a),
@@ -508,16 +928,22 @@ mod tests {
         assert!(!e.has_preedit());
     }
 
-    #[test] fn modifier_dont_corrupt_english_restore() {
+    #[test]
+    fn modifier_dont_corrupt_english_restore() {
         let mut e = Engine::new(InputMethod::Telex);
-        for c in "win".chars() { e.push_key(c); }
+        for c in "win".chars() {
+            e.push_key(c);
+        }
         let a = e.push_key('\u{0001}');
         assert!(matches!(a, Action::Commit(_)));
-        for c in "do".chars() { assert!(matches!(e.push_key(c), Action::UpdatePreedit(_))); }
+        for c in "do".chars() {
+            assert!(matches!(e.push_key(c), Action::UpdatePreedit(_)));
+        }
         assert_eq!(e.preedit_string(), "do");
     }
 
-    #[test] fn modifier_vni_digit_is_tone_not_modifier() {
+    #[test]
+    fn modifier_vni_digit_is_tone_not_modifier() {
         let mut e = Engine::new(InputMethod::Vni);
         e.push_key('a');
         let a = e.push_key('1');
@@ -525,23 +951,213 @@ mod tests {
         assert_eq!(e.preedit_string(), "á");
     }
 
-    #[test] fn modifier_ctrl_digit_is_boundary_even_in_vni() {
+    #[test]
+    fn modifier_ctrl_digit_is_boundary_even_in_vni() {
         let mut e = Engine::new(InputMethod::Vni);
         e.push_key('a');
         let a = e.push_key('\u{0001}');
         assert!(matches!(a, Action::Commit(_)));
     }
 
-    #[test] fn modifier_engine_state_clean_after_ctrl() {
+    #[test]
+    fn modifier_engine_state_clean_after_ctrl() {
         // Verifies bug: Ctrl key doesn't leave engine in corrupt state
         let mut e = Engine::new(InputMethod::Telex);
-        for c in "xin".chars() { e.push_key(c); }
+        for c in "xin".chars() {
+            e.push_key(c);
+        }
         e.push_key('\u{0003}'); // Ctrl+C → commit
         assert!(!e.has_preedit());
         // New word right after
-        e.push_key('c'); e.push_key('h'); e.push_key('a');
+        e.push_key('c');
+        e.push_key('h');
+        e.push_key('a');
         e.push_key('f');
         assert_eq!(e.preedit_string(), "chà");
     }
 
+    // ════════════════════════════════════════════════════════════════
+    // Smart mode dictionary disambiguation (extended R9)
+    // ════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn smart_mode_test_restores_raw() {
+        // "test" in Smart mode: 's' is Telex sắc → "tét" but should restore
+        let mut e = Engine::new(InputMethod::Smart);
+        for c in "test".chars() {
+            e.push_key(c);
+        }
+        // During preedit, engine shows Vietnamese interpretation
+        // But on commit (word boundary), dict check restores raw
+        let action = e.push_key(' ');
+        match action {
+            Action::Commit(s) => assert_eq!(s, "test"),
+            _ => panic!("expected Commit, got {:?}", action),
+        }
+    }
+
+    #[test]
+    fn smart_mode_user_restores_raw() {
+        let mut e = Engine::new(InputMethod::Smart);
+        for c in "user".chars() {
+            e.push_key(c);
+        }
+        let action = e.push_key(' ');
+        match action {
+            Action::Commit(s) => assert_eq!(s, "user"),
+            _ => panic!("expected Commit, got {:?}", action),
+        }
+    }
+
+    #[test]
+    fn smart_mode_sway_restores_raw() {
+        let mut e = Engine::new(InputMethod::Smart);
+        for c in "sway".chars() {
+            e.push_key(c);
+        }
+        let action = e.push_key(' ');
+        match action {
+            Action::Commit(s) => assert_eq!(s, "sway"),
+            _ => panic!("expected Commit, got {:?}", action),
+        }
+    }
+
+    #[test]
+    fn smart_mode_viet_word_commits_vietnamese() {
+        // "xin" is valid Vietnamese → should commit as Vietnamese
+        let mut e = Engine::new(InputMethod::Smart);
+        for c in "xin".chars() {
+            e.push_key(c);
+        }
+        let action = e.push_key(' ');
+        match action {
+            Action::Commit(s) => assert_eq!(s, "xin"),
+            _ => panic!("expected Commit, got {:?}", action),
+        }
+    }
+
+    #[test]
+    fn smart_mode_vni_dau_still_works() {
+        // VNI tone in Smart mode: "d9a6u5" → "đậu" (valid Viet)
+        let mut e = Engine::new(InputMethod::Smart);
+        for c in "d9a6u5".chars() {
+            e.push_key(c);
+        }
+        let action = e.push_key(' ');
+        match action {
+            Action::Commit(s) => assert_eq!(s, "đậu"),
+            _ => panic!("expected Commit, got {:?}", action),
+        }
+    }
+
+    // ── Regression: backspace during composition (fix 2026-07-12) ──────────
+
+    #[test]
+    fn backspace_via_push_key_shrinks_word() {
+        // push_key('\u{0008}') must act like backspace(), not commit the word.
+        let mut e = Engine::new(InputMethod::Telex);
+        e.push_key('n');
+        e.push_key('h');
+        let a = e.push_key('\u{0008}');
+        // Should shrink to "n", returning UpdatePreedit.
+        assert!(matches!(a, Action::UpdatePreedit(_)), "got {a:?}");
+        assert_eq!(e.preedit_string(), "n");
+        assert_eq!(e.raw_key_count(), 1);
+    }
+
+    #[test]
+    fn backspace_via_push_key_empty_gives_passthrough() {
+        let mut e = Engine::new(InputMethod::Telex);
+        let a = e.push_key('\u{0008}');
+        assert!(matches!(a, Action::PassThrough), "got {a:?}");
+    }
+
+    // ── Regression: Smart mode standalone 'w' restores to 'w' ───────────────
+
+    #[test]
+    fn smart_mode_standalone_w_restores_raw() {
+        // Typing just 'w' then space in Smart mode should commit 'w', not 'ư'.
+        // 'w' alone is in english_common.txt so smart_commit_output restores it.
+        let mut e = Engine::new(InputMethod::Smart);
+        e.push_key('w');
+        let action = e.push_key(' ');
+        match action {
+            Action::Commit(s) => assert_eq!(s, "w", "standalone w should restore to w, got '{s}'"),
+            _ => panic!("expected Commit, got {:?}", action),
+        }
+    }
+
+    #[test]
+    fn smart_mode_w_prefix_english_restores_raw() {
+        // 'word' in Smart mode: w→ư, but 'word' is in english_common → restore.
+        let mut e = Engine::new(InputMethod::Smart);
+        for c in "word".chars() {
+            e.push_key(c);
+        }
+        let action = e.push_key(' ');
+        match action {
+            Action::Commit(s) => assert_eq!(s, "word", "'word' should restore raw, got '{s}'"),
+            _ => panic!("expected Commit, got {:?}", action),
+        }
+    }
+
+    // ── Regression: Smart mode restores common English words ────────────────
+
+    #[test]
+    fn smart_mode_restore_common_words() {
+        let cases = [
+            ("test", "test"),
+            ("user", "user"),
+            ("sway", "sway"),
+            ("work", "work"),
+            ("windows", "windows"),
+        ];
+        for (input, expected) in cases {
+            let mut e = Engine::new(InputMethod::Smart);
+            for c in input.chars() {
+                e.push_key(c);
+            }
+            let action = e.push_key(' ');
+            match action {
+                Action::Commit(s) => assert_eq!(
+                    s, expected,
+                    "input='{input}' expected='{expected}' got='{s}'"
+                ),
+                _ => panic!("input='{input}': expected Commit, got {:?}", action),
+            }
+        }
+    }
+
+    // ── Regression: cursor jump — dropping composition on external change ────
+
+    #[test]
+    fn cursor_jump_drop_no_commit() {
+        // Simulates R8 + Done external_change path: reset drops pending text.
+        // engine.reset() must clear all state without committing.
+        let mut e = Engine::new(InputMethod::Telex);
+        for c in "vie".chars() {
+            e.push_key(c);
+        }
+        assert!(e.has_preedit());
+        assert!(!e.preedit_string().is_empty());
+        e.reset(); // R8: Drop, Don't Commit
+        assert!(!e.has_preedit());
+        assert_eq!(e.preedit_string(), "");
+        assert_eq!(e.raw_key_count(), 0);
+    }
+
+    #[test]
+    fn cursor_jump_next_word_clean_after_drop() {
+        // After a reset (cursor jump), the engine must accept a fresh word.
+        let mut e = Engine::new(InputMethod::Telex);
+        for c in "nha".chars() {
+            e.push_key(c);
+        }
+        e.reset(); // cursor moved — drop
+        // Next word should start fresh
+        for c in "xin".chars() {
+            e.push_key(c);
+        }
+        assert_eq!(e.preedit_string(), "xin");
+    }
 }

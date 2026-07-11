@@ -1,4 +1,3 @@
-
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2024-2026 vi-im contributors
 //! System-tray icon (StatusNotifierItem) — ayatana-appindicator (libappindicator3)
@@ -6,13 +5,13 @@
 //! (warp-taskbar, waybar, etc.) than raw ksni.
 
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use appindicator3::{Indicator, IndicatorCategory, IndicatorStatus};
 use appindicator3::prelude::AppIndicatorExt;
+use appindicator3::{Indicator, IndicatorCategory, IndicatorStatus};
 use gtk::prelude::*;
 use gtk::{CheckMenuItem, Menu, MenuItem, RadioMenuItem, SeparatorMenuItem};
 use tracing::{info, warn};
@@ -123,7 +122,15 @@ fn refresh(
         guard.current_enabled = enabled;
     }
     indicator.set_icon_full(if enabled { ICON_ON } else { ICON_OFF }, "vi-im");
-    let menu = build_menu(indicator, state, config_path, settings_exe, method, mode, enabled);
+    let menu = build_menu(
+        indicator,
+        state,
+        config_path,
+        settings_exe,
+        method,
+        mode,
+        enabled,
+    );
     indicator.set_menu(Some(&menu));
 }
 
@@ -223,8 +230,11 @@ fn build_menu(
     menu.append(&SeparatorMenuItem::new());
 
     // ── Bật / Tắt ──
-    let toggle_item =
-        CheckMenuItem::with_label(if enabled { "🟢 Đang bật" } else { "🔴 Đang tắt" });
+    let toggle_item = CheckMenuItem::with_label(if enabled {
+        "🟢 Đang bật"
+    } else {
+        "🔴 Đang tắt"
+    });
     toggle_item.set_active(enabled);
     {
         let indicator = indicator.clone();
@@ -236,8 +246,18 @@ fn build_menu(
             if let Ok(mut cm) = ConfigManager::new(Some(config_path.clone())) {
                 cm.setting_mut().enabled = now_enabled;
                 let _ = cm.save();
-                info!("[TRAY] IME {}", if now_enabled { "enabled" } else { "disabled" });
-                crate::notify::popup("vi-ime", if now_enabled { "🟢 Bật" } else { "🔴 Tắt" });
+                info!(
+                    "[TRAY] IME {}",
+                    if now_enabled { "enabled" } else { "disabled" }
+                );
+                crate::notify::popup(
+                    "vi-ime",
+                    if now_enabled {
+                        "🟢 Bật"
+                    } else {
+                        "🔴 Tắt"
+                    },
+                );
             }
             refresh(&indicator, &state, &config_path, &settings_exe);
         });
@@ -253,6 +273,59 @@ fn build_menu(
     // point it at the same toggle_item so it fires the exact same on/off
     // logic as clicking the menu entry.
     indicator.set_secondary_activate_target(Some(&toggle_item));
+
+    menu.append(&SeparatorMenuItem::new());
+
+    // ── Tính năng: Autocorrect / Emoji / Clipboard Convert ──
+    {
+        let autocorrect_item = CheckMenuItem::with_label("✅ Tự sửa lỗi chính tả");
+        if let Ok(cm) = ConfigManager::new(Some(config_path.clone())) {
+            autocorrect_item.set_active(cm.setting().autocorrect);
+        }
+        {
+            let config_path = config_path.clone();
+            autocorrect_item.connect_toggled(move |it| {
+                if let Ok(mut cm) = ConfigManager::new(Some(config_path.clone())) {
+                    cm.setting_mut().autocorrect = it.is_active();
+                    let _ = cm.save();
+                    info!("[TRAY] autocorrect → {}", it.is_active());
+                }
+            });
+        }
+        menu.append(&autocorrect_item);
+
+        let emoji_item = CheckMenuItem::with_label("😀 Emoji (shortcode)");
+        if let Ok(cm) = ConfigManager::new(Some(config_path.clone())) {
+            emoji_item.set_active(cm.setting().emoji);
+        }
+        {
+            let config_path = config_path.clone();
+            emoji_item.connect_toggled(move |it| {
+                if let Ok(mut cm) = ConfigManager::new(Some(config_path.clone())) {
+                    cm.setting_mut().emoji = it.is_active();
+                    let _ = cm.save();
+                    info!("[TRAY] emoji → {}", it.is_active());
+                }
+            });
+        }
+        menu.append(&emoji_item);
+
+        let clipboard_item = CheckMenuItem::with_label("📋 Chuyển đổi clipboard");
+        if let Ok(cm) = ConfigManager::new(Some(config_path.clone())) {
+            clipboard_item.set_active(cm.setting().clipboard_convert);
+        }
+        {
+            let config_path = config_path.clone();
+            clipboard_item.connect_toggled(move |it| {
+                if let Ok(mut cm) = ConfigManager::new(Some(config_path.clone())) {
+                    cm.setting_mut().clipboard_convert = it.is_active();
+                    let _ = cm.save();
+                    info!("[TRAY] clipboard_convert → {}", it.is_active());
+                }
+            });
+        }
+        menu.append(&clipboard_item);
+    }
 
     menu.append(&SeparatorMenuItem::new());
 
@@ -330,7 +403,11 @@ pub fn spawn(config_path: PathBuf, settings_exe: Option<PathBuf>) -> Sender<Upda
             // Create the indicator.
             let indicator = Indicator::new(
                 "vi-im",
-                if initial_state.current_enabled { ICON_ON } else { ICON_OFF },
+                if initial_state.current_enabled {
+                    ICON_ON
+                } else {
+                    ICON_OFF
+                },
                 IndicatorCategory::ApplicationStatus,
             );
             indicator.set_status(IndicatorStatus::Active);
@@ -357,14 +434,19 @@ pub fn spawn(config_path: PathBuf, settings_exe: Option<PathBuf>) -> Sender<Upda
 
             // Set initial icon.
             indicator.set_icon_full(
-                if initial_state.current_enabled { ICON_ON } else { ICON_OFF },
+                if initial_state.current_enabled {
+                    ICON_ON
+                } else {
+                    ICON_OFF
+                },
                 "vi-im",
             );
 
             info!("[TRAY] Indicator created and menu set");
 
             // Channel to signal the GTK thread to update the indicator.
-            let (gtk_update_tx, gtk_update_rx) = glib::MainContext::channel(glib::Priority::DEFAULT);
+            let (gtk_update_tx, gtk_update_rx) =
+                glib::MainContext::channel(glib::Priority::DEFAULT);
 
             // Spawn a thread to bridge the daemon's update channel to GTK's channel.
             let state_for_bridge = Arc::clone(&state_for_gtk);
@@ -400,10 +482,8 @@ pub fn spawn(config_path: PathBuf, settings_exe: Option<PathBuf>) -> Sender<Upda
                 drop(guard);
 
                 // Update icon.
-                indicator_for_attach.set_icon_full(
-                    if enabled { ICON_ON } else { ICON_OFF },
-                    "vi-im",
-                );
+                indicator_for_attach
+                    .set_icon_full(if enabled { ICON_ON } else { ICON_OFF }, "vi-im");
 
                 // Rebuild menu with new state.
                 let new_menu = build_menu(
