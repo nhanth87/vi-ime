@@ -1,165 +1,143 @@
-# vi-ime — Bộ gõ tiếng Việt cho Wayland
+<!--
+SPDX-License-Identifier: GPL-3.0-only
+Copyright (c) 2024-2026 vi-im contributors
+-->
 
-Bộ gõ tiếng Việt nhẹ, nhanh, chạy native trên Wayland (niri, Sway, Hyprland, COSMIC, river, labwc). Không dùng bảng Wolfe — dùng **Unicode algebra (NFD/NFC)** thuần thuật toán, table-free.
+# ``` VI-IME — Bộ gõ tiếng Việt siêu nhẹ cho Wayland ```
 
-## Tính năng
+VI-IME là bộ gõ mới hoàn toàn trên nền linux, nó không dùng bảng VOWEL như fcit/ibus/unikey mà dùng thuật toán đại số ***NFD/C*** (Algebra Neutral Function Decompose/Compose - file [**glyph.rs**](doc/nfc.md) - chỉ còn 20 locs so với hàng nghìn locs của VOWEL) cho tất cả nước (pháp, việt) của microsoft và apple (đây chính là bộ gõ tối giản của bộ gõ chuẩn trên win$$ và appleè). Được thiết kế lại để siêu gọn nhẹ, khả năng nhận diện các app văn phòng vượt trội, tự sửa từ, bộ từ điển mini để hoạt động với **tiếng việt quốc ngữ** một cách thuận tiện và tự nhiên cho người Việt mà không cần phải cấu hình lằng nhằng.
+- I eat it as my dog food everyday
 
-- **3 kiểu gõ:** Telex, VNI, Tự do (chấp nhận cả Telex + VNI trong cùng từ)
-- **Smart mode:** tự nhận diện English (test, user, sway, windows…) — không biến tiếng Anh thành tiếng Việt
-- **Preedit-everywhere:** commit_string universal — hoạt động trên mọi app
-- **Live mode (NonPreedit):** cho terminal, hiện chữ ngay không gạch chân
-- **Per-app tự động:** terminal → NonPreedit, browser address bar → passthrough, password → off
-- **Evdev fallback tự động:** Chrome/Chromium X11, LibreOffice, OnlyOffice — gõ được mà không cần config
-- **Zero-CPU idle:** daemon ngủ hoàn toàn khi không gõ (blocking recv, không poll)
-- **Autocorrect:** tự sửa lỗi chính tả phổ biến *(mặc định bật)*
-- **Emoji shortcode:** gõ `:smile:` → 😄 *(mặc định bật)*
-- **Clipboard convert:** chuyển đổi Unicode clipboard *(mặc định bật)*
-- **Plugin system:** mở rộng cho gõ tắt, tiếng Hmong, 56 tiếng dân tộc Việt Nam
-- **Tray icon:** quản lý qua StatusNotifierItem (KDE/GNOME/Niri panel)
-- **Game mode:** auto-detect game → passthrough (Ctrl+Shift+G toggle)
+- Do thuật toán Algebra NFD/C rất mới (đây là bộ gõ đầu tiên implement nó cho linux) so với bảng tra vowel đã thực chiến 21 năm nay nên có thể sẽ có lỗi. nếu gặp lỗi hoặc có thể là lỗi, hãy giúp chạy ***vi-ime --doctor*** và lấy log tạo issue nhé.
 
-## Compositor hỗ trợ
+- notes: Hiện chỉ hỗ trợ ***wayland compositor***: niri, hyprland, sway, partial KDE plasma - steamdeck, không hỗ trợ Gnome
 
-| Compositor | Focus tracking | Ghi chú |
-|-----------|---------------|---------|
-| niri | ✅ IPC event-stream (có PID) | Đầy đủ nhất |
-| Sway | ✅ zwlr-foreign-toplevel | Không có PID |
-| Hyprland | ✅ zwlr-foreign-toplevel | Không có PID |
-| COSMIC | ✅ zwlr-foreign-toplevel | Không có PID |
-| river / labwc / Wayfire | ✅ zwlr-foreign-toplevel | Generic wlroots |
-| GNOME / KWin | ❌ | Dùng fcitx5/ibus thay thế |
+## Nhẹ đến mức nào?
+
+| | vi-im | fcitx5 | IBus |
+|---|---|---|---|
+| Kích thước | **~1.9MB** (1 binary) | ~30MB+ (core + engine + plugin) | ~150MB (core + engine + gtk/qt module) |
+| CPU lúc rảnh | **0%** — chặn trên 1 event, không poll | daemon nền liên tục | daemon nền liên tục |
+| Phụ thuộc | libwayland, libxkbcommon | Qt/GTK, D-Bus, nhiều module | GTK, D-Bus |
+
+Toàn bộ vòng lặp chính chỉ có **một** lệnh chặn (`rx.recv()`) — không timer,
+không polling. Không gõ = không tốn CPU, không tốn pin.
+
+## Engine: bỏ hẳn bảng tra từ kiểu Unikey
+
+Các bộ gõ cũ (Unikey, fcitx5-unikey...) dùng **bảng tra nguyên âm cứng**
+(vowel-cluster table) để quyết định dấu đặt ở đâu — đây chính là nguồn gốc
+của hầu hết lỗi kinh điển mà ai gõ tiếng Việt cũng từng gặp: **chữ nhảy lung
+tung khi gõ nhanh, dấu đặt sai nguyên âm, phụ âm bị dính/định sai vị trí**.
+
+vi-im bỏ hoàn toàn bảng tra đó, thay bằng một **đường xử lý toán học duy
+nhất trên Unicode NFD/NFC** (decompose → đặt dấu theo thuật toán ngữ âm →
+compose lại) dùng chung cho cả Telex, VNI lẫn chế độ **Tự do** (trộn cả hai
+kiểu trong cùng một từ). Mỗi phím gõ được re-parse lại toàn bộ âm tiết —
+không có state cũ để mà "nhảy chữ".
+
+Engine xử lý trong tầm **vài chục micro-giây mỗi phím** (đo thực tế: 17µs
+từ lúc nhận phím tới lúc chữ tiếng Việt hiện ra) — nhanh hơn cả độ trễ mắt
+người nhận biết được.
+
+## Tự nhận diện ngữ cảnh
+
+vi-im tự phát hiện app đang focus và đổi cấu hình phù hợp, không cần chỉnh tay:
+
+- **Terminal** (foot, kitty, alacritty, konsole, wezterm, ghostty...) → gõ thẳng,
+  không gạch chân (NonPreedit)
+- **Trình duyệt / trang web** (Facebook, Google Docs...) → chế độ phù hợp với
+  từng site. Address bar tự động passthrough tiếng Anh.
+- **Game** → tự tắt engine, passthrough phím thô, không gõ nhầm tiếng Việt
+  vào game
+- **Trường mật khẩu/PIN** → tắt hẳn engine, không log phím
+
+## App hỗ trợ đặc biệt
+
+| App | Cơ chế | Ghi chú |
+|-----|--------|---------|
+| **Terminal** (kitty, foot, alacritty, wezterm, ghostty, konsole, gnome-terminal, ptyxis, xfce4-terminal, tilix, blackbox, guake, yakuake, tilda, xterm, urxvt, st, terminator, terminology, sakura, termite, tabby, warp, hyper, cool-retro-term, rio, contour, wayst) | NonPreedit (gõ thẳng) | Live echo mode: phím thô forward trực tiếp, chữ hiện ngay không có gạch chân preedit. Không `delete_surrounding_text`. |
+| **Chrome / Chromium / Brave / Edge / Opera / Vivaldi / Zen** | NonPreedit trên niri | Tránh double-input trên niri (ChromiumNiriPlugin). Address bar tự động passthrough. |
+| **Firefox** | Preedit | Hỗ trợ `zwp_text_input_v3` đầy đủ. |
+| **VS Code / VS Codium / JetBrains** | Preedit / NonPreedit | Tùy chọn trong setting. |
+| **Discord / Slack / Telegram / Signal / Element** | NonPreedit trên niri | Electron app, tránh double-input. |
+| **LibreOffice / OpenOffice** | 🔧 evdev fallback (LIVE echo) | Không đi qua `zwp_input_method_v2` được (VCL/gtk3 bug: chỉ Activate 1 lần, không re-arm). Tự động grab keyboard + gõ qua virtual keyboard. Cần nhóm `input`. |
+| **OnlyOffice Desktop Editors** | 🔧 evdev fallback (LIVE echo) | Chạy XWayland (`QXcbConnection`) → không đến được text-input-v3. Tự động grab keyboard. Cần nhóm `input`. |
+| **WPS Office / SoftMaker** | 🔧 evdev fallback | Tương tự LibreOffice nếu không gửi text-input. |
+| **App X11/XWayland khác** | 🔧 evdev fallback (`--evdev`) | Bật toàn cục `vi-ime --evdev`. |
+| **App Electron thiếu flag** | Tự động detect | `/proc/PID` advisor: thấy Electron thiếu `--enable-wayland-ime` → log cảnh báo. |
+
+## 🔧 LibreOffice / OnlyOffice / XWayland apps
+
+Một số app **không đi qua `zwp_input_method_v2`** được:
+
+- **LibreOffice** (VCL/gtk3): `text_input.enable()` chỉ gọi MỘT LẦN lúc focus
+  đầu, không bao giờ gọi lại → chỉ Activate 1 lần rồi Deactivate vĩnh viễn.
+- **OnlyOffice Desktop Editors**: chạy XWayland → protocol Wayland không đến
+  được X11 client.
+- **App X11/XWayland khác**: tương tự.
+
+### Giải pháp: `evdev live-echo fallback`
+
+vi-im tự động phát hiện các app này và chuyển sang **evdev fallback**:
+- Grab trực tiếp bàn phím vật lý qua `/dev/input/event*`
+- Gõ chữ qua **virtual keyboard bền vững** (MỘT `zwp_virtual_keyboard_v1` trên
+  connection riêng) — không spawn `wtype` mỗi phím, không race keymap
+- Mỗi phím echo **trực tiếp** lên màn hình (live echo), không chờ word boundary
+- Phím modifier (Super/Ctrl/Alt/Shift) forward 1:1 qua uinput + `SYN_REPORT`
+- **Handshake:** nếu app bất ngờ Activate qua Wayland protocol → nhả grab,
+  protocol path xử lý
+
+### Yêu cầu
+
+```bash
+# Thêm user vào nhóm input (cần cho evdev grab)
+sudo usermod -aG input $USER
+# Đăng xuất / đăng nhập lại, hoặc:
+sg input -c vi-ime
+```
+
+AppImage tự xin quyền một lần qua `pkexec`/`sudo` ở lần chạy đầu.
 
 ## Cài đặt
 
-### 1. Gỡ bỏ IME cũ (BẮT BUỘC)
-
-vi-ime chiếm exclusive seat — không thể chạy song song fcitx5/ibus.
-
 ```bash
-# Gỡ hoàn toàn fcitx (bao gồm fcitx-udev)
-sudo apt remove --purge fcitx5 fcitx5-* fcitx-udev fcitx 2>/dev/null
-sudo pacman -Rns fcitx5 fcitx5-configtool fcitx5-gtk fcitx5-qt 2>/dev/null
-sudo dnf remove fcitx5* 2>/dev/null
-
-# Gỡ hoàn toàn ibus
-sudo apt remove --purge ibus ibus-* 2>/dev/null
-sudo pacman -Rns ibus 2>/dev/null
-sudo dnf remove ibus* 2>/dev/null
-
-# Xóa biến môi trường cũ (trong ~/.bashrc, ~/.profile, /etc/environment)
-# Xóa các dòng: GTK_IM_MODULE, QT_IM_MODULE, XMODIFIERS
+git clone https://github.com/nhanth87/vi-ime.git
+cd vi-ime
+./deploy/install.sh
 ```
 
-### 2. Thêm user vào group input/uinput
-
-Cần cho evdev fallback (LibreOffice, Chrome X11):
-
-```bash
-sudo usermod -aG input $USER
-# Tạo udev rule cho uinput (nếu chưa có)
-echo 'KERNEL=="uinput", GROUP="input", MODE="0660"' | sudo tee /etc/udev/rules.d/99-uinput.rules
-sudo udevadm control --reload-rules
-# Đăng xuất rồi đăng nhập lại để group có hiệu lực
-```
-
-### 3. Build & install
+Hoặc chạy AppImage không cần cài vào hệ thống:
 
 ```bash
 cargo build --release
-# Copy binary
-sudo cp target/release/vi-ime /usr/local/bin/
-sudo cp target/release/vi-settings /usr/local/bin/
+./scripts/build-appimage.sh
+./vi-im-x86_64.AppImage           # chạy daemon
+./vi-im-x86_64.AppImage settings  # mở cửa sổ Cài đặt
 ```
 
-### 4. Autostart
+## Điều khiển
 
 ```bash
-mkdir -p ~/.config/autostart
-cat > ~/.config/autostart/vi-ime.desktop << EOF
-[Desktop Entry]
-Name=vi-ime
-Exec=/usr/local/bin/vi-ime
-Type=Application
-X-GNOME-Autostart-enabled=true
-EOF
+vi-ime --switch    # đổi kiểu gõ: Telex ↔ VNI ↔ Tự do
+vi-ime --toggle    # bật/tắt
+vi-ime --mode      # đổi Preedit ↔ NonPreedit
+vi-ime --status    # xem trạng thái hiện tại
+vi-ime --doctor    # chẩn đoán cấu hình từng lớp
 ```
 
-## Sử dụng
+Hoặc dùng menu chuột phải trên tray icon — đổi gì cũng ghi thẳng vào
+`setting.conf`, daemon tự reload, không cần restart.
 
-```bash
-vi-ime              # Chạy daemon (tray icon)
-vi-ime --toggle     # Bật/tắt IME
-vi-ime --switch     # Chuyển Telex → VNI → Tự do
-vi-ime --mode       # Chuyển Preedit ↔ NonPreedit
-vi-ime --status     # Hiện trạng thái
-vi-ime --doctor     # Chẩn đoán hệ thống
-vi-ime --evdev      # Chế độ evdev thủ công (toàn bộ hệ thống)
-vi-ime --take-over  # Dừng IME đối thủ (fcitx5/ibus)
-```
+## Yêu cầu hệ thống
 
-### Phím tắt mặc định
-- Tray icon middle-click: bật/tắt IME
-- `Ctrl+Shift+G`: bật/tắt game mode
+- Compositor **wlroots**: niri, Hyprland, Sway, COSMIC (hỗ trợ
+  `zwp_input_method_v2` + `zwp_virtual_keyboard_v1`). GNOME/KDE chưa hỗ trợ
+  đủ protocol nên nằm ngoài phạm vi dự án.
+- Rust 1.80+, `libxkbcommon`, `libwayland-dev`, GTK3 + libappindicator3
+  (cho tray icon)
+- Cửa sổ Cài đặt cần Quickshell (module `Quickshell.Io`)
 
-## Xử lý sự cố
+## Giấy phép
 
-### Bị kẹt ở ô password (IME nuốt phím)
-
-Bộ gõ detect `ContentPurpose::Password` và tự tắt. Nếu app KHÔNG khai báo password field:
-
-```bash
-# Chuyển sang TTY khác
-Ctrl+Alt+F3
-# Kill vi-ime
-pkill vi-ime
-# Quay lại session
-Ctrl+Alt+F1
-```
-
-### Chrome/Chromium không gõ được tiếng Việt
-
-**Chrome chạy X11 (XWayland):** vi-ime tự detect và dùng evdev fallback (cần group `input`).
-
-**Chrome chạy Wayland native:** Thêm flags:
-```bash
-# ~/.config/chrome-flags.conf hoặc command line:
---ozone-platform=wayland --enable-wayland-ime
-```
-
-### LibreOffice/OnlyOffice
-
-Tự động dùng evdev fallback — chỉ cần user ở group `input`.
-
-### Electron apps (Discord, VS Code, Slack…)
-
-Thêm flags cho Wayland IME:
-```bash
---ozone-platform=wayland --enable-wayland-ime
-```
-
-## Cấu trúc dự án
-
-```
-crates/
-├── vi-daemon/         # Binary chính (IME engine + Wayland + evdev)
-│   └── src/
-│       ├── engine/    # Vietnamese engine (NFD algebra, table-free)
-│       ├── wayland/   # zwp_input_method_v2 + virtual keyboard
-│       ├── compositor/# Focus tracking (niri IPC, wlr-toplevel)
-│       ├── config/    # 4-layer config resolution
-│       ├── plugin/    # Plugin system (app plugins, abbreviation, languages)
-│       └── data/      # Vietnamese syllables + English dictionary
-└── vi-settings/       # QML settings UI (separate process)
-```
-
-## Thiết kế
-
-- **Unicode algebra (R14):** Không dùng bảng Wolfe/VOWEL_CLUSTERS. Mỗi chữ Việt = `base × quality × tone`, tính toán qua NFC/NFD chuẩn Unicode.
-- **One path (R14):** Một pipeline duy nhất cho Telex, VNI, và Tự do.
-- **Preedit-everywhere (R2/R7):** `commit_string` thay thế preedit — universal.
-- **Zero-CPU (R15):** Daemon ngủ hoàn toàn khi idle (no poll/timer).
-- **Plugin middleware (R1):** Mọi mở rộng qua `pre_process_key` / `post_process_action`.
-
-## License
-
-GPL-3.0-only
+**GNU GPL v3.0.** Xem [LICENSE](./LICENSE).
