@@ -165,6 +165,18 @@ impl ImeAppState {
         }
     }
 
+    /// Live-echo mode: gõ thẳng từng glyph qua viet_typer. An toàn trên MỌI
+    /// app từ khi viet_typer dùng keymap TĨNH 8-level (upload một lần, không
+    /// bao giờ đổi — Blink áp keymap trễ vô hạn định nên mọi biến thể keymap
+    /// động đều đã fail thực địa, xem viet_typer.rs). Khi không có virtual
+    /// keyboard (viet not ready), NonPreedit rơi về buffer âm thầm +
+    /// commit_string (apply_action). MỌI nhánh cần phân biệt live/preedit
+    /// PHẢI gọi hàm này — đừng inline lại predicate (R16 bài học 2: 6 chỗ
+    /// từng lệch nhau).
+    pub(crate) fn live_echo(&self) -> bool {
+        self.engine.mode() == ImeMode::NonPreedit && self.viet.ready()
+    }
+
     /// ms left until the idle auto-commit fires, or None when unarmed.
     /// Armed ONLY while a composition exists solely as preedit (non-live):
     /// live mode's text is already real, nothing to lose on a click.
@@ -172,7 +184,7 @@ impl ImeAppState {
         if !self.active || !self.engine.has_pending() {
             return None;
         }
-        if self.engine.mode() == ImeMode::NonPreedit && self.viet.ready() {
+        if self.live_echo() {
             return None;
         }
         let elapsed = self.last_key_at?.elapsed().as_millis();
@@ -271,7 +283,7 @@ impl ImeAppState {
         // as any other interruption; that trade already exists everywhere
         // else in this file and users haven't complained about IT.
         if self.engine.has_pending() {
-            let live = self.engine.mode() == ImeMode::NonPreedit && self.viet.ready();
+            let live = self.live_echo();
             info!("[RECONFIG] reconfigure mid-composition — drop, don't commit (R8)");
             self.engine.reset();
             self.reset_word_state();

@@ -17,8 +17,7 @@ impl ImeAppState {
     ///   raw form stays on screen (classic-IME behavior for an interrupted
     ///   word), we just stop tracking it.
     pub(crate) fn finalize_word(&mut self, im: &ZwpInputMethodV2) {
-        let live =
-            self.engine.mode() == crate::engine::ImeMode::NonPreedit && self.viet.ready();
+        let live = self.live_echo();
         if self.engine.has_pending() && !live {
             let text = self.engine.inner().preedit_output();
             im.commit_string(text);

@@ -31,7 +31,12 @@ enum LastMod {
     Tone(char),
     /// A merge rewrote `out[start..start+len]`; pressing `key` again
     /// (with nothing typed in between) reverts that span to `revert`.
-    Merge { start: usize, len: usize, key: char, revert: &'static [char] },
+    Merge {
+        start: usize,
+        len: usize,
+        key: char,
+        revert: &'static [char],
+    },
 }
 
 pub fn normalize(lower_keys: &[char], method: InputMethod) -> NormResult {
@@ -43,7 +48,13 @@ pub fn normalize(lower_keys: &[char], method: InputMethod) -> NormResult {
     let mut has_vowel = false;
 
     for &ch in lower_keys {
-        tracing::debug!("[NORMALIZE] processing ch='{}' has_vowel={} last={:?} out={:?}", ch, has_vowel, last, out);
+        tracing::debug!(
+            "[NORMALIZE] processing ch='{}' has_vowel={} last={:?} out={:?}",
+            ch,
+            has_vowel,
+            last,
+            out
+        );
         if undo {
             out.push(ch); // literal mode after an explicit undo
             continue;
@@ -52,14 +63,15 @@ pub fn normalize(lower_keys: &[char], method: InputMethod) -> NormResult {
         // ── Tone keys ──
         if let Some(t) = tone_for_key(ch, method, has_vowel) {
             if let LastMod::Tone(k) = last
-                && k == ch {
-                    // Same tone key twice → cancel tone, emit literal, go literal
-                    tone = Tone::Level;
-                    out.push(ch);
-                    undo = true;
-                    last = LastMod::None;
-                    continue;
-                }
+                && k == ch
+            {
+                // Same tone key twice → cancel tone, emit literal, go literal
+                tone = Tone::Level;
+                out.push(ch);
+                undo = true;
+                last = LastMod::None;
+                continue;
+            }
             tone = t;
             last = LastMod::Tone(ch);
             continue;
@@ -80,25 +92,37 @@ pub fn normalize(lower_keys: &[char], method: InputMethod) -> NormResult {
         // again undoes it: restore S, then k lands literally.
         //   dd→đ, +d  → "d"+"d" = dd      uw→ư, +w → "u"+"w" = uw
         //   uo+w→ươ, +w → "uo"+"w" = uow  w→ư, +w  → ""+"w"  = w
-        if let LastMod::Merge { start, len, key, revert } = last
-            && ch == key {
-                out.splice(start..start + len, revert.iter().copied());
-                out.push(ch);
-                undo = true;
-                last = LastMod::None;
-                continue;
-            }
+        if let LastMod::Merge {
+            start,
+            len,
+            key,
+            revert,
+        } = last
+            && ch == key
+        {
+            out.splice(start..start + len, revert.iter().copied());
+            out.push(ch);
+            undo = true;
+            last = LastMod::None;
+            continue;
+        }
 
         // ── Telex doubling: aa→â, ee→ê, oo→ô, dd→đ (Telex + Tự do) ──
         if matches!(method, InputMethod::Telex | InputMethod::Smart) {
             if let Some(merged) = doubling(ch)
-                && out.last() == Some(&ch) {
-                    let start = out.len() - 1;
-                    out[start] = merged;
-                    last = LastMod::Merge { start, len: 1, key: ch, revert: revert_single(ch) };
-                    has_vowel |= is_vowel_char(merged);
-                    continue;
-                }
+                && out.last() == Some(&ch)
+            {
+                let start = out.len() - 1;
+                out[start] = merged;
+                last = LastMod::Merge {
+                    start,
+                    len: 1,
+                    key: ch,
+                    revert: revert_single(ch),
+                };
+                has_vowel |= is_vowel_char(merged);
+                continue;
+            }
 
             // ── w-modifier: scan back for target (uow→ươ, thuongw→thương) ──
             if ch == 'w' {
@@ -109,11 +133,17 @@ pub fn normalize(lower_keys: &[char], method: InputMethod) -> NormResult {
                     if horned == 'ơ' && idx > 0 && out[idx - 1] == 'u' {
                         out[idx - 1] = 'ư';
                         last = LastMod::Merge {
-                            start: idx - 1, len: 2, key: 'w', revert: &['u', 'o'],
+                            start: idx - 1,
+                            len: 2,
+                            key: 'w',
+                            revert: &['u', 'o'],
                         };
                     } else {
                         last = LastMod::Merge {
-                            start: idx, len: 1, key: 'w', revert: revert_single_w(horned),
+                            start: idx,
+                            len: 1,
+                            key: 'w',
+                            revert: revert_single_w(horned),
                         };
                     }
                     has_vowel = true;
@@ -122,7 +152,10 @@ pub fn normalize(lower_keys: &[char], method: InputMethod) -> NormResult {
                 // Standalone w → ư (span S is empty: undo yields just "w")
                 out.push('ư');
                 last = LastMod::Merge {
-                    start: out.len() - 1, len: 1, key: 'w', revert: &[],
+                    start: out.len() - 1,
+                    len: 1,
+                    key: 'w',
+                    revert: &[],
                 };
                 has_vowel = true;
                 continue;
@@ -137,10 +170,18 @@ pub fn normalize(lower_keys: &[char], method: InputMethod) -> NormResult {
                 if modified == 'ơ' && idx > 0 && out[idx - 1] == 'u' {
                     out[idx - 1] = 'ư';
                     last = LastMod::Merge {
-                        start: idx - 1, len: 2, key: ch, revert: &['u', 'o'],
+                        start: idx - 1,
+                        len: 2,
+                        key: ch,
+                        revert: &['u', 'o'],
                     };
                 } else {
-                    last = LastMod::Merge { start: idx, len: 1, key: ch, revert };
+                    last = LastMod::Merge {
+                        start: idx,
+                        len: 1,
+                        key: ch,
+                        revert,
+                    };
                 }
                 continue;
             }
@@ -158,7 +199,11 @@ pub fn normalize(lower_keys: &[char], method: InputMethod) -> NormResult {
         }
     }
 
-    NormResult { chars: out, tone, undo }
+    NormResult {
+        chars: out,
+        tone,
+        undo,
+    }
 }
 
 fn telex_tone(ch: char) -> Option<Tone> {
@@ -185,7 +230,11 @@ fn vni_tone(ch: char) -> Option<Tone> {
 
 fn tone_for_key(ch: char, method: InputMethod, has_vowel: bool) -> Option<Tone> {
     if !has_vowel {
-        tracing::debug!("[NORMALIZE] tone_for_key: ch={:?} method={:?} has_vowel=false -> rejecting (no vowel yet)", ch, method);
+        tracing::debug!(
+            "[NORMALIZE] tone_for_key: ch={:?} method={:?} has_vowel=false -> rejecting (no vowel yet)",
+            ch,
+            method
+        );
         return None;
     }
     // Smart (Tự do): accept tones from BOTH VNI digits AND Telex modifiers.
@@ -196,7 +245,12 @@ fn tone_for_key(ch: char, method: InputMethod, has_vowel: bool) -> Option<Tone> 
         InputMethod::Vni => vni_tone(ch),
         InputMethod::Smart => telex_tone(ch).or_else(|| vni_tone(ch)),
     };
-    tracing::debug!("[NORMALIZE] tone_for_key: ch={:?} method={:?} has_vowel=true -> {:?}", ch, method, result);
+    tracing::debug!(
+        "[NORMALIZE] tone_for_key: ch={:?} method={:?} has_vowel=true -> {:?}",
+        ch,
+        method,
+        result
+    );
     result
 }
 
@@ -268,7 +322,13 @@ fn revert_single(ch: char) -> &'static [char] {
 
 /// Revert span for w-modified chars: NFD strips the mark → ASCII base.
 fn revert_single_w(ch: char) -> &'static [char] {
-    ascii_slice(glyph::base_of(ch))
+    let slice = ascii_slice(glyph::base_of(ch));
+    debug_assert!(
+        !slice.is_empty(),
+        "[NORMALIZE] revert_single_w('{ch}') got empty slice — unexpected base '{}'",
+        glyph::base_of(ch)
+    );
+    slice
 }
 
 fn revert_vni(ch: char) -> &'static [char] {
@@ -278,8 +338,11 @@ fn revert_vni(ch: char) -> &'static [char] {
 /// Map an ASCII letter to a &'static one-char slice (for revert spans).
 fn ascii_slice(ch: char) -> &'static [char] {
     match ch {
-        'a' => &['a'], 'e' => &['e'], 'o' => &['o'],
-        'u' => &['u'], 'd' => &['d'],
+        'a' => &['a'],
+        'e' => &['e'],
+        'o' => &['o'],
+        'u' => &['u'],
+        'd' => &['d'],
         _ => &[],
     }
 }

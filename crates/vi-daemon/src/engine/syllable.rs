@@ -22,9 +22,8 @@ use crate::engine::types::InputMethod;
 /// with backtracking — "gi"/"qu" fall back to "g"/"q" when the remainder
 /// leaves no vowel ("gì" = g+i, but "già" = gi+a). Category list, not a map.
 const INITIALS: &[&str] = &[
-    "ngh", "ng", "gh", "gi", "kh", "nh", "ph", "qu", "th", "tr", "ch",
-    "b", "c", "d", "đ", "g", "h", "k", "l", "m", "n", "p", "q", "r",
-    "s", "t", "v", "x",
+    "ngh", "ng", "gh", "gi", "kh", "nh", "ph", "qu", "th", "tr", "ch", "b", "c", "d", "đ", "g",
+    "h", "k", "l", "m", "n", "p", "q", "r", "s", "t", "v", "x",
 ];
 
 /// Vietnamese codas (âm cuối). Category list, not a vowel map.
@@ -36,7 +35,11 @@ const STYLE_DIPHTHONGS: &[&str] = &["oa", "oe", "uy"];
 
 /// Case pattern detected from the raw keys, preserved through rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CaseHint { Lower, Upper, Capitalized }
+pub enum CaseHint {
+    Lower,
+    Upper,
+    Capitalized,
+}
 
 /// What the engine should display/commit for the current word.
 pub enum Outcome {
@@ -112,9 +115,7 @@ pub fn process(raw_keys: &[char], method: InputMethod, style: ToneStyle) -> Outc
         // typing "đ" + space committed "dd". Real English words are never
         // a bare Vietnamese onset with a consumed modifier, so R9 restore
         // (windows→windows) is unaffected.
-        None if is_onset_only(&norm.chars) => {
-            Outcome::Rendered(render_literal(&norm.chars, case))
-        }
+        None if is_onset_only(&norm.chars) => Outcome::Rendered(render_literal(&norm.chars, case)),
         None => Outcome::Raw,
     }
 }
@@ -147,7 +148,11 @@ fn decompose(chars: &[char]) -> Option<Syllable> {
             Some(c) => c,
             None => continue,
         };
-        let syl = Syllable { onset, nucleus, coda };
+        let syl = Syllable {
+            onset,
+            nucleus,
+            coda,
+        };
         if is_valid(&syl) {
             return Some(syl);
         }
@@ -157,7 +162,9 @@ fn decompose(chars: &[char]) -> Option<Syllable> {
 
 /// All initials that prefix `chars`, longest first, then the empty initial.
 fn initial_candidates(chars: &[char]) -> impl Iterator<Item = &'static str> + '_ {
-    INITIALS.iter().copied()
+    INITIALS
+        .iter()
+        .copied()
         .filter(move |init| starts_with(chars, init))
         .chain(std::iter::once(""))
 }
@@ -253,7 +260,14 @@ fn render_literal(chars: &[char], case: CaseHint) -> String {
 fn toned(ch: char, tone: Tone) -> char {
     match glyph::tone_mark(tone) {
         None => ch,
-        Some(mark) => glyph::compose(ch, mark).unwrap_or(ch),
+        Some(mark) => glyph::compose(ch, mark).unwrap_or_else(|| {
+            debug_assert!(
+                false,
+                "[GLYPH] compose('{ch}', U+{:04X}) failed — non-vowel in nucleus?",
+                mark as u32
+            );
+            ch
+        }),
     }
 }
 
@@ -291,4 +305,3 @@ fn detect_case(raw_keys: &[char]) -> CaseHint {
         _ => CaseHint::Lower,
     }
 }
-

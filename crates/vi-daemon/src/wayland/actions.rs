@@ -7,10 +7,10 @@
 //! path that works on every Wayland app (terminal, browser, editor, game).
 //! Split from state.rs to keep both under the 300-line rule (R4).
 
+use crate::engine::{ImeMode, NonPreeditAction};
 use tracing::info;
 use wayland_client::Connection;
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_v2::ZwpInputMethodV2;
-use crate::engine::{ImeMode, NonPreeditAction};
 
 use crate::wayland::feedback::{ImeFeedback, PipelineStage};
 use crate::wayland::state::{FieldSensitivity, ImeAppState};
@@ -21,7 +21,10 @@ const MODIFIER_KEYS: [u32; 9] = [29, 42, 54, 56, 58, 97, 100, 125, 126];
 
 /// Engine-stage sample (helper keeps the call site short).
 fn vi_engine_stage(us: u32) -> ImeFeedback {
-    ImeFeedback::StageSample { stage: PipelineStage::Engine, us }
+    ImeFeedback::StageSample {
+        stage: PipelineStage::Engine,
+        us,
+    }
 }
 
 impl ImeAppState {
@@ -29,7 +32,9 @@ impl ImeAppState {
     /// sequences (the buffer holds keys while `waiting_for_done`).
     pub(crate) fn process_key(&mut self, keycode: u32, _conn: &Connection) {
         self.maybe_reconfigure();
-        let Some(im) = self.input_method.clone() else { return };
+        let Some(im) = self.input_method.clone() else {
+            return;
+        };
 
         // Physical-click guard (evdev watcher): a mouse click moved the
         // cursor but this app sends NO protocol signal for it. Drop the
@@ -105,6 +110,18 @@ impl ImeAppState {
         if keycode == 14 {
             // 14 = evdev KEY_BACKSPACE
             crate::godmod::log_backspace();
+            // ── Backspace during composition: route through engine ──
+            // When the engine is composing a word, backspace must shrink the
+            // raw_keys buffer (engine.push_key '\u{0008}') rather than
+            // finalize + passthrough, which would commit partial text.
+            if self.engine.has_pending() {
+                let action = self.engine.push_key('\u{0008}');
+                self.apply_action(action, keycode, &im);
+                return;
+            }
+            // No pending composition → pass through to app.
+            self.vk.press(keycode);
+            return;
         }
 
         let Some(ch) = self.xkb.keycode_to_char(keycode) else {
@@ -186,7 +203,12 @@ impl ImeAppState {
         keycode: u32,
         im: &ZwpInputMethodV2,
     ) {
-        let live = self.engine.mode() == ImeMode::NonPreedit && self.viet.ready();
+        let live = self.live_echo();
+        // NonPreedit ngoài terminal = buffer ÂM THẦM (R2): không live echo
+        // (Blink áp keymap trễ — repro 2026-07-10), không set_preedit
+        // (user chọn NonPreedit chính vì không muốn gạch chân). Từ hiện
+        // nguyên khối qua commit_string ở word boundary.
+        let silent = !live && self.engine.mode() == ImeMode::NonPreedit;
 
         match action {
             NonPreeditAction::Buffer | NonPreeditAction::UpdatePreedit(_) => {
@@ -197,7 +219,7 @@ impl ImeAppState {
                     // char shorter.
                     let target = self.engine.inner().preedit_output();
                     self.sync_shown(&target);
-                } else {
+                } else if !silent {
                     let s = self.engine.inner().preedit_string().to_string();
                     self.set_preedit(im, &s);
                 }
@@ -222,7 +244,8 @@ impl ImeAppState {
                 if live {
                     // Word fully deleted by backspace — remove what we own.
                     self.sync_shown("");
-                } else {
+                } else if !silent {
+                    // Silent buffer never showed anything — nothing to clear.
                     self.set_preedit(im, "");
                 }
             }
@@ -247,10 +270,8 @@ impl ImeAppState {
             return;
         }
         info!("[CLICK] chuột click khi đang gõ dở — drop composition NGAY (R8)");
-        let live = self.engine.mode() == ImeMode::NonPreedit && self.viet.ready();
-        if !live
-            && let Some(im) = self.input_method.clone()
-        {
+        let live = self.live_echo();
+        if !live && let Some(im) = self.input_method.clone() {
             self.set_preedit(&im, "");
         }
         self.engine.reset();
@@ -280,14 +301,25 @@ impl ImeAppState {
             self.shown_word,
             shown.len() - common
         );
-        // Pacing only for the app family that needs it (VCL/gtk3 swallows
-        // BS+char bursts whole, probe-verified) — terminals stay burst-fast.
-        let paced = self.current_app_id.as_deref().is_some_and(|id| {
+        // Pacing DEFAULT-ON; only known burst-safe terminals go fast.
+        // Regression 2026-07-10 (repro: uinput rollover 20ms/key vào Electron
+        // live-mode): whitelist "chỉ libreoffice cần pace" làm Electron/
+        // Chromium mất ký tự có keycode MỚI trong keymap vừa upload —
+        // client áp keymap trễ một nhịp, tap giải mã theo keymap CŨ →
+        // "quà"→"q", "kẹ"→"k" (đúng lớp lỗi R16 đã cảnh báo: mọi biến thể
+        // ít-pace-hơn đều fail thực địa). app_id None → paced (phía an toàn).
+        let paced = !self.current_app_id.as_deref().is_some_and(|id| {
             let id = id.to_lowercase();
-            id.starts_with("libreoffice") || id.starts_with("soffice")
+            crate::compositor::KNOWN_TERMINALS.contains(&id.as_str())
         });
-        if !self.viet.backspace_then_type(shown.len() - common, &suffix, paced) {
-            tracing::warn!("[VIET-TYPER] không gõ được (bs={}, \"{suffix}\") — giữ nguyên", shown.len() - common);
+        if !self
+            .viet
+            .backspace_then_type(shown.len() - common, &suffix, paced)
+        {
+            tracing::warn!(
+                "[VIET-TYPER] không gõ được (bs={}, \"{suffix}\") — giữ nguyên",
+                shown.len() - common
+            );
         }
         self.shown_word.clear();
         self.shown_word.push_str(target);

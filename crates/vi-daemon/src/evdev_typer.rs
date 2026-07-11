@@ -136,7 +136,7 @@ impl EvdevTyper {
                 warn!("[EVDEV-TYPER] >{MAX_UNIQUE} ký tự khác nhau trong một lần gõ — bỏ qua");
                 return false;
             }
-            assigned.push((ch, FIRST_CODE + assigned.len() as u32));
+            assigned.push((ch, crate::wayland::viet_typer::SAFE_CODES[assigned.len()]));
         }
 
         let keymap = build_keymap(&assigned);
@@ -145,6 +145,12 @@ impl EvdevTyper {
             return false;
         };
         self.vk.keymap(KEYMAP_FORMAT_XKB_V1, fd.as_fd(), size);
+        // Keymap-apply beat (cùng lớp lỗi repro 2026-07-10 ở viet_typer):
+        // client áp keymap trễ một nhịp → tap đầu tiên (khi không có BS đi
+        // trước) giải mã theo keymap cũ và biến mất. Typer này chỉ nhắm
+        // legacy app (VCL/Qt-XWayland) nên luôn pace.
+        let _ = self.queue.flush();
+        std::thread::sleep(std::time::Duration::from_millis(15));
 
         let mut t = self.start.elapsed().as_millis() as u32;
         let mut tap = |vk: &ZwpVirtualKeyboardV1, code: u32| {

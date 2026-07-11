@@ -159,7 +159,7 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                     // "nhảy chữ theo con trỏ" symptom this block exists to
                     // prevent (confirmed live on kitty, 2026-07-10 — a first
                     // cut of the app-switch fix made this same mistake).
-                    let live = state.engine.mode() == ImeMode::NonPreedit && state.viet.ready();
+                    let live = state.live_echo();
                     if !live && let Some(im) = state.input_method.clone() {
                         state.set_preedit(&im, "");
                     }
