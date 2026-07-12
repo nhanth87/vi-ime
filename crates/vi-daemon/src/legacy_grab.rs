@@ -75,6 +75,22 @@ pub fn is_legacy_app(app_id: &str) -> bool {
     LEGACY_APP_PREFIXES.iter().any(|p| id.starts_with(p))
 }
 
+/// app_id prefixes whose native virtual-keyboard typer is confirmed broken
+/// (see `evdev_inject::Typer::detect`'s `force_xdotool` doc for the
+/// mechanism — field bug 2026-07-12, ONLYOFFICE embeds a CEF child surface
+/// that drops the synthetic Mod3/Mod5 modifier state our static keymap
+/// relies on). Kept separate from `LEGACY_APP_PREFIXES`/
+/// `XWAYLAND_FALLBACK_PREFIXES`: this only decides WHICH typer to use once
+/// the evdev fallback is already engaged, not whether to engage it.
+const INJECTOR_TYPER_PREFIXES: &[&str] = &["onlyoffice"];
+
+/// Does this app_id need the `xdotool`/`wtype` injector instead of the
+/// native virtual-keyboard typer, once the evdev fallback engages for it?
+pub fn needs_injector_typer(app_id: &str) -> bool {
+    let id = app_id.to_lowercase();
+    INJECTOR_TYPER_PREFIXES.iter().any(|p| id.starts_with(p))
+}
+
 /// Does this app_id need evdev fallback ONLY when running under XWayland?
 /// Called when the app has NOT sent Activate within the probe timeout,
 /// confirming it's running X11 mode (no zwp_text_input_v3).
@@ -92,13 +108,21 @@ pub struct LegacyGrab {
 }
 
 impl LegacyGrab {
-    pub fn start(method: InputMethod, runtime: Arc<RuntimeConfig>) -> Self {
+    /// `force_xdotool_typer`: see `needs_injector_typer` — pass the verdict
+    /// for the app being engaged (computed by the caller from its app_id).
+    pub fn start(
+        method: InputMethod,
+        runtime: Arc<RuntimeConfig>,
+        force_xdotool_typer: bool,
+    ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
         info!("[LEGACY-GRAB] engaging evdev fallback (app outside zwp_input_method_v2 reach)");
         let handle = std::thread::Builder::new()
             .name("vi-legacy-grab".into())
-            .spawn(move || evdev_mode::run_scoped(method, &stop2, Some(runtime)))
+            .spawn(move || {
+                evdev_mode::run_scoped(method, &stop2, Some(runtime), force_xdotool_typer)
+            })
             .ok();
         Self { stop, handle }
     }

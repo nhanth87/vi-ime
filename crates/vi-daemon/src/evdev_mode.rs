@@ -192,8 +192,16 @@ fn run_loop(
 /// Scoped variant for the automatic per-app fallback (see `legacy_grab.rs`):
 /// runs ALONGSIDE the normal Wayland IM thread, only for the apps that
 /// protocol can't reach, released the instant focus leaves the app.
-pub fn run_scoped(method: InputMethod, stop: &AtomicBool, runtime: Option<Arc<RuntimeConfig>>) {
-    let Some(typer) = Typer::detect() else {
+///
+/// `force_xdotool_typer`: see `legacy_grab::needs_injector_typer` — the
+/// caller resolves this from the focused app's app_id.
+pub fn run_scoped(
+    method: InputMethod,
+    stop: &AtomicBool,
+    runtime: Option<Arc<RuntimeConfig>>,
+    force_xdotool_typer: bool,
+) {
+    let Some(typer) = Typer::detect(force_xdotool_typer) else {
         warn!("evdev fallback: no Unicode typer (no virtual-keyboard support, no `xdotool`)");
         return;
     };
@@ -215,7 +223,7 @@ pub fn run_scoped(method: InputMethod, stop: &AtomicBool, runtime: Option<Arc<Ru
 /// Entry point for `--evdev`. Blocks forever (or until error). Never returns Ok
 /// in normal operation; returns Err on a fatal setup problem so main can log it.
 pub fn run(method: InputMethod) -> Result<(), Box<dyn std::error::Error>> {
-    let typer = Typer::detect().ok_or(
+    let typer = Typer::detect(false).ok_or(
         "no Unicode typer — compositor lacks zwp_virtual_keyboard_v1 and `xdotool` is missing",
     )?;
     static NEVER_STOP: AtomicBool = AtomicBool::new(false);

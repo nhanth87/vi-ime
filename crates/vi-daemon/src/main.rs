@@ -364,9 +364,13 @@ fn main() {
                             .is_some_and(legacy_grab::is_legacy_app);
                     match (wants_legacy, legacy_grab.is_some()) {
                         (true, false) => {
+                            let force_xdotool = current_app_id
+                                .as_deref()
+                                .is_some_and(legacy_grab::needs_injector_typer);
                             legacy_grab = Some(legacy_grab::LegacyGrab::start(
                                 engine_input_method(config_manager.setting().input_method),
                                 Arc::clone(&runtime),
+                                force_xdotool,
                             ));
                         }
                         (false, true) => legacy_grab = None,
@@ -486,6 +490,7 @@ fn main() {
                     legacy_grab = Some(legacy_grab::LegacyGrab::start(
                         engine_input_method(config_manager.setting().input_method),
                         Arc::clone(&runtime),
+                        legacy_grab::needs_injector_typer(&app_id),
                     ));
                 }
             }
