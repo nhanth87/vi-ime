@@ -5,6 +5,10 @@ Copyright (c) 2024-2026 vi-im contributors
 
 # `VI-IME — Bộ gõ tiếng Việt siêu nhẹ cho Wayland`
 
+### ⬇️ [Tải bản mới nhất (AppImage)](https://github.com/nhanth87/vi-ime/releases)
+
+> Tải file `vi-im-x86_64.AppImage` ở trang [Releases](https://github.com/nhanth87/vi-ime/releases), `chmod +x` rồi chạy — một file duy nhất, không cần cài đặt.
+
 VI-IME là bộ gõ mới hoàn toàn trên nền linux, nó không dùng bảng VOWEL như fcit/ibus/unikey mà dùng **thuật toán đại số *NFD/C*** (*Algebra Normalization Form Decomposition/Composition* - file [**glyph.rs**](doc/nfc.md) - chỉ còn 20 locs so với hàng nghìn locs của VOWEL),  đây chính là bộ gõ tối giản của bộ gõ  chuẩn trên `win$ và appleè`. Được thiết kế lại  siêu gọn nhẹ, khả năng nhận diện các app văn phòng vượt trội, bộ từ điển mini tự sửa lỗi,  mục đính là perfect hoạt động với **tiếng việt quốc ngữ** một cách thuận tiện và tự nhiên cho người Việt mà không cần phải cấu hình lằng nhằng. Đặc biệt là cho dân VP đang di chuyển từ win$
 
 - NFD/C là tiêu chuẩn của Unicode, còn **thuật toán Algebra NFD/C thì rất mới** (vi-ime là bộ gõ đầu tiên implement nó cho linux) so với bảng tra vowel đã thực chiến 21 năm có thể sẽ có lỗi. nếu gặp lỗi hoặc có thể là lỗi, hãy giúp chạy  `vi-ime --doctor`  và lấy log tạo issue nhé.
