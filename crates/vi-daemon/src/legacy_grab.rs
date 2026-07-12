@@ -46,6 +46,16 @@ const LEGACY_APP_PREFIXES: &[&str] = &[
 /// zwp_text_input_v3 just fine — evdev fallback would CONFLICT.
 /// Detection: the compositor reports these as XWayland surfaces (no native
 /// Wayland text-input activation within the timeout window).
+///
+/// ⚠️ Chromium browsers MUST stay here (field-proven 2026-07-12): the Wayland
+/// live-echo path (viet_typer backspace-diff) is unreliable in Chrome because
+/// Blink applies wl_keyboard.keymap with unbounded lag — a BackSpace tap
+/// (keycode 2 = SAFE_CODES[0]) decodes as '1' under the OLD keymap, so `test`
+/// typed live renders "teee1t". The evdev path uses a different, reliable
+/// injection and is what makes Chrome page typing work. Trade-off (accepted
+/// baseline): the address bar composes Vietnamese (evdev has no ContentType),
+/// which garbles URLs / shows "meèo" — a separate omnibox issue needing a
+/// signal Chrome doesn't send.
 const XWAYLAND_FALLBACK_PREFIXES: &[&str] = &[
     "google-chrome",
     "google-chrome-stable",

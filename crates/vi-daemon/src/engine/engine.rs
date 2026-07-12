@@ -121,10 +121,31 @@ impl Engine {
         }
     }
 
+    /// Conservative Smart-mode commit for the NonPreedit path (all real apps).
+    /// Restores raw keys ONLY when they form a KNOWN English word (test→test,
+    /// user→user). Does NOT use the `is_viet_syllable` fallback that
+    /// `smart_commit_output` applies — that fallback strips ALL marks via
+    /// `base_of` (ấ→a, mất→mat) and restores anything not matching the exact
+    /// single-syllable list, which wrongly mangles valid multi-char Vietnamese
+    /// ("ấ", "mất" → raw "aas"/"maas"; field bug 2026-07-12). Dictionary
+    /// English-restore is the safe, targeted part of R9.
+    pub fn smart_commit_english_only(&self) -> String {
+        if self.method != InputMethod::Smart || !self.auto_detect {
+            return self.preedit_output();
+        }
+        if !self.last_valid {
+            return self.preedit_output();
+        }
+        if super::viet_dict::is_english_word(&self.raw_keys) {
+            return self.raw_keys.iter().collect();
+        }
+        self.preedit_output()
+    }
+
     /// Smart mode commit: if the rendered word looks Vietnamese but the raw
     /// keys form a known English/programming word, restore raw keys instead.
     /// This extends R9 to handle false positives like test→tét, user→ủe.
-    fn smart_commit_output(&self) -> String {
+    pub fn smart_commit_output(&self) -> String {
         use super::viet_dict;
         // Only applies to Smart mode with auto_detect enabled
         if self.method != InputMethod::Smart || !self.auto_detect {

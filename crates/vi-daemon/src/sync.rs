@@ -40,6 +40,7 @@ pub fn to_snapshot(eff: &EffectiveConfig) -> RuntimeSnapshot {
             crate::config::ToneStyle::Classic => crate::engine::ToneStyle::Classic,
             crate::config::ToneStyle::Modern => crate::engine::ToneStyle::Modern,
         },
+        emoji: eff.emoji,
         mode_from_user: false,
         game_mode: false,
         generation: 0,

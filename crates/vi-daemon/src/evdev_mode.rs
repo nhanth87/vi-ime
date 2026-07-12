@@ -118,8 +118,30 @@ fn run_loop(
     runtime: Option<Arc<RuntimeConfig>>,
 ) {
     let mut composer = Composer::new(method, typer);
+    // Emoji expansion follows the same runtime config as the Wayland path.
+    // NOTE: on the NATIVE virtual-keyboard typer emoji glyphs can't be
+    // injected (keymap is ASCII+Vietnamese) — only the wtype/xdotool injector
+    // path renders them; see evdev_compose::apply CommitEmoji.
+    if let Some(rt) = &runtime {
+        composer.set_emoji_enabled(rt.snapshot().emoji);
+    }
     let mut last_clicks = runtime.as_ref().map(|rt| rt.clicks()).unwrap_or(0);
+    // True khi thoát vì IME bị TẮT (không phải vì focus rời). Quyết định có
+    // settle nốt từ đang soạn hay không: tắt bộ gõ = DROP, tuyệt đối không phun
+    // nốt tiếng Việt ra (field bug 2026-07-12: tắt giữa từ vẫn ra chữ).
+    let mut disabled_exit = false;
     'outer: while !stop.load(Ordering::Relaxed) {
+        // IME tắt = mệnh lệnh tối cao (defense-in-depth, tầng 2): main.rs
+        // drop legacy_grab khi enabled→false, nhưng nếu vì lý do gì grab còn
+        // sống, composer PHẢI tự thoát → ungrab bàn phím vật lý → phím về
+        // thẳng app. "Tắt bộ gõ" không bao giờ được compose (field 2026-07-12).
+        if let Some(rt) = &runtime {
+            if !rt.snapshot().enabled {
+                info!("[EVDEV] IME disabled — ungrab, trả bàn phím cho app");
+                disabled_exit = true;
+                break 'outer;
+            }
+        }
         // Physical-click guard (same click_watch counter the Wayland path
         // uses): a click moved the cursor — drop the word tracking before
         // the next key diffs at the wrong position (R8/R17-C).
@@ -156,11 +178,14 @@ fn run_loop(
             }
         }
     }
-    // The half-typed word is already echoed on screen — just settle it,
-    // release any modifiers the mirror still holds (the real release lands
-    // after ungrab and would never reach it → stuck Super/Ctrl), then
-    // keyboards drop (ungrab) and the uinput mirror is torn down.
-    composer.finish_word();
+    // Settle the half-typed word — EXCEPT when exiting because the IME was
+    // disabled: "tắt bộ gõ" is supreme (R18), it must never emit Vietnamese,
+    // not even the word in progress. On a focus-leave exit we DO settle (the
+    // rendered form is already on screen; finish_word just stops tracking).
+    // Either way release held modifiers so the mirror never pins Super/Ctrl.
+    if !disabled_exit {
+        composer.finish_word();
+    }
     composer.release_mods(&mut ui);
 }
 

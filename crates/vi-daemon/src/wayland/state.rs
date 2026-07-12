@@ -174,6 +174,10 @@ impl ImeAppState {
     /// PHẢI gọi hàm này — đừng inline lại predicate (R16 bài học 2: 6 chỗ
     /// từng lệch nhau).
     pub(crate) fn live_echo(&self) -> bool {
+        // Live-echo (backspace-diff qua viet_typer) cho mọi app khi
+        // NonPreedit + viet.ready() (commit 1e80bed, keymap tĩnh 8-level).
+        // Field Url/Secure/NumericRaw KHÔNG bao giờ tới đây — process_key
+        // (actions.rs) đã raw-passthrough + return trước khi gọi apply_action.
         self.engine.mode() == ImeMode::NonPreedit && self.viet.ready()
     }
 

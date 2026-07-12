@@ -61,6 +61,11 @@ impl Composer {
         }
     }
 
+    /// Enable emoji shortcode/emoticon expansion on the composer's engine.
+    pub(crate) fn set_emoji_enabled(&mut self, enabled: bool) {
+        self.engine.set_emoji_enabled(enabled);
+    }
+
     /// One key event from a grabbed keyboard (value: 0=release 1=press 2=repeat).
     pub(crate) fn handle(&mut self, ui: &mut VirtualDevice, code: KeyCode, value: i32) {
         // Track shift for ASCII casing; forward it (apps need modifiers).
@@ -148,6 +153,18 @@ impl Composer {
                 self.common_bytes = 0;
                 tap(ui, code);
             }
+            NonPreeditAction::CommitEmoji { text, .. } => {
+                // Emoji/flushed-literal on the evdev path. Capture was silent
+                // (nothing on screen) and fires only when no VN word is pending
+                // → no diff, just type `text`. Do NOT replay `code` (trigger is
+                // folded into `text`). NOTE: the NATIVE virtual-keyboard typer's
+                // keymap covers only ASCII+Vietnamese, so emoji glyphs type only
+                // through the wtype/xdotool injector; on the native path a
+                // multi-byte emoji is dropped (documented limit — legacy apps).
+                self.typer.backspace_then_type(0, &text, true);
+                self.shown.clear();
+                self.common_bytes = 0;
+            }
             NonPreeditAction::ClearPreedit => {
                 self.sync_shown("", true);
                 self.common_bytes = 0;
@@ -201,7 +218,10 @@ impl Composer {
     /// so just forget it (mirrors `finalize_word` in the Wayland live path).
     pub(crate) fn finish_word(&mut self) {
         if self.engine.has_pending() {
-            let target = self.engine.inner().preedit_output();
+            // R9 English-restore at word end: `test`→`test`, not `tét`.
+            // Mirrors the NonPreeditEngine boundary sites (fast_engine.rs);
+            // english_only never second-guesses valid Vietnamese (`ấ`).
+            let target = self.engine.inner().smart_commit_english_only();
             // sync=true: word ending → roundtrip (next key is cross-channel).
             self.sync_shown(&target, true);
         }

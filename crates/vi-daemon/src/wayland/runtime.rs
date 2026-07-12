@@ -27,6 +27,7 @@ pub struct RuntimeConfig {
     free_tone: AtomicBool,
     auto_detect: AtomicBool,
     tone_style: AtomicU8,
+    emoji: AtomicBool,
     /// True when `mode` came from an explicit user rule (setting.conf app/
     /// site entry). ContentType-Terminal must not override a user choice.
     mode_from_user: AtomicBool,
@@ -60,6 +61,7 @@ pub struct RuntimeSnapshot {
     pub free_tone: bool,
     pub auto_detect: bool,
     pub tone_style: ToneStyle,
+    pub emoji: bool,
     /// The ime_mode was an explicit user (setting.conf) choice.
     pub mode_from_user: bool,
     /// Game mode active: raw key passthrough, no IME processing.
@@ -77,6 +79,7 @@ impl Default for RuntimeSnapshot {
             free_tone: true,
             auto_detect: true,
             tone_style: ToneStyle::Classic,
+            emoji: true,
             mode_from_user: false,
             game_mode: false,
             generation: 0,
@@ -153,6 +156,7 @@ impl RuntimeConfig {
         self.free_tone.store(snap.free_tone, Ordering::Relaxed);
         self.auto_detect.store(snap.auto_detect, Ordering::Relaxed);
         self.tone_style.store(encode_tone_style(snap.tone_style), Ordering::Relaxed);
+        self.emoji.store(snap.emoji, Ordering::Relaxed);
         self.mode_from_user.store(snap.mode_from_user, Ordering::Relaxed);
         self.game_mode.store(snap.game_mode, Ordering::Relaxed);
         self.generation.fetch_add(1, Ordering::Release);
@@ -170,6 +174,7 @@ impl RuntimeConfig {
             free_tone: self.free_tone.load(Ordering::Relaxed),
             auto_detect: self.auto_detect.load(Ordering::Relaxed),
             tone_style: decode_tone_style(self.tone_style.load(Ordering::Relaxed)),
+            emoji: self.emoji.load(Ordering::Relaxed),
             mode_from_user: self.mode_from_user.load(Ordering::Relaxed),
             game_mode: self.game_mode.load(Ordering::Relaxed),
             generation,
@@ -224,6 +229,7 @@ impl RuntimeConfig {
 /// without a Wayland connection.
 pub fn apply_snapshot(engine: &mut NonPreeditEngine, snap: &RuntimeSnapshot) {
     engine.set_mode(snap.mode);
+    engine.set_emoji_enabled(snap.emoji);
     let inner = engine.inner_mut();
     inner.set_method(snap.method);
     inner.set_output_mode(snap.output);
