@@ -52,6 +52,14 @@ pub enum NonPreeditAction {
         backspace_count: usize,
         text: String,
     },
+    /// Like CommitWithBackspace but the triggering key is NOT replayed after
+    /// the commit (used for emoji expansion: `:)` → 🙂, the closing key is
+    /// consumed, not echoed). `backspace_count` removes the already-shown
+    /// opener chars (e.g. the ":" of ":)") before writing `text`.
+    CommitEmoji {
+        backspace_count: usize,
+        text: String,
+    },
     /// Update the preedit string (used in Hybrid/Preedit mode).
     UpdatePreedit(String),
     /// Keep buffering — no Wayland action needed (NonPreedit mode).

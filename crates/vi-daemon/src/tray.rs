@@ -276,24 +276,12 @@ fn build_menu(
 
     menu.append(&SeparatorMenuItem::new());
 
-    // ── Tính năng: Autocorrect / Emoji / Clipboard Convert ──
+    // ── Tính năng: Emoji / Clipboard Convert ──
+    // NOTE: "Tự sửa lỗi chính tả" (autocorrect) toggle removed — nó là no-op
+    // (không consumer nào đọc `autocorrect`; English-restore thực chất do
+    // `auto_detect_lang`/Smart mode lái). Field giữ lại trong config cho
+    // tương thích, chỉ ẩn menu để user không tưởng nó đang chạy (2026-07-12).
     {
-        let autocorrect_item = CheckMenuItem::with_label("✅ Tự sửa lỗi chính tả");
-        if let Ok(cm) = ConfigManager::new(Some(config_path.clone())) {
-            autocorrect_item.set_active(cm.setting().autocorrect);
-        }
-        {
-            let config_path = config_path.clone();
-            autocorrect_item.connect_toggled(move |it| {
-                if let Ok(mut cm) = ConfigManager::new(Some(config_path.clone())) {
-                    cm.setting_mut().autocorrect = it.is_active();
-                    let _ = cm.save();
-                    info!("[TRAY] autocorrect → {}", it.is_active());
-                }
-            });
-        }
-        menu.append(&autocorrect_item);
-
         let emoji_item = CheckMenuItem::with_label("😀 Emoji (shortcode)");
         if let Ok(cm) = ConfigManager::new(Some(config_path.clone())) {
             emoji_item.set_active(cm.setting().emoji);
@@ -310,20 +298,27 @@ fn build_menu(
         }
         menu.append(&emoji_item);
 
-        let clipboard_item = CheckMenuItem::with_label("📋 Chuyển đổi clipboard");
-        if let Ok(cm) = ConfigManager::new(Some(config_path.clone())) {
-            clipboard_item.set_active(cm.setting().clipboard_convert);
-        }
-        {
-            let config_path = config_path.clone();
-            clipboard_item.connect_toggled(move |it| {
-                if let Ok(mut cm) = ConfigManager::new(Some(config_path.clone())) {
-                    cm.setting_mut().clipboard_convert = it.is_active();
-                    let _ = cm.save();
-                    info!("[TRAY] clipboard_convert → {}", it.is_active());
+        // Clipboard convert is an ACTION, not a persistent mode: clicking it
+        // reads the clipboard, normalizes Vietnamese to precomposed NFC, and
+        // writes it back (meaning-preserving; ASCII/URLs/code untouched).
+        // Runs on the GTK thread where a GDK display/clipboard is available.
+        let clipboard_item = MenuItem::with_label("📋 Chuẩn hoá clipboard (NFC)");
+        clipboard_item.connect_activate(|_| {
+            let clipboard = gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD);
+            clipboard.request_text(|clipboard, text| {
+                let Some(text) = text else {
+                    info!("[TRAY] clipboard trống hoặc không phải text — bỏ qua");
+                    return;
+                };
+                match crate::clipboard_convert::to_nfc(text) {
+                    Some(nfc) => {
+                        clipboard.set_text(&nfc);
+                        info!("[TRAY] clipboard chuẩn hoá NFC ({} ký tự)", nfc.chars().count());
+                    }
+                    None => info!("[TRAY] clipboard đã là NFC — không đổi"),
                 }
             });
-        }
+        });
         menu.append(&clipboard_item);
     }
 

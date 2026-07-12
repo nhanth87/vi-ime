@@ -52,7 +52,10 @@ pub(crate) const FIRST_CODE: u32 = SAFE_CODES[0];
 pub(crate) const MAX_UNIQUE: usize = 28;
 
 /// Modifier masks per level (xkb real mods: Shift=0x1, Mod3=0x20, Mod5=0x80).
-const LEVEL_MASKS: [u32; 8] = [0, 0x1, 0x80, 0x81, 0x20, 0x21, 0xA0, 0xA1];
+/// pub(crate): the evdev fallback typer reuses the SAME static keymap +
+/// level-selection scheme (evdev_typer.rs) so LibreOffice/VCL gets the same
+/// lag-proof "upload once, pick level per tap" path as the Wayland live path.
+pub(crate) const LEVEL_MASKS: [u32; 8] = [0, 0x1, 0x80, 0x81, 0x20, 0x21, 0xA0, 0xA1];
 
 
 /// Generate a minimal keymap for this word's unique chars. `'\u{0008}'`
@@ -140,7 +143,7 @@ fn char_inventory() -> Vec<char> {
 /// Build the ONE static keymap: key <K2> = BackSpace (ONE_LEVEL), the rest
 /// of SAFE_CODES carry 8 chars each via type VIIM. Returns (keymap_text,
 /// char → (evdev code, level 0-based)).
-fn build_static_keymap() -> (String, HashMap<char, (u32, u8)>) {
+pub(crate) fn build_static_keymap() -> (String, HashMap<char, (u32, u8)>) {
     let inv = char_inventory();
     let mut map: HashMap<char, (u32, u8)> = HashMap::new();
     map.insert('\u{0008}', (SAFE_CODES[0], 0));
@@ -273,7 +276,7 @@ impl VietTyper {
 
         let mut t = self.start.elapsed().as_millis() as u32;
         let mut mask_now = self.cur_mask;
-        let mut tap = |vk: &ZwpVirtualKeyboardV1, code: u32, level: u8, mask_now: &mut u32, t: &mut u32| {
+        let tap = |vk: &ZwpVirtualKeyboardV1, code: u32, level: u8, mask_now: &mut u32, t: &mut u32| {
             let want = LEVEL_MASKS[level as usize];
             if *mask_now != want {
                 vk.modifiers(want, 0, 0, 0);

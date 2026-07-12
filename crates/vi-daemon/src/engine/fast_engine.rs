@@ -30,6 +30,13 @@ pub struct NonPreeditEngine {
     /// Number of raw keys buffered for this word.
     /// Used to calculate how many backspaces to send on commit.
     raw_count: usize,
+    /// Emoji shortcode/emoticon expansion enabled (config `emoji`).
+    emoji_enabled: bool,
+    /// Emoji capture buffer: the chars already ECHOED to the app that form a
+    /// candidate emoticon/shortcode (e.g. ":", ":s", ":smile"). Empty when not
+    /// mid-candidate. Only ever engaged while the Vietnamese engine has no
+    /// pending composition, so the two never fight over a keystroke.
+    emoji_buf: String,
 }
 
 impl NonPreeditEngine {
@@ -39,16 +46,39 @@ impl NonPreeditEngine {
             inner: Engine::new(method),
             mode,
             raw_count: 0,
+            emoji_enabled: false,
+            emoji_buf: String::new(),
+        }
+    }
+
+    /// Toggle emoji expansion (wired from config snapshot).
+    pub fn set_emoji_enabled(&mut self, enabled: bool) {
+        self.emoji_enabled = enabled;
+        if !enabled {
+            self.emoji_buf.clear();
         }
     }
 
     /// Process one keypress. Returns the action for the Wayland layer.
     pub fn push_key(&mut self, ch: char) -> NonPreeditAction {
+        // Emoji shortcode/emoticon capture runs BEFORE the Vietnamese engine,
+        // but ONLY when there is no pending Vietnamese composition — so the two
+        // never contend for a keystroke. Returns Some(...) while it owns the
+        // key, None to fall through to normal processing.
+        if let Some(action) = self.handle_emoji(ch) {
+            return action;
+        }
+
         // Pass-through checks first (before any buffering)
         if ch.is_ascii_control() && ch != '\u{0008}' {
             // Enter, escape, tab, etc. — commit if pending then pass through
             if self.inner.has_preedit() {
-                let committed = self.inner.preedit_output();
+                // smart_commit_output applies R9 English-restore in Smart mode
+                // (test→test, not tét); no-op in pure Telex/VNI. The core
+                // Engine boundary does this, but NonPreedit apps (Chrome,
+                // terminal, LibreOffice) route HERE — using preedit_output
+                // directly skipped the restore → "test"→"tét" (field 2026-07-12).
+                let committed = self.inner.smart_commit_english_only();
                 let raw_len = self.raw_count;
                 self.inner.reset();
                 self.raw_count = 0;
@@ -68,7 +98,7 @@ impl NonPreeditEngine {
         // Word boundaries (space, punctuation) commit immediately
         if is_word_boundary(ch, self.inner.method()) {
             if self.inner.has_preedit() {
-                let committed = self.inner.preedit_output();
+                let committed = self.inner.smart_commit_english_only();
                 let raw_len = self.raw_count;
                 self.inner.reset();
                 self.raw_count = 0;
@@ -107,7 +137,7 @@ impl NonPreeditEngine {
             Action::PassThrough => {
                 self.raw_count = self.raw_count.saturating_sub(1);
                 if self.inner.has_preedit() {
-                    let committed = self.inner.preedit_output();
+                    let committed = self.inner.smart_commit_english_only();
                     let raw_len = self.raw_count;
                     self.inner.reset();
                     self.raw_count = 0;
@@ -120,6 +150,104 @@ impl NonPreeditEngine {
                 }
             }
         }
+    }
+
+    /// Emoji capture state machine. Owns a keystroke ONLY when emoji is enabled
+    /// and no Vietnamese composition is pending. While building a candidate it
+    /// echoes each char verbatim (PassThrough) so the user sees what they type;
+    /// on a completed emoticon/shortcode it returns `CommitEmoji` (backspace the
+    /// echoed candidate, write the emoji, don't replay the trigger). Returns
+    /// `None` to hand the key back to normal processing.
+    /// SILENT capture: candidate chars are buffered, NOT echoed — so a match
+    /// commits the emoji with zero backspaces, and a dead-end flushes the
+    /// literal buffer. This sidesteps backspacing already-shown text, which is
+    /// unreliable on this architecture (delete_surrounding_text ignored; vk has
+    /// no char-backspace). Both outcomes use `CommitEmoji` (no key replay): the
+    /// trigger char is folded into the committed text, never echoed twice.
+    fn handle_emoji(&mut self, ch: char) -> Option<NonPreeditAction> {
+        use crate::engine::emoji;
+
+        // Only engage when enabled and no Vietnamese composition is pending, so
+        // the two capture buffers can never contend for a keystroke.
+        if !self.emoji_enabled || self.inner.has_preedit() || self.raw_count > 0 {
+            if !self.emoji_buf.is_empty() {
+                // Shouldn't happen (buf only grows while idle), but be safe.
+                self.emoji_buf.clear();
+            }
+            return None;
+        }
+
+        // Backspace / control chars: flush any candidate literally, hand the
+        // key back to normal processing (which will pass it through).
+        if ch == '\u{0008}' || (ch.is_ascii_control()) {
+            if self.emoji_buf.is_empty() {
+                return None;
+            }
+            let flushed = std::mem::take(&mut self.emoji_buf);
+            return Some(NonPreeditAction::CommitEmoji {
+                backspace_count: 0,
+                text: flushed,
+            });
+        }
+
+        // Not capturing yet: only a starter char (: ; < ^) opens a candidate.
+        if self.emoji_buf.is_empty() {
+            if emoji::is_starter(ch) {
+                self.emoji_buf.push(ch);
+                return Some(NonPreeditAction::Buffer); // silent
+            }
+            return None;
+        }
+
+        // Mid-capture: tentatively extend and classify.
+        let mut cand = self.emoji_buf.clone();
+        cand.push(ch);
+
+        // 1) Completed emoticon (":)", "<3", "^_^"...) → commit emoji.
+        if let Some(e) = emoji::emoticon(&cand) {
+            self.emoji_buf.clear();
+            return Some(NonPreeditAction::CommitEmoji {
+                backspace_count: 0,
+                text: e.to_string(),
+            });
+        }
+
+        // 2) Closing ':' of a :shortcode:.
+        if ch == ':' && self.emoji_buf.starts_with(':') && self.emoji_buf.len() > 1 {
+            let name = self.emoji_buf[1..].to_string();
+            if let Some(e) = emoji::shortcode(&name) {
+                self.emoji_buf.clear();
+                return Some(NonPreeditAction::CommitEmoji {
+                    backspace_count: 0,
+                    text: e.to_string(),
+                });
+            }
+            // Unknown shortcode closed by ':' — flush "":name" literally and
+            // restart a fresh capture from THIS ':' (it may open the next one,
+            // e.g. "::smile:").
+            let flushed = std::mem::replace(&mut self.emoji_buf, ":".to_string());
+            return Some(NonPreeditAction::CommitEmoji {
+                backspace_count: 0,
+                text: flushed,
+            });
+        }
+
+        // 3) Still viable (prefix of an emoticon, or a growing :shortcode name)?
+        let viable = emoji::emoticon_prefix(&cand)
+            || (cand.starts_with(':') && emoji::is_shortcode_char(ch));
+        if viable {
+            self.emoji_buf = cand;
+            return Some(NonPreeditAction::Buffer); // silent
+        }
+
+        // Dead end: flush the buffered candidate PLUS this char as literal text
+        // (the trigger chars are punctuation/letters that should appear as
+        // typed). No replay — the char is already in `text`.
+        self.emoji_buf.clear();
+        Some(NonPreeditAction::CommitEmoji {
+            backspace_count: 0,
+            text: cand,
+        })
     }
 
     /// Process backspace during non-preedit composition.

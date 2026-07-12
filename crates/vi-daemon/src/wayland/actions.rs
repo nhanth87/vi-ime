@@ -240,6 +240,18 @@ impl ImeAppState {
                 self.reset_word_state();
                 self.vk.tap(keycode);
             }
+            NonPreeditAction::CommitEmoji { text, .. } => {
+                // Emoji/flushed-literal. Always via commit_string (the
+                // input-method channel) — NOT viet_typer, whose static keymap
+                // covers only ASCII+Vietnamese, never emoji codepoints. Safe in
+                // live mode too: emoji only fires when no Vietnamese word is
+                // pending, so `shown_word` is empty (nothing to diff/backspace).
+                // The trigger key is folded into `text`, so it is NOT replayed.
+                crate::godmod::log_commit(!text.is_ascii());
+                info!("[COMMIT] emoji/flush: \"{text}\"");
+                im.commit_string(text);
+                im.commit(self.serial);
+            }
             NonPreeditAction::ClearPreedit => {
                 if live {
                     // Word fully deleted by backspace — remove what we own.

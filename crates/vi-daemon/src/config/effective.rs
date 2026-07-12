@@ -57,6 +57,8 @@ pub struct EffectiveConfig {
     pub auto_detect_lang: bool,
     /// Global-only (not overridable per app/site).
     pub tone_style: ToneStyle,
+    /// Emoji shortcode/emoticon expansion. Global-only.
+    pub emoji: bool,
 }
 
 /// Resolve one field through the site > app > global chain.
@@ -95,6 +97,7 @@ impl Setting {
             free_tone_placement: resolve!(site_cfg, app_cfg, self.free_tone_placement, free_tone_placement),
             auto_detect_lang: resolve!(site_cfg, app_cfg, self.auto_detect_lang, auto_detect_lang),
             tone_style: self.tone_style,
+            emoji: self.emoji,
         }
     }
 
@@ -168,6 +171,7 @@ impl Setting {
                 free_tone_placement,
                 auto_detect_lang,
                 tone_style: self.tone_style,
+                emoji: self.emoji,
             },
             mode_source,
             origin,

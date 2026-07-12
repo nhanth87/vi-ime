@@ -16,7 +16,7 @@
 
 > Đọc chi tiết: [`.agents/R18-design-rules.md`](.agents/R18-design-rules.md)
 
-**Tóm tắt 17 rules:**
+**Tóm tắt 18 rules:**
 - R1. Pipeline immutable (qua plugin only)
 - R2. Preedit-everywhere (commit_string, KHÔNG delete_surrounding_text)
 - R3. NonPreeditAction extend-only
@@ -41,6 +41,27 @@
 > ⚠️ **ĐỌC:** [`.agents/R17-feature-map.md`](.agents/R17-feature-map.md)
 > trước khi sửa typing path, address bar, terminal mode, hoặc click guard.
 
+### R18. TẮT BỘ GÕ = MỆNH LỆNH TỐI CAO — KHÔNG BAO GIỜ OVERRIDE
+> ⚠️ Khi `enabled = false` (setting.conf / tray / CLI `--toggle`), TUYỆT ĐỐI
+> không có đường nào tạo ra tiếng Việt. Không plugin, không app-config,
+> không mode, không fallback nào được override.
+>
+> **Bẫy đã sập (2026-07-12):** evdev fallback (`legacy_grab` + `evdev_mode`)
+> là THREAD RIÊNG grab bàn phím vật lý, compose ĐỘC LẬP với đường Wayland.
+> Đường Wayland tự tôn trọng `enabled` (nhả grab qua snapshot), nhưng evdev
+> thì KHÔNG — tắt bộ gõ xong vào Chrome/Electron X11 vẫn ra tiếng Việt.
+>
+> **Bất biến bắt buộc (mọi đường ra chữ phải thoả):**
+> 1. **Không engage khi tắt:** mọi chỗ `LegacyGrab::start` phải gate
+>    `config_manager.setting().enabled` (focus-change, ProbeTimeout).
+> 2. **Drop ngay khi tắt:** `ConfigChanged` + `IpcWrite` phải `legacy_grab =
+>    None` khi `!enabled` (đường Wayland đã tự lo qua snapshot).
+> 3. **Defense-in-depth:** `evdev_mode::run_loop` tự `break` (→ ungrab) khi
+>    `runtime.snapshot().enabled == false`, phòng khi tầng 1 chưa kịp drop.
+>
+> Thêm BẤT KỲ đường ra chữ mới nào (fallback, injector, path) → phải kiểm
+> `enabled` TRƯỚC TIÊN, coi như bất biến số 0.
+
 ---
 
 ## 📁 File Map
@@ -53,6 +74,7 @@
 
 | Hành động | Mức | Hậu quả |
 |-----------|-----|---------|
+| Ra chữ khi `enabled=false` (R18) | 🔴 | Mất niềm tin — tắt là phải tắt |
 | `unwrap()` ngoài test | 🔴 | Crash |
 | Đổi NonPreeditAction | 🔴 | Break dispatch |
 | Bỏ Deactivate auto-commit | 🔴 | Mất chữ |

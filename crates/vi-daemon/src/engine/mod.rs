@@ -18,6 +18,7 @@ pub mod fast_engine;
 // pub(crate): viet_typer sinh char-inventory cho keymap tĩnh bằng chính
 // Unicode algebra này thay vì chuỗi literal (tinh thần R14).
 pub(crate) mod glyph;
+pub(crate) mod emoji;
 mod normalize;
 mod style;
 mod syllable;
