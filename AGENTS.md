@@ -288,6 +288,37 @@
 > `static_keymap_no_level_collision` bắt regression gộp level (nguyên nhân
 > trực tiếp "ư"→"u"). MUỐN field test xanh MỚI coi xong.
 
+### R23. live_echo_pending counter — KHÔNG BUFFER KEY khi live-echo đang bay
+> ⚠️ Đọc trước khi sửa `actions.rs::sync_shown`, `dispatch.rs::TextChangeCause`/`Done`, hoặc `state.rs::live_echo_pending`.
+>
+> **Bẫy đã sập (2026-07-13, 2 lần trong cùng ngày):**
+> 1. **Lần 1 (boolean):** Dùng `bool live_echo_pending` set=true trong
+>    `sync_shown`, check trong `TextChangeCause`. Nhưng khi gõ nhanh (vowel+
+>    tone key trong <100ms), `sync_shown` thứ 2 set flag=true, Done của
+>    batch thứ 1 đặt flag=false → batch thứ 2 không được bảo vệ. FIX: dùng
+>    **counter** (`u32`, `saturating_add`/`saturating_sub`).
+> 2. **Lần 2 (vị trí sai):** Counter `saturating_add(1)` để SAU
+>    `backspace_then_type`. Nhưng `backspace_then_type` gọi
+>    `queue.roundtrip()` trên VietTyper connection — trong lúc roundtrip,
+>    app gửi `TextChangeCause`+`Done` về main connection. Nếu counter chưa
+>    tăng, `Other` cause không bị suppress → composition drop. FIX: tăng
+>    counter **TRƯỚC** `backspace_then_type`.
+> 3. **Lần 3 (buffer key — NGUY HIỂM):** Thử buffer key trong
+>    `buffer_key`/`process_key` khi `live_echo_pending > 0`. Làm **tê liệt
+>    toàn bộ bàn phím** (phím Esc, mũi tên, Ctrl+C đều bị nuốt) vì đường
+>    `buffer_key` xử lý MỌI key event trước khi phân loại text/non-text.
+>    **TUYỆT ĐỐI KHÔNG buffer key ở tầng `buffer_key` hoặc `process_key`
+>    cho mục đích live-echo.** Đã revert toàn bộ.
+>
+> **Bất biến bắt buộc:**
+> - `sync_shown`: `live_echo_pending += 1` TRƯỚC `backspace_then_type`.
+> - `TextChangeCause`: nếu `Other && live_echo_pending > 0` → suppress
+>   (`external_change = false`).
+> - `Done`: `live_echo_pending = live_echo_pending.saturating_sub(1)`.
+> - `Deactivate`: `live_echo_pending = 0`.
+> - **Không được thêm bất kỳ cơ chế buffer key nào vào đường live-echo.**
+>   Kể cả `VecDeque<KeyEvent>`, `delay`, hay `yield_now`.
+
 ---
 
 ## 📁 File Map

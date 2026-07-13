@@ -324,6 +324,15 @@ impl ImeAppState {
             let id = id.to_lowercase();
             crate::compositor::KNOWN_TERMINALS.contains(&id.as_str())
         });
+        // Arm the live-echo guard BEFORE the vk call: each `sync_shown`
+        // increments the counter; `Done` (end of text-input-v3 batch)
+        // decrements it. The increment MUST happen before
+        // `backspace_then_type` because its internal `roundtrip()`
+        // dispatches the app's `TextChangeCause`+`Done` response
+        // synchronously on the vk connection — if the counter is still 0
+        // at that point, the `Other` cause is NOT suppressed and
+        // composition gets dropped (tone keys appear as literal digits).
+        self.live_echo_pending = self.live_echo_pending.saturating_add(1);
         if !self
             .viet
             .backspace_then_type(shown.len() - common, &suffix, paced)

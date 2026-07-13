@@ -123,6 +123,7 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                 state.field_sensitivity = FieldSensitivity::Normal;
                 state.surrounding_seen = false;
                 state.external_change = false;
+                state.live_echo_pending = 0;
                 state.reset_word_state();
                 state.last_key_time = None;
                 // Never leave the app with a stuck forwarded key.
@@ -173,6 +174,11 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                     );
                 }
                 state.flush_key_buffer(conn);
+                // Decrement live-echo pending counter: one batch done.
+                // When it reaches zero, subsequent `TextChangeCause::Other`
+                // events are genuine external changes (not our own vk typing).
+                state.live_echo_pending =
+                    state.live_echo_pending.saturating_sub(1);
             }
             Event::Unavailable => {
                 // Single-owner seat: a rival grabbed the input-method first.
@@ -215,8 +221,23 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                 // P1-2: `other` = the text/cursor changed app-side (mouse
                 // click, arrow keys handled by the app, undo…) — NOT by us.
                 // Latched here, applied at `done` (end of the state batch).
+                //
+                // ⚠️ Live-echo guard: in NonPreedit mode, `sync_shown`
+                // types composed glyphs through the virtual keyboard. The
+                // app CORRECTLY reports those changes as `Other` (the
+                // change came through the vk, not `commit_string`). If we
+                // treat that as external, every tone-key update drops the
+                // composition — tone keys appear as literal digits.
+                // `live_echo_pending` (inc'd by sync_shown, dec'd at Done)
+                // suppresses `Other` for our own vk typing.
                 info!("[CAUSE] text_change_cause={cause:?}");
-                state.external_change = matches!(cause, WEnum::Value(ChangeCause::Other));
+                let is_other = matches!(cause, WEnum::Value(ChangeCause::Other));
+                if is_other && state.live_echo_pending > 0 {
+                    // Our own live-echo vk typing. Not external.
+                    state.external_change = false;
+                } else {
+                    state.external_change = is_other;
+                }
             }
             Event::ContentType { hint: _, purpose } => {
                 let sens = match purpose {

@@ -116,6 +116,11 @@ pub struct ImeAppState {
     /// When the last composing key was processed — arms the idle
     /// auto-commit (see [`Self::idle_commit_deadline_ms`]).
     pub(crate) last_key_at: Option<Instant>,
+    /// Live-echo guard: incremented by `sync_shown` before each
+    /// `backspace_then_type` call, decremented at each `Done` (end
+    /// of text-input-v3 batch). While >0, `TextChangeCause::Other`
+    /// is suppressed — it is our own vk typing, not external.
+    pub(crate) live_echo_pending: u32,
 }
 
 /// Preedit-only compositions are DROPPED on a mouse click (R8) — the field
@@ -161,6 +166,7 @@ impl ImeAppState {
             feedback: None,
             game_mode: false,
             last_key_at: None,
+            live_echo_pending: 0,
         }
     }
 
