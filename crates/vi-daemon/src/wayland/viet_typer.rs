@@ -345,6 +345,12 @@ impl VietTyper {
     /// before anything follows — same scheme `evdev_typer.rs` field-proved
     /// 2026-07-10 for the evdev fallback path, now here too since this
     /// typer owns its own queue.
+    ///
+    /// Khi `paced`, MỖI glyph composed CŨNG được `roundtrip()` (không chỉ
+    /// `flush()`) + 15ms, và có thêm 20ms settle TRƯỚC glyph đầu sau
+    /// backspace — đường Wayland live-echo có raw-key forward song song từ
+    /// vk passthrough trên cùng seat, nên cần xác nhận mạnh hơn evdev để VCL
+    /// không áp sai level (lớp lỗi "người"->"nguời", ư mất dấu sừng).
     pub(crate) fn backspace_then_type(&mut self, backspaces: usize, s: &str, paced: bool) -> bool {
         let Some((queue, vk)) = &mut self.conn else { return false };
         if self.map.is_empty() {
@@ -383,11 +389,28 @@ impl VietTyper {
                 std::thread::sleep(std::time::Duration::from_millis(15));
             }
         }
+        // Settle TRƯỚC ký tự composed đầu sau backspace — bài học evdev
+        // round-5 (2026-07-13): ký tự ĐẦU của một suffix ≥2 ký tự ngay sau
+        // backspace rất dễ bị áp sai level (VCL chưa ổn định keymap mới sau
+        // BS). Đường Wayland live-echo còn có raw-key forward SONG SONG từ
+        // connection thứ 2 (vk passthrough), nên cần nghỉ thêm trước glyph
+        // đầu để compositor/VCL kịp áp keymap trước khi tap tới.
+        if paced && backspaces > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         for ch in s.chars() {
             let (code, level) = self.map[&ch];
             tap(vk, code, level, &mut mask_now, &mut t);
             if paced {
-                let _ = queue.flush();
+                // roundtrip THẬT (không chỉ flush) sau MỖI glyph composed:
+                // đường Wayland có raw-key forward song song từ vk thứ 2 trên
+                // CÙNG seat, nên cần xác nhận compositor đã xử lý xong từng
+                // glyph (áp đúng level modifier) trước glyph kế. flush chỉ đẩy
+                // byte ra socket, KHÔNG đảm bảo VCL áp đúng level — đây chính
+                // là lớp lỗi "ư"->"u" (ư mất dấu sừng = áp sai level). Mirroring
+                // evdev_typer (đã field-proven) nhưng MẠNH HƠN vì có concurrency
+                // xuyên thiết bị. Terminal (paced=false) không đổi: flush-only.
+                let _ = queue.roundtrip(&mut TyperSink);
                 std::thread::sleep(std::time::Duration::from_millis(15));
             }
         }
@@ -454,5 +477,33 @@ mod tests {
                 String::from_utf8_lossy(&out.stderr)
             );
         }
+    }
+
+    #[test]
+    fn static_keymap_no_level_collision() {
+        // Moi ky tu engine co the sinh PHAI co (code, level) RIENG BIET.
+        // Neu 2 ky tu khac nhau trung (code, level), mot cai se render thanh
+        // cai kia - CHINH la lop loi "nguoi"->"nguoi" (u mat dau sung vi trung
+        // slot voi 'u' base). Test nay la oracle bat regression gop level.
+        let (_text, map) = build_static_keymap();
+        let mut seen: std::collections::HashMap<(u32, u8), char> =
+            std::collections::HashMap::new();
+        for (&ch, &slot) in &map {
+            if ch == '\u{0008}' {
+                continue; // BackSpace la slot rieng, khong phai glyph
+            }
+            if let Some(prev) = seen.insert(slot, ch) {
+                panic!("2 chars share slot {:?}: {:?} and {:?}", slot, prev, ch);
+            }
+        }
+        let u = map[&'\u{01b0}']; let o = map[&'\u{01a1}'];
+        let a = map[&'\u{00e2}']; let f = map[&'\u{00f4}'];
+        let e = map[&'\u{00ea}']; let c = map[&'\u{0103}'];
+        assert_ne!(u, map[&'u'], "u-horn must not collide with u");
+        assert_ne!(o, map[&'o'], "o-horn must not collide with o");
+        assert_ne!(a, map[&'a'], "a-circ must not collide with a");
+        assert_ne!(f, map[&'o'], "o-circ must not collide with o");
+        assert_ne!(e, map[&'e'], "e-circ must not collide with e");
+        assert_ne!(c, map[&'a'], "a-breve must not collide with a");
     }
 }

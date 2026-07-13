@@ -59,6 +59,24 @@ def main() -> int:
                 time.sleep(0.012)
             if prev is not None:
                 ui.write(e.EV_KEY, prev, 0); ui.syn()
+        elif mode == 'shortcut':
+            # tokens: "ctrl+a" "ctrl+c" "shift+Home" ... gửi modifier+key
+            MODS = {'ctrl': 29, 'shift': 42, 'alt': 56}
+            for tok in text.split():
+                if '+' not in tok:
+                    continue
+                mod, key = tok.split('+', 1)
+                mcode = MODS.get(mod.lower())
+                kc = KC.get(key.lower())
+                if kc is None:
+                    continue
+                if mcode is not None:
+                    ui.write(e.EV_KEY, mcode, 1); ui.syn(); time.sleep(0.01)
+                ui.write(e.EV_KEY, kc, 1); ui.syn(); time.sleep(0.02)
+                ui.write(e.EV_KEY, kc, 0); ui.syn()
+                if mcode is not None:
+                    ui.write(e.EV_KEY, mcode, 0); ui.syn()
+                time.sleep(0.05)
         else:
             print(f'unknown mode {mode}', file=sys.stderr)
             return 2

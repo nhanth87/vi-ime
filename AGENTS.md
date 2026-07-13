@@ -248,6 +248,46 @@
 > hai", nghi ngờ `roundtrip()` không đủ (thử tăng sleep sau BackSpace,
 > hiện 15ms) trước khi nghĩ tới việc khác.
 
+### R22. LibreOffice/OnlyOffice — ĐỌC LOG TRƯỚC KHI VÁ (evidence-first) + 2 bug còn lại
+> ⚠️ Đọc trước khi sửa `wayland/viet_typer.rs`, `evdev_inject.rs`, hoặc thêm
+> bài regression LibreOffice/OnlyOffice.
+>
+> **Quy tắc tối cao (rút ra 2026-07-13):** đã sai 2 lần vì ĐOÁN root cause
+> trước khi đọc debug log. MỌI lần sửa lỗi mất chữ/dấu trên LibreOffice &
+> OnlyOffice PHẢI bắt đầu bằng: build release + `RUST_LOG=debug` + gõ đúng câu
+> lỗi + đối chiếu `[LIVE-SYNC]` (bs/suffix engine tính) với `[SURROUNDING]`
+> (text app thật + len).
+> - len ĐÚNG nhưng glyph SAI → lỗi **level/modifier** (H-A: ư mất dấu sừng).
+> - len SAI → lỗi **thứ tự / xuyên thiết bị** (H-B: 2 vk trên cùng seat).
+>
+> **Bug A — LibreOffice Wayland live-echo: "người"→"nguời" (ư mất dấu sừng).**
+> R21 (roundtrip mỗi BackSpace) sửa được "chữ"→"chu" nhưng CHƯA xong lỗi này.
+> Nguyên nhân khả dĩ (chưa confirmed bằng log): đường Wayland live-echo có
+> 2 virtual keyboard trên CÙNG seat (main `virtual_keyboard` forward raw key
+> SONG SONG + `VietTyper` vk gõ composed), và ký tự ĐẦU của suffix ≥2 ký tự
+> sau backspace dễ bị áp sai level (bài học evdev round-5).
+> Candidate fix (đã apply 2026-07-13, đang chờ field-confirm):
+> - **A1 (đã làm):** `VietTyper::backspace_then_type` paced → `roundtrip()`
+>   MỖI glyph composed (không chỉ flush) + 20ms settle TRƯỚC glyph đầu sau
+>   backspace. Mirroring evdev đã field-proven, mạnh hơn vì có concurrency
+>   xuyên thiết bị. Terminal (paced=false) không đổi.
+> - **A2 (fallback nếu A1 không đủ):** gộp forward + compose vào 1 vk cho
+>   live-echo (gõ composed trên cùng vk đã forward raw ASCII qua Level-1) →
+>   loại bỏ hoàn toàn nhiễu modifier xuyên thiết bị. Đụng `VkForwarder` +
+>   `actions.rs::sync_shown`, chỉ làm khi log xác nhận H-B.
+>
+> **Bug B — OnlyOffice evdev fallback + xdotool: vẫn nuốt chữ khi gõ NHANH.**
+> R20 (tách reader/consumer thread, mpsc unbounded) vá gốc kernel-queue-tràn.
+> Nếu còn residual: tăng `settle_ms` non-ASCII (hiện 200ms) dưới tải gõ nhanh;
+> nếu vẫn flaky → theo điều khoản leo thang R19, đổi cơ chế inject OnlyOffice
+> (hỏi user trước khi đổi hướng lớn).
+>
+> **Regression:** `scripts/vi-regression/run.sh` có bài `run_office` (LO=1 /
+> OO=1) — gõ KEYS qua `inject.py`, Ctrl+A/Ctrl+C đọc clipboard diff với
+> `WANT`, fallback screenshot. `viet_typer.rs` có unit test
+> `static_keymap_no_level_collision` bắt regression gộp level (nguyên nhân
+> trực tiếp "ư"→"u"). MUỐN field test xanh MỚI coi xong.
+
 ---
 
 ## 📁 File Map
@@ -303,3 +343,4 @@
 - [ ] No circular deps
 - [ ] Supememory updated
 - [ ] AGENTS.md updated (nếu có rule/file map thay đổi)
+- [ ] `bash scripts/vi-regression/run.sh` với `LO=1`/`OO=1` xanh cho LibreOffice/OnlyOffice trước khi coi fix xong (R22)

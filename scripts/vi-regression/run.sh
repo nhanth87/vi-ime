@@ -26,6 +26,59 @@ note() { echo -e "${CYAN}── $1 ──${NC}"; }
 ok()   { echo -e "  ${GREEN}PASS${NC} $1"; PASS=$((PASS+1)); }
 bad()  { echo -e "  ${RED}FAIL${NC} $1"; FAIL=$((FAIL+1)); }
 
+# paste_get: doc clipboard ra stdout (Wayland wl-paste, X11 xclip fallback)
+paste_get() {
+    if command -v wl-paste >/dev/null 2>&1; then
+        wl-paste 2>/dev/null
+    elif command -v xclip >/dev/null 2>&1; then
+        xclip -selection clipboard -o 2>/dev/null
+    else
+        echo ""
+    fi
+}
+
+# run_office: bai LibreOffice / OnlyOffice (text field nhan IME). Go KEYS
+# (seq + rollover), Ctrl+A/Ctrl+C doc clipboard, diff voi WANT. Neu clipboard
+# khong doc duoc -> screenshot de duyet mat (nhu Chrome).
+run_office() {
+    local tag="$1" sub="$2" launch="$3" mode="$4" killpat="$5"
+    note "Bai $tag ($mode)"
+    eval "$launch" >/dev/null 2>&1 &
+    sleep 6
+    local wid
+    wid=$(niri msg --json windows | python3 -c "
+import json,sys
+for w in json.load(sys.stdin):
+    if '$sub' in (w.get('title') or ''): print(w.get('id'))")
+    if [ -z "$wid" ]; then
+        bad "$tag: khong tim cua so (title chua '$sub')"
+        return
+    fi
+    niri msg action focus-window --id "$wid"; sleep 1
+    if ! focus_is "$sub"; then
+        bad "$tag: khong focus duoc"
+        pkill -f "$killpat" 2>/dev/null
+        return
+    fi
+    python3 "$DIR/inject.py" "$mode" "$KEYS"
+    sleep 0.5
+    python3 "$DIR/inject.py" shortcut 'ctrl+a'
+    python3 "$DIR/inject.py" shortcut 'ctrl+c'
+    sleep 0.4
+    local got; got=$(paste_get | sed 's/$//' | tr -d '
+')
+    if [ "$got" = "$WANT" ]; then
+        ok "$tag/$mode"
+    else
+        bad "$tag/$mode: [$got] != [$WANT]"
+        if command -v grim >/dev/null 2>&1; then
+            grim "$OUT/$tag-$mode.png"
+            echo "  -> screenshot: $OUT/$tag-$mode.png"
+        fi
+    fi
+    pkill -f "$killpat" 2>/dev/null
+}
+
 pgrep -x vi-ime >/dev/null || { echo "vi-ime không chạy — bật daemon trước"; exit 1; }
 
 # Bài gõ chuẩn: quét đủ các lớp lỗi đã gặp ngoài field.
@@ -129,6 +182,17 @@ for w in json.load(sys.stdin):
         bad "chrome: không mở được cửa sổ test"
     fi
     pkill -f "$OUT/chrome-profile" 2>/dev/null
+fi
+
+# Bai 4+5 (tuy chon): LibreOffice / OnlyOffice - app kho tinh nhat voi
+# keymap/evdev. Bat bang LO=1 / OO=1 (can app cai san + niri + wl-paste/xclip).
+if [ "${LO:-0}" = "1" ]; then
+    run_office "libreoffice" "LibreOffice" "libreoffice --writer --nologo" seq "libreoffice"
+    run_office "libreoffice" "LibreOffice" "libreoffice --writer --nologo" rollover "libreoffice"
+fi
+if [ "${OO:-0}" = "1" ]; then
+    run_office "onlyoffice" "ONLYOFFICE" "onlyoffice-desktopeditors" seq "onlyoffice-desktopeditors"
+    run_office "onlyoffice" "ONLYOFFICE" "onlyoffice-desktopeditors" rollover "onlyoffice-desktopeditors"
 fi
 
 echo
