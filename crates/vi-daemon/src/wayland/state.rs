@@ -133,7 +133,6 @@ impl ImeAppState {
         engine: NonPreeditEngine,
         _compositor: CompositorKind,
         virtual_keyboard: Option<ZwpVirtualKeyboardV1>,
-        viet_keyboard: Option<ZwpVirtualKeyboardV1>,
     ) -> Self {
         Self {
             engine,
@@ -144,7 +143,7 @@ impl ImeAppState {
             serial: 0,
             ime_enabled: true,
             vk: VkForwarder::new(virtual_keyboard),
-            viet: VietTyper::new(viet_keyboard),
+            viet: VietTyper::new(),
             key_buffer: VecDeque::with_capacity(16),
             shown_word: String::new(),
             runtime: None,

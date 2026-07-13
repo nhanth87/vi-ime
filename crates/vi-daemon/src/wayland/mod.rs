@@ -69,25 +69,23 @@ fn run_ime_internal(
 
     // Virtual keyboard: required to re-inject grabbed keys we don't consume.
     // Missing it means shortcuts/navigation die inside the grab — warn loudly.
-    // Two virtual keyboards: one mirrors the real keymap (passthrough of
-    // grabbed keys), one carries the generated Vietnamese keymap (live
-    // mode types composed words on it — see viet_typer.rs).
-    let (virtual_keyboard, viet_keyboard) =
-        match globals.bind::<ZwpVirtualKeyboardManagerV1, _, _>(&qh, 1..=1, ()) {
-            Ok(mgr) => (
-                Some(mgr.create_virtual_keyboard(&seat, &qh, VkUserData)),
-                Some(mgr.create_virtual_keyboard(&seat, &qh, VkUserData)),
-            ),
-            Err(_) => {
-                warn!("zwp_virtual_keyboard_manager_v1 not available — passthrough keys will be LOST");
-                (None, None)
-            }
-        };
+    // (VietTyper — the SECOND virtual keyboard that types composed words —
+    // opens its OWN Wayland connection now, see viet_typer.rs 2026-07-13:
+    // it needs `roundtrip()` for real compositor confirmation, which would
+    // be re-entrant dispatch if called on THIS event queue from inside a
+    // key handler.)
+    let virtual_keyboard = match globals.bind::<ZwpVirtualKeyboardManagerV1, _, _>(&qh, 1..=1, ()) {
+        Ok(mgr) => Some(mgr.create_virtual_keyboard(&seat, &qh, VkUserData)),
+        Err(_) => {
+            warn!("zwp_virtual_keyboard_manager_v1 not available — passthrough keys will be LOST");
+            None
+        }
+    };
 
     let input_method = im_manager.get_input_method(&seat, &qh, ImUserData);
     info!("Got zwp_input_method_v2");
 
-    let mut state = ImeAppState::new(engine, compositor, virtual_keyboard, viet_keyboard);
+    let mut state = ImeAppState::new(engine, compositor, virtual_keyboard);
     state.input_method = Some(input_method);
     state.feedback = feedback;
     if let Some(rt) = runtime {

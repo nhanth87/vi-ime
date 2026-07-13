@@ -211,30 +211,49 @@ impl Injector {
                     std::thread::sleep(std::time::Duration::from_millis(20));
                 }
                 if !text.is_empty() {
-                    let mut cmd = Command::new("xdotool");
-                    if let Some(d) = &display {
-                        cmd.env("DISPLAY", d);
-                    }
-                    cmd.args(["type", "--delay", "15", "--", text]);
-                    ok &= self.run(cmd, 0, text);
-                    // Field-confirmed 2026-07-12 round 2: chỉ ký tự có dấu
-                    // (remap scratch-keycode) cần nghỉ dài; ASCII dùng
-                    // keycode có sẵn nên rẻ hơn cho CEF theo kịp.
+                    // Field-confirmed 2026-07-13 (round 5): khi `suffix` có
+                    // ≥2 ký tự VÀ ký tự đầu có dấu, gõ cả cụm trong MỘT
+                    // lệnh `xdotool type -- "ươ"` để lộ ra lỗi mới — CHỈ ký
+                    // tự ĐẦU của cụm bị CEF nuốt (ký tự sau vào đúng). Đối
+                    // chiếu log thật: "người"→"ngời" xảy ra đúng tại bước
+                    // `bs=2 suffix="ươ"`, mất "ư" (ký tự đầu ngay sau
+                    // backspace) — không phải lỗi random như round 4 (đơn
+                    // ký tự), mà có QUY LUẬT: luôn là ký tự đầu của suffix
+                    // đa ký tự. Giả thuyết: `xdotool type` remap scratch-
+                    // keycode cho ký tự đầu và tap ngay trong cùng lệnh —
+                    // CEF chưa kịp áp keymap mới (vừa đổi vì backspace) thì
+                    // tap đã bắn, ký tự sau đó CEF đã bắt kịp nên vào đúng.
                     //
-                    // Field-confirmed 2026-07-13 (round 4, sau khi tách 2
-                    // process ở round 3 đã fix bug gộp process): vẫn còn
-                    // flaky hiếm (~2/9 lần sửa dấu qua backspace trong 1 câu
-                    // test, ví dụ "a"→"á" hoặc "co"→"có" bị CEF nuốt mất
-                    // hẳn ký tự type ra dù xdotool exit 0) — không tất định,
-                    // không lặp lại cùng vị trí 2 lần chạy khác nhau. Khác
-                    // bug round 3 (sai VỊ TRÍ nghỉ, đã hết): đây là CEF
-                    // render không có thời hạn đảm bảo, chỉ giảm xác suất
-                    // bằng cách tăng settle, không loại bỏ được hoàn toàn.
-                    // 120ms→200ms. Nếu vẫn còn flaky, tăng tiếp — ĐỪNG hạ
-                    // xuống (đã field-confirmed không đủ 3 lần: R19 round 2,
-                    // và đây là round 4).
-                    let settle_ms = if text.chars().any(|c| !c.is_ascii()) { 200 } else { 20 };
-                    std::thread::sleep(std::time::Duration::from_millis(settle_ms));
+                    // Fix (round 5, làm CẢ HAI theo yêu cầu user):
+                    // 1. Tách MỖI ký tự của `text` thành 1 process xdotool
+                    //    riêng (không gộp cụm vào 1 lệnh `type` nữa) — ký
+                    //    tự nào cũng được coi như "ký tự đầu" của lệnh nó,
+                    //    loại bỏ hẳn vị trí rủi ro trong log.
+                    // 2. Settle TRƯỚC lệnh type đầu tiên (không chỉ giữa
+                    //    backspace và type như round 3) — cho CEF thêm thời
+                    //    gian ổn định sau backspace trước khi remap ký tự
+                    //    kế, phòng trường hợp 20ms sau backspace (round 3)
+                    //    chưa đủ khi backspace nhiều hơn 1.
+                    if backspaces > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(30));
+                    }
+                    for ch in text.chars() {
+                        let mut buf = [0u8; 4];
+                        let s = ch.encode_utf8(&mut buf);
+                        let mut cmd = Command::new("xdotool");
+                        if let Some(d) = &display {
+                            cmd.env("DISPLAY", d);
+                        }
+                        cmd.args(["type", "--", s]);
+                        ok &= self.run(cmd, 0, s);
+                        // Field-confirmed 2026-07-12 round 2 + round 4: chỉ
+                        // ký tự có dấu (remap scratch-keycode) cần nghỉ dài;
+                        // ASCII dùng keycode có sẵn nên rẻ hơn cho CEF theo
+                        // kịp. Nếu vẫn còn flaky, tăng tiếp — ĐỪNG hạ xuống
+                        // (đã field-confirmed không đủ nhiều lần).
+                        let settle_ms = if ch.is_ascii() { 20 } else { 200 };
+                        std::thread::sleep(std::time::Duration::from_millis(settle_ms));
+                    }
                 }
                 ok
             }

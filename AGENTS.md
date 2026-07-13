@@ -143,6 +143,27 @@
 > settle mãi vẫn không hết, cân nhắc đổi cơ chế inject cho ONLYOFFICE hẳn
 > (không còn là vấn đề timing nữa) — hỏi user trước khi đổi hướng lớn này.
 >
+> **Field report 2026-07-13 (round 5) — lỗi CÓ QUY LUẬT, không phải flaky
+> ngẫu nhiên:** đối chiếu log thật xác nhận "người"→"ngời" xảy ra đúng tại
+> bước `bs=2 suffix="ươ"` (mất "ư" — ký tự ĐẦU của suffix 2 ký tự). Khác
+> round 4 (đơn ký tự, random vị trí giữa các lần chạy) — đây LUÔN là ký tự
+> đầu tiên của một `suffix` ≥2 ký tự có dấu bị CEF nuốt, ký tự sau trong
+> cùng suffix luôn vào đúng. Giả thuyết: gộp cả cụm vào một lệnh
+> `xdotool type -- "ươ"` khiến CEF chưa kịp ổn định sau backspace/remap
+> trước khi tap ký tự đầu của lệnh `type` mới bắn ra.
+>
+> **Fix (round 5, làm CẢ HAI theo yêu cầu user):**
+> 1. Tách MỖI ký tự của `text` thành 1 process `xdotool type` riêng —
+>    không còn gõ cả cụm "ươ" trong 1 lệnh, mỗi ký tự luôn là "ký tự đầu"
+>    của lệnh chứa nó, loại bỏ vị trí rủi ro trong log.
+> 2. Thêm settle 30ms TRƯỚC lệnh type đầu tiên khi có backspace (không chỉ
+>    20ms SAU backspace như round 3) — dự phòng trường hợp nhiều backspace
+>    cần thêm thời gian ổn định.
+> ĐỪNG gộp nhiều ký tự vào 1 lệnh `type` trở lại — đây chính là bug đã sập.
+> Nếu vẫn còn mất chữ sau round 5: kiểm tra có còn đúng PATTERN (luôn ký tự
+> đầu của cụm) hay chuyển sang random (flaky timing như round 4) để biết
+> đang gặp lỗi nào trước khi vá tiếp.
+>
 > Nếu gặp lỗi MỚI (không phải flaky ngẫu nhiên mà lặp lại có quy luật):
 > đọc lại `[EVDEV-SYNC]` ở mức `RUST_LOG=debug` và đối chiếu TỪNG ký tự mất
 > với `bs`/`suffix` trước khi vá — đừng vá settle_ms mù, tìm đúng vị trí/cơ
@@ -184,6 +205,48 @@
 >   trễ = bàn phím vẫn bị chiếm).
 > - ĐỪNG gộp reader+processor lại "cho đơn giản" hay "giảm 1 thread" dưới
 >   bất kỳ danh nghĩa tối ưu nào — đây chính là cấu trúc đã gây bug.
+
+### R21. VietTyper (wayland/viet_typer.rs) có kết nối Wayland RIÊNG — ĐỪNG gộp lại với event queue chính
+> ⚠️ Đọc trước khi sửa `wayland/viet_typer.rs`, `wayland/state.rs::ImeAppState::new`,
+> hoặc `wayland/mod.rs`'s virtual-keyboard setup.
+>
+> **Bẫy đã sập (2026-07-13):** gõ "chữ" trong LibreOffice (đường Wayland gốc
+> qua `VietTyper`, KHÔNG phải evdev fallback) ra "chu" — mất cả dấu ngã VÀ
+> dấu móc, dừng lại đúng ở trạng thái TRƯỚC 2 lần sửa dấu liên tiếp
+> (`chu→chư` rồi `chư→chữ`, mỗi lần cách nhau ~90ms). Không phải mất 1 ký
+> tự — CẢ HAI lần sửa bị nuốt trọn. `[LIVE-SYNC]` log xác nhận engine tính
+> diff đúng 100%; `backspace_then_type` báo `true` (thành công) — lỗi nằm ở
+> chỗ `pace()` (bản cũ) chỉ gọi `flush()` (đẩy byte ra socket) + sleep 15ms,
+> KHÔNG xác nhận VCL/gtk3 đã render xong trước khi tap kế tiếp tới.
+>
+> Đây CHÍNH LÀ bug "VCL/gtk3 swallows BS+char bursts whole" mà
+> `evdev_typer.rs` đã ghi nhận và vá cho đường evdev fallback (2026-07-10,
+> dùng `queue.roundtrip()` — chờ xác nhận thật, không chỉ flush) — nhưng
+> `wayland/viet_typer.rs` (đường Wayland gốc, dùng cho app KHÔNG cần evdev
+> fallback như LibreOffice khi Activate được qua protocol) chưa từng được
+> vá tương tự vì `VietTyper` dùng CHUNG connection/`EventQueue` với vòng lặp
+> Wayland chính — gọi `roundtrip()` ở đó từ giữa xử lý phím (bên trong
+> `dispatch_pending` của vòng lặp chính) là re-entrant dispatch, rủi ro.
+>
+> **Fix gốc đã làm (2026-07-13):** `VietTyper` giờ tự mở connection +
+> `EventQueue` RIÊNG (`VietTyper::new()` không còn nhận `vk` từ ngoài —
+> tự gọi `Connection::connect_to_env()`, bind seat + virtual-keyboard-manager,
+> upload keymap, `roundtrip()` xác nhận xong mới trả về), giống HỆT pattern
+> `EvdevTyper` (`evdev_typer.rs`) đã field-proven. Độc lập hoàn toàn với
+> event queue chính (`wayland/mod.rs`) nên `roundtrip()` bên trong
+> `backspace_then_type` không còn re-entrant. Mỗi BackSpace giờ có
+> `roundtrip()` thật (không chỉ flush) + sleep 15ms trước khi ký tự mới tới
+> — đúng scheme `evdev_typer.rs` đã field-confirm.
+>
+> `wayland/mod.rs` không còn tạo `viet_keyboard` (2 virtual keyboard trên
+> connection chính) — chỉ còn `virtual_keyboard` (passthrough forwarder).
+> `ImeAppState::new()` mất tham số `viet_keyboard`. ĐỪNG khôi phục lại việc
+> truyền `vk` từ ngoài vào `VietTyper` — đây chính là cấu trúc đã gây bug.
+>
+> Nếu gặp lỗi mất dấu MỚI ở đường Wayland gốc: kiểm tra `[LIVE-SYNC]` log ở
+> `RUST_LOG=debug` trước — nếu vẫn đúng pattern "2 lần sửa liên tiếp mất cả
+> hai", nghi ngờ `roundtrip()` không đủ (thử tăng sleep sau BackSpace,
+> hiện 15ms) trước khi nghĩ tới việc khác.
 
 ---
 

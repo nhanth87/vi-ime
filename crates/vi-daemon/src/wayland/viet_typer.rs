@@ -23,6 +23,24 @@
 //! trễ cũng chỉ trễ một lần trước từ đầu tiên. Level chọn bằng
 //! `vk.modifiers(depressed)` ngay trước tap, trên CÙNG object nên ordering
 //! được protocol bảo đảm (y hệt cách gõ chữ hoa bằng Shift).
+//!
+//! **Kết nối Wayland RIÊNG (2026-07-13):** trước đây `VietTyper` dùng
+//! CHUNG connection/`EventQueue` với vòng lặp IME chính (`wayland/mod.rs`),
+//! nên `pace()` chỉ gọi được `flush()` (đẩy byte ra socket) — không có
+//! cách xác nhận thật compositor đã xử lý xong tap trước khi tap kế tiếp
+//! tới, vì gọi `roundtrip()` trên event queue CHÍNH giữa lúc đang xử lý
+//! callback của CHÍNH event queue đó (re-entrant dispatch) là rủi ro. Field
+//! bug 2026-07-13: LibreOffice "chữ"→"chu" — 2 lần sửa dấu liên tiếp trên
+//! cùng từ bị VCL/gtk3 nuốt trọn vì thiếu xác nhận (đúng lớp lỗi "BS+char
+//! burst bị nuốt whole" mà `evdev_typer.rs` đã vá bằng `roundtrip()` cho
+//! đường evdev fallback từ 2026-07-10, nhưng chưa lan sang đây).
+//!
+//! Fix: `VietTyper` giờ tự mở connection + `EventQueue` RIÊNG (giống hệt
+//! `EvdevTyper`, pattern đã field-proven) — độc lập hoàn toàn với vòng lặp
+//! chính, nên `roundtrip()` ở đây không đụng gì tới event queue chính,
+//! không còn rủi ro re-entrant. BackSpace roundtrip thật (không chỉ flush)
+//! + 15ms, ký tự flush + 15ms — giống chính xác scheme `evdev_typer.rs` đã
+//! field-confirm hoạt động.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -30,8 +48,67 @@ use std::os::fd::{AsFd, FromRawFd, OwnedFd};
 use std::time::Instant;
 
 use tracing::warn;
-use wayland_client::Proxy;
-use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;
+use wayland_client::globals::{registry_queue_init, GlobalListContents};
+use wayland_client::protocol::wl_registry;
+use wayland_client::protocol::wl_seat::WlSeat;
+use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle};
+use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
+    zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
+    zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
+};
+
+/// Event sink for the typer's private connection — nothing to handle
+/// (identical to `evdev_typer.rs`'s `TyperState`; kept separate here so
+/// this file has no dependency on evdev_typer.rs and vice versa).
+struct TyperSink;
+
+impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for TyperSink {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_registry::WlRegistry,
+        _event: wl_registry::Event,
+        _data: &GlobalListContents,
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<WlSeat, ()> for TyperSink {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WlSeat,
+        _event: <WlSeat as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwpVirtualKeyboardManagerV1, ()> for TyperSink {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpVirtualKeyboardManagerV1,
+        _event: <ZwpVirtualKeyboardManagerV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwpVirtualKeyboardV1, ()> for TyperSink {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpVirtualKeyboardV1,
+        _event: <ZwpVirtualKeyboardV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
 
 /// wl_keyboard keymap format: xkb_v1.
 pub(crate) const KEYMAP_FORMAT_XKB_V1: u32 = 1;
@@ -202,7 +279,9 @@ pub(crate) fn build_static_keymap() -> (String, HashMap<char, (u32, u8)>) {
 }
 
 pub(crate) struct VietTyper {
-    vk: Option<ZwpVirtualKeyboardV1>,
+    /// `None` = own connection unavailable (no Wayland display or
+    /// compositor lacks `zwp_virtual_keyboard_manager_v1`) — live path off.
+    conn: Option<(EventQueue<TyperSink>, ZwpVirtualKeyboardV1)>,
     start: Instant,
     /// Static char → (keycode, level). Built once with the keymap.
     map: HashMap<char, (u32, u8)>,
@@ -211,32 +290,40 @@ pub(crate) struct VietTyper {
 }
 
 impl VietTyper {
-    /// Upload the ONE static keymap immediately: Blink applies keymaps with
-    /// unbounded lag, so the upload must happen long before the first word,
-    /// not per-word (R17 — mọi biến thể keymap-động đều fail thực địa).
-    pub(crate) fn new(vk: Option<ZwpVirtualKeyboardV1>) -> Self {
-        let mut map = HashMap::new();
-        if let Some(vk) = &vk {
-            let (text, m) = build_static_keymap();
-            match memfd_keymap(&text) {
-                Some((fd, size)) => {
-                    vk.keymap(KEYMAP_FORMAT_XKB_V1, fd.as_fd(), size);
-                    map = m;
-                }
-                None => warn!("[VIET-TYPER] memfd failed — live path tắt"),
+    /// Opens its OWN Wayland connection/`EventQueue` (2026-07-13 — see
+    /// module docs for why: `roundtrip()` on the main IME connection's
+    /// queue would be re-entrant dispatch, unsafe to call from inside a key
+    /// handler). Uploads the ONE static keymap immediately: Blink applies
+    /// keymaps with unbounded lag, so the upload must happen long before
+    /// the first word, not per-word (R17 — mọi biến thể keymap-động đều
+    /// fail thực địa).
+    pub(crate) fn new() -> Self {
+        let (text, map) = build_static_keymap();
+        match Self::connect(&text) {
+            Some(conn) => Self { conn: Some(conn), start: Instant::now(), map, cur_mask: 0 },
+            None => {
+                warn!("[VIET-TYPER] không mở được Wayland connection riêng — live path tắt");
+                Self { conn: None, start: Instant::now(), map: HashMap::new(), cur_mask: 0 }
             }
-        }
-        Self {
-            vk,
-            start: Instant::now(),
-            map,
-            cur_mask: 0,
         }
     }
 
-    /// The live path is usable (vk exists AND the static keymap uploaded).
+    fn connect(keymap_text: &str) -> Option<(EventQueue<TyperSink>, ZwpVirtualKeyboardV1)> {
+        let conn = Connection::connect_to_env().ok()?;
+        let (globals, mut queue) = registry_queue_init::<TyperSink>(&conn).ok()?;
+        let qh = queue.handle();
+        let seat: WlSeat = globals.bind(&qh, 1..=9, ()).ok()?;
+        let mgr: ZwpVirtualKeyboardManagerV1 = globals.bind(&qh, 1..=1, ()).ok()?;
+        let vk = mgr.create_virtual_keyboard(&seat, &qh, ());
+        let (fd, size) = memfd_keymap(keymap_text)?;
+        vk.keymap(KEYMAP_FORMAT_XKB_V1, fd.as_fd(), size);
+        queue.roundtrip(&mut TyperSink).ok()?;
+        Some((queue, vk))
+    }
+
+    /// The live path is usable (own connection opened AND keymap uploaded).
     pub(crate) fn ready(&self) -> bool {
-        self.vk.is_some() && !self.map.is_empty()
+        self.conn.is_some() && !self.map.is_empty()
     }
 
     /// Type `s` on the static keymap. All-or-nothing: false = nothing sent.
@@ -249,12 +336,17 @@ impl VietTyper {
     /// the level rides `vk.modifiers()` on the same object right before the
     /// tap, so ordering is protocol-guaranteed end-to-end.
     ///
-    /// `paced` = flush + 15ms after each tap. Burst-mode is fine for known
+    /// `paced` = pace after each tap. Burst-mode is fine for known
     /// terminals; VCL/gtk3 swallows BS+char bursts whole (probe-verified
-    /// 2026-07-10) and Blink drops burst taps under load — non-terminal apps
-    /// pass `paced=true`.
+    /// 2026-07-10, and again 2026-07-13 for TWO consecutive tone/quality
+    /// fixes on the same word — "chữ"→"chu") and Blink drops burst taps
+    /// under load — non-terminal apps pass `paced=true`. Each BackSpace
+    /// gets its own `roundtrip()` (real confirmation, not just `flush()`)
+    /// before anything follows — same scheme `evdev_typer.rs` field-proved
+    /// 2026-07-10 for the evdev fallback path, now here too since this
+    /// typer owns its own queue.
     pub(crate) fn backspace_then_type(&mut self, backspaces: usize, s: &str, paced: bool) -> bool {
-        let Some(vk) = &self.vk else { return false };
+        let Some((queue, vk)) = &mut self.conn else { return false };
         if self.map.is_empty() {
             return false;
         }
@@ -266,13 +358,6 @@ impl VietTyper {
             warn!("[VIET-TYPER] ký tự ngoài bảng tĩnh: {bad:?} — không gõ được");
             return false;
         }
-
-        let pace = |vk: &ZwpVirtualKeyboardV1| {
-            if let Some(backend) = vk.backend().upgrade() {
-                let _ = wayland_client::Connection::from_backend(backend).flush();
-            }
-            std::thread::sleep(std::time::Duration::from_millis(15));
-        };
 
         let mut t = self.start.elapsed().as_millis() as u32;
         let mut mask_now = self.cur_mask;
@@ -291,14 +376,19 @@ impl VietTyper {
             let (code, level) = self.map[&'\u{0008}'];
             tap(vk, code, level, &mut mask_now, &mut t);
             if paced {
-                pace(vk);
+                // Real confirmation, not just flush — VCL/gtk3 swallows a
+                // BS+char burst whole when the next tap arrives before this
+                // one is compositor-processed (field bug 2026-07-10/13).
+                let _ = queue.roundtrip(&mut TyperSink);
+                std::thread::sleep(std::time::Duration::from_millis(15));
             }
         }
         for ch in s.chars() {
             let (code, level) = self.map[&ch];
             tap(vk, code, level, &mut mask_now, &mut t);
             if paced {
-                pace(vk);
+                let _ = queue.flush();
+                std::thread::sleep(std::time::Duration::from_millis(15));
             }
         }
         // Never leave synthetic modifiers depressed on the seat.
@@ -307,6 +397,7 @@ impl VietTyper {
             mask_now = 0;
         }
         self.cur_mask = mask_now;
+        let _ = queue.flush();
         true
     }
 }
