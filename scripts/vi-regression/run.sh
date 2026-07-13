@@ -43,38 +43,46 @@ paste_get() {
 run_office() {
     local tag="$1" sub="$2" launch="$3" mode="$4" killpat="$5"
     note "Bai $tag ($mode)"
+    pkill -f "$killpat" 2>/dev/null; sleep 1
     eval "$launch" >/dev/null 2>&1 &
-    sleep 6
+    sleep 7
     local wid
     wid=$(niri msg --json windows | python3 -c "
 import json,sys
 for w in json.load(sys.stdin):
-    if '$sub' in (w.get('title') or ''): print(w.get('id'))")
+    t = w.get('title') or ''
+    if '$sub' in t:
+        print(w.get('id')); break" | head -1 | tr -d '[:space:]')
     if [ -z "$wid" ]; then
         bad "$tag: khong tim cua so (title chua '$sub')"
         return
     fi
-    niri msg action focus-window --id "$wid"; sleep 1
+    niri msg action focus-window --id "$wid" 2>/dev/null; sleep 1.5
     if ! focus_is "$sub"; then
-        bad "$tag: khong focus duoc"
+        bad "$tag: khong focus duoc (wid=$wid)"
         pkill -f "$killpat" 2>/dev/null
         return
     fi
+    # Xoa clipboard cu de phat hien copy that bai (tranh doc nham clipboard cu)
+    if command -v wl-copy >/dev/null 2>&1; then wl-copy </dev/null 2>/dev/null; fi
     python3 "$DIR/inject.py" "$mode" "$KEYS"
-    sleep 0.5
+    sleep 0.6
     python3 "$DIR/inject.py" shortcut 'ctrl+a'
     python3 "$DIR/inject.py" shortcut 'ctrl+c'
-    sleep 0.4
+    sleep 0.5
     local got; got=$(paste_get | sed 's/$//' | tr -d '
 ')
+    if [ -z "$got" ]; then
+        bad "$tag/$mode: clipboard rong (focus/copy that bai - co the sai ten cua so)"
+        if command -v grim >/dev/null 2>&1; then grim "$OUT/$tag-$mode.png"; echo "  -> screenshot: $OUT/$tag-$mode.png"; fi
+        pkill -f "$killpat" 2>/dev/null
+        return
+    fi
     if [ "$got" = "$WANT" ]; then
         ok "$tag/$mode"
     else
         bad "$tag/$mode: [$got] != [$WANT]"
-        if command -v grim >/dev/null 2>&1; then
-            grim "$OUT/$tag-$mode.png"
-            echo "  -> screenshot: $OUT/$tag-$mode.png"
-        fi
+        if command -v grim >/dev/null 2>&1; then grim "$OUT/$tag-$mode.png"; echo "  -> screenshot: $OUT/$tag-$mode.png"; fi
     fi
     pkill -f "$killpat" 2>/dev/null
 }
@@ -187,8 +195,8 @@ fi
 # Bai 4+5 (tuy chon): LibreOffice / OnlyOffice - app kho tinh nhat voi
 # keymap/evdev. Bat bang LO=1 / OO=1 (can app cai san + niri + wl-paste/xclip).
 if [ "${LO:-0}" = "1" ]; then
-    run_office "libreoffice" "LibreOffice" "libreoffice --writer --nologo" seq "libreoffice"
-    run_office "libreoffice" "LibreOffice" "libreoffice --writer --nologo" rollover "libreoffice"
+    run_office "libreoffice" "LibreOffice Writer" "libreoffice --writer --nologo" seq "libreoffice"
+    run_office "libreoffice" "LibreOffice Writer" "libreoffice --writer --nologo" rollover "libreoffice"
 fi
 if [ "${OO:-0}" = "1" ]; then
     run_office "onlyoffice" "ONLYOFFICE" "onlyoffice-desktopeditors" seq "onlyoffice-desktopeditors"
