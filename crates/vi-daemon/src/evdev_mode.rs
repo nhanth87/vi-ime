@@ -15,10 +15,34 @@
 //! SAFETY: the keyboard is ALWAYS ungrabbed on exit/panic (Drop). Worst case
 //! a bug still lets you switch VT (Ctrl+Alt+F3) or `pkill vi-daemon` from
 //! another machine/SSH. Never auto-enabled system-wide.
+//!
+//! **Reader/processor split (2026-07-13):** một thread riêng cho mỗi bàn
+//! phím đã grab chỉ làm ĐÚNG một việc — `poll` + `fetch_events` + đẩy raw
+//! `(KeyCode, value)` vào một `mpsc` channel không giới hạn — rồi vòng xử
+//! lý chính (compose + gõ ra qua typer) tiêu thụ channel đó riêng. Trước
+//! đây cả hai việc chạy trên CÙNG một thread: mỗi `backspace_then_type` có
+//! thể block 20-120ms (settle cho CEF/VCL kịp render, R19), suốt lúc đó
+//! thread không quay lại `poll()` → hàng đợi phím TRONG KERNEL (kích thước
+//! cố định của thiết bị evdev đã grab) tràn khi gõ nhanh liên tục → kernel
+//! tự rớt phím trước khi tới engine, không cách nào cứu được ở tầng ứng
+//! dụng (field bug 2026-07-13: mất chữ ngẫu nhiên khi gõ nhanh thật trong
+//! LibreOffice/OnlyOffice, chỉ 1-2 từ đầu bị lỡ). Tách reader ra thread
+//! riêng giải quyết đúng gốc: reader luôn quay lại `poll()` ngay, không bao
+//! giờ bị block bởi pacing của typer — hàng đợi giờ là heap `mpsc`
+//! (thực tế vô hạn với tốc độ gõ tay người), không phải ring buffer cố định
+//! của kernel.
+//!
+//! ĐỪNG dùng `sync_channel` (bounded) ở đây: khi đầy, `send()` phía reader
+//! sẽ BLOCK — tái tạo đúng lỗi gốc (reader không kịp quay lại `poll`, kernel
+//! tràn queue). Channel PHẢI unbounded; `queued` (AtomicUsize) chỉ là bộ đếm
+//! cảnh báo mềm (log khi backlog ≥10 — quá xa tốc độ gõ tay người, ước
+//! lượng ~5-10 ký tự/giây), không chặn gì cả.
 
 use std::os::fd::AsRawFd;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Arc;
+use std::time::Duration;
 
 use evdev::uinput::VirtualDevice;
 use evdev::{Device, EventType, InputEvent, KeyCode};
@@ -105,16 +129,77 @@ fn build_uinput_mirror() -> Result<VirtualDevice, Box<dyn std::error::Error>> {
         .build()?)
 }
 
-/// Shared event loop. Polls each keyboard fd with a 200ms timeout so the
-/// stop flag (set the instant focus leaves a legacy app) is honored ≥5x/sec
-/// even with zero key traffic. Returns (ungrabs everything) when `stop` is
-/// set or a device errors out.
-fn run_loop(
-    mut keyboards: Vec<Grabbed>,
+/// Backlog size (events sent but not yet processed) that triggers a one-shot
+/// warning log. Purely informational — the channel itself never drops or
+/// blocks. ~5-10 ký tự/giây là tốc độ gõ tay người nhanh thực tế; backlog
+/// vượt mốc này nghĩa là typer (settle pacing, R19) đang tụt lại phía sau,
+/// đáng để có evidence trail trong log dù không mất chữ.
+const QUEUE_WARN_THRESHOLD: usize = 10;
+
+/// One physical keyboard's read loop, run on its OWN thread. The ONLY job
+/// here is drain `poll` + `fetch_events` as fast as the kernel delivers and
+/// hand raw `(KeyCode, value)` pairs to `tx`. MUST NEVER do anything that can
+/// block beyond the poll timeout — see module docs: the typer's settle
+/// pacing (R19, 20-120ms per call) used to run on this same loop, and while
+/// blocked on it the kernel's per-device event queue (fixed size) filled up
+/// under fast real typing and silently dropped keys before they ever reached
+/// the engine. That is the bug this split fixes.
+fn reader_loop(
+    kbd: Grabbed,
+    tx: mpsc::Sender<(KeyCode, i32)>,
+    queued: &AtomicUsize,
+    stop: &AtomicBool,
+    dead: &AtomicBool,
+) {
+    let fd = kbd.0.as_raw_fd();
+    let mut kbd = kbd;
+    while !stop.load(Ordering::Relaxed) && !dead.load(Ordering::Relaxed) {
+        let mut pfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+        let n = unsafe { libc::poll(&mut pfd, 1, 200) };
+        if n <= 0 || pfd.revents & libc::POLLIN == 0 {
+            continue;
+        }
+        let events: Vec<InputEvent> = match kbd.0.fetch_events() {
+            Ok(evs) => evs.collect(),
+            Err(e) => {
+                error!("evdev fallback: read error: {e}");
+                // Same fatal-exit behavior as the old single-thread loop's
+                // `break 'outer` — signal the consumer (and any sibling
+                // reader) to unwind together rather than leaving half the
+                // keyboards grabbed.
+                dead.store(true, Ordering::Relaxed);
+                return;
+            }
+        };
+        for ev in events {
+            if ev.event_type() == EventType::KEY {
+                let backlog = queued.fetch_add(1, Ordering::Relaxed) + 1;
+                if backlog == QUEUE_WARN_THRESHOLD {
+                    warn!(
+                        "[EVDEV-QUEUE] backlog {backlog} phím chưa xử lý — typer đang tụt lại (không mất chữ, chỉ trễ hiển thị)"
+                    );
+                }
+                if tx.send((KeyCode::new(ev.code()), ev.value())).is_err() {
+                    return; // consumer đã thoát, không còn ai nhận
+                }
+            }
+        }
+    }
+    // `kbd` drops here → `Grabbed::drop` ungrabs, kể cả khi thoát vì lỗi.
+}
+
+/// Processes composed input and drives the typer. Consumes from the reader
+/// threads' channel instead of polling fds directly — see module docs for
+/// why the split exists. `recv_timeout(200ms)` keeps the same ≥5x/sec cadence
+/// the old poll loop had, so `enabled`/click checks are just as responsive.
+fn consumer_loop(
+    rx: mpsc::Receiver<(KeyCode, i32)>,
+    queued: &AtomicUsize,
     mut ui: VirtualDevice,
     typer: Typer,
     method: InputMethod,
     stop: &AtomicBool,
+    dead: &AtomicBool,
     runtime: Option<Arc<RuntimeConfig>>,
 ) {
     let mut composer = Composer::new(method, typer);
@@ -131,6 +216,10 @@ fn run_loop(
     // nốt tiếng Việt ra (field bug 2026-07-12: tắt giữa từ vẫn ra chữ).
     let mut disabled_exit = false;
     'outer: while !stop.load(Ordering::Relaxed) {
+        if dead.load(Ordering::Relaxed) {
+            // Một reader gặp lỗi fatal — cùng hành vi `break 'outer` cũ.
+            break 'outer;
+        }
         // IME tắt = mệnh lệnh tối cao (defense-in-depth, tầng 2): main.rs
         // drop legacy_grab khi enabled→false, nhưng nếu vì lý do gì grab còn
         // sống, composer PHẢI tự thoát → ungrab bàn phím vật lý → phím về
@@ -152,30 +241,13 @@ fn run_loop(
                 composer.click_reset();
             }
         }
-        let mut pfds: Vec<libc::pollfd> = keyboards
-            .iter()
-            .map(|k| libc::pollfd { fd: k.0.as_raw_fd(), events: libc::POLLIN, revents: 0 })
-            .collect();
-        let n = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, 200) };
-        if n <= 0 {
-            continue;
-        }
-        for (i, kbd) in keyboards.iter_mut().enumerate() {
-            if pfds[i].revents & libc::POLLIN == 0 {
-                continue;
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok((code, value)) => {
+                queued.fetch_sub(1, Ordering::Relaxed);
+                composer.handle(&mut ui, code, value);
             }
-            let events: Vec<InputEvent> = match kbd.0.fetch_events() {
-                Ok(evs) => evs.collect(),
-                Err(e) => {
-                    error!("evdev fallback: read error: {e}");
-                    break 'outer;
-                }
-            };
-            for ev in events {
-                if ev.event_type() == EventType::KEY {
-                    composer.handle(&mut ui, KeyCode::new(ev.code()), ev.value());
-                }
-            }
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => break 'outer,
         }
     }
     // Settle the half-typed word — EXCEPT when exiting because the IME was
@@ -187,6 +259,40 @@ fn run_loop(
         composer.finish_word();
     }
     composer.release_mods(&mut ui);
+}
+
+/// Wires the reader/consumer split together: one reader thread per grabbed
+/// keyboard feeding a shared channel, consumed on the calling thread.
+/// `std::thread::scope` guarantees every reader has joined (and therefore
+/// every `Grabbed` has ungrabbed) before this returns, so callers can treat
+/// it exactly like the old single-loop `run_loop`.
+fn run_loop(
+    keyboards: Vec<Grabbed>,
+    ui: VirtualDevice,
+    typer: Typer,
+    method: InputMethod,
+    stop: &AtomicBool,
+    runtime: Option<Arc<RuntimeConfig>>,
+) {
+    let (tx, rx) = mpsc::channel::<(KeyCode, i32)>();
+    let queued = AtomicUsize::new(0);
+    let dead = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        for kbd in keyboards {
+            let tx = tx.clone();
+            scope.spawn(|| reader_loop(kbd, tx, &queued, stop, &dead));
+        }
+        // Drop the original sender: once every reader thread's clone is also
+        // dropped (all readers exited), `rx` sees `Disconnected` instead of
+        // hanging on an unused handle.
+        drop(tx);
+        consumer_loop(rx, &queued, ui, typer, method, stop, &dead, runtime);
+        // Consumer exited (stop/disabled/dead) — set `dead` too so any
+        // still-running reader (e.g. a sibling keyboard mid-poll) wakes up
+        // and unwinds instead of leaking a grabbed device until `stop` is
+        // separately observed.
+        dead.store(true, Ordering::Relaxed);
+    });
 }
 
 /// Scoped variant for the automatic per-app fallback (see `legacy_grab.rs`):

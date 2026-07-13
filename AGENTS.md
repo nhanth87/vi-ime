@@ -105,6 +105,85 @@
 > phím ảo tĩnh vẫn gõ đúng (field-proven), lỗi chỉ do lớp nhúng CEF-trong-Qt
 > riêng của ONLYOFFICE. Thêm app mới vào route `xdotool` chỉ khi có repro
 > field xác nhận bàn phím ảo tĩnh sai với chính app đó.
+>
+> **Field report 2026-07-12 (round 2):** flat `--delay 15` + 15ms settle
+> KHÔNG đủ khi gõ liên tục thật (khác với repro 3-từ ban đầu) — user phải
+> tự nghỉ tay 1-2s giữa các ký tự để tránh mất chữ. Vá lần đó: `settle_ms`
+> tuỳ theo `text` có non-ASCII hay không (20ms/120ms) — NHƯNG đặt sai vị trí
+> (xem field report round 3 dưới).
+>
+> **Field report 2026-07-13 (round 3) — VỊ TRÍ settle SAI, không phải giá trị
+> sai:** debug log `[EVDEV-SYNC]` đối chiếu với chữ thật trên màn hình xác
+> nhận: round 2 gộp `key` (backspace) và `type` (chữ mới) vào MỘT process
+> xdotool (`xdotool key --delay 15 BackSpace type --delay 15 -- "ươ"`).
+> `--delay 15` chỉ áp dụng GIỮA các tap TRONG một subcommand — không có
+> khoảng nghỉ nào ở đúng điểm nối `key` kết thúc → `type` bắt đầu remap
+> scratch-keycode. `settle_ms` chạy SAU KHI CẢ process thoát, không chèn vào
+> khe hở thật. Mọi lệnh có CẢ backspace VÀ ký tự có dấu (rất phổ biến — mọi
+> lần sửa tone/quality) trúng đúng khe hở này, xdotool luôn exit 0 (không
+> WARN) vì nó không biết CEF đã rớt gì. Đối chiếu cụ thể (gõ Kiều, câu
+> "trăm năm trong cõi người ta..."): "người"→"ngời" tại bước `bs=2
+> suffix="ươ"`, "chữ"→"cữ" tại `bs=1 suffix="ư"`, "khéo"→"kho" tại `bs=2
+> suffix="éo"` — luôn là ký tự ĐẦU TIÊN ngay sau backspace bị rớt.
+>
+> **Fix (round 3):** `Injector::backspace_then_type` tách `key` và `type`
+> thành 2 PROCESS xdotool riêng — settle (20ms sau `key`, 20/120ms sau
+> `type` theo round 2) giờ chèn ĐÚNG vào giữa hai bước, không chỉ sau cùng.
+> ĐỪNG gộp lại thành 1 process "cho gọn" — đây chính là bug đã sập 2 lần.
+>
+> **Field report 2026-07-13 (round 4) — bug gộp process đã hết, còn sót
+> flaky KHÔNG TẤT ĐỊNH:** sau round 3, câu test dài (~9 lần sửa dấu qua
+> backspace) chỉ còn 2/9 lần bị nuốt hẳn ký tự type ("a"→"á" mất trắng,
+> "co"→"có" mất "ó") — không lặp lại cùng vị trí giữa các lần chạy khác
+> nhau, xdotool vẫn exit 0. Khác round 3 (sai VỊ TRÍ nghỉ — đã sửa dứt
+> điểm), đây là CEF render không có thời hạn đảm bảo — chỉ GIẢM xác suất
+> bằng settle dài hơn, không loại bỏ hoàn toàn được bằng cách này. Đã tăng
+> `settle_ms` nhánh non-ASCII 120ms→200ms. Nếu vẫn còn flaky: tăng tiếp
+> (ĐỪNG hạ xuống — field-confirmed không đủ ở round 2 VÀ round 4); nếu tăng
+> settle mãi vẫn không hết, cân nhắc đổi cơ chế inject cho ONLYOFFICE hẳn
+> (không còn là vấn đề timing nữa) — hỏi user trước khi đổi hướng lớn này.
+>
+> Nếu gặp lỗi MỚI (không phải flaky ngẫu nhiên mà lặp lại có quy luật):
+> đọc lại `[EVDEV-SYNC]` ở mức `RUST_LOG=debug` và đối chiếu TỪNG ký tự mất
+> với `bs`/`suffix` trước khi vá — đừng vá settle_ms mù, tìm đúng vị trí/cơ
+> chế trước (R17).
+
+### R20. evdev fallback = reader thread riêng + processor thread riêng, KHÔNG BAO GIỜ gộp lại
+> ⚠️ Đọc trước khi sửa `evdev_mode.rs` (reader_loop/consumer_loop/run_loop).
+>
+> **Bẫy đã sập (2026-07-13):** trước đây MỘT thread vừa `poll`+`fetch_events`
+> bàn phím vật lý vừa gọi `composer.handle()` → `typer.backspace_then_type()`.
+> Typer block 20-120ms/lần (settle pacing R19, để CEF/VCL kịp render trước
+> lần remap kế). Trong lúc block, thread không quay lại `poll()` → hàng đợi
+> phím TRONG KERNEL (kích thước cố định của thiết bị evdev đã grab) tràn khi
+> gõ nhanh liên tục thật → kernel tự rớt phím TRƯỚC KHI tới engine. Không có
+> fix ở tầng ứng dụng (engine/keymap/typer) cứu được — phím đã mất trước khi
+> code thấy nó. Field bug: mất chữ ngẫu nhiên khi gõ nhanh trong
+> LibreOffice/OnlyOffice.
+>
+> **Fix:** tách thành 2 vai trên 2 thread, nối bằng `std::sync::mpsc`
+> UNBOUNDED (`run_loop` dùng `std::thread::scope`):
+> 1. `reader_loop` (1 thread/bàn phím): CHỈ `poll` + `fetch_events` + đẩy
+>    `(KeyCode, i32)` vào channel. Không được làm gì có thể block quá
+>    poll timeout — nếu cần thêm việc gì ở đây, tự hỏi "việc này có thể
+>    tốn >200ms không", nếu có thì KHÔNG được thêm.
+> 2. `consumer_loop` (1 thread, thay cho toàn bộ `run_loop` cũ): tiêu thụ
+>    channel bằng `recv_timeout(200ms)` (giữ đúng cadence cũ để check
+>    enabled/click), gọi `composer.handle()` như trước — mọi pacing/settle
+>    của typer vẫn ở đây, không đổi.
+>
+> **Bất biến bắt buộc:**
+> - Channel PHẢI unbounded (`mpsc::channel`, KHÔNG `sync_channel`). Bounded
+>   channel khi đầy làm `send()` phía reader BLOCK — tái tạo đúng lỗi gốc
+>   (reader không kịp quay lại `poll`, kernel tràn queue lần nữa).
+> - `queued: AtomicUsize` chỉ là cảnh báo mềm (log 1 dòng khi backlog ≥
+>   `QUEUE_WARN_THRESHOLD`), KHÔNG dùng để chặn hay drop bất cứ gì.
+> - `dead: AtomicBool` là cờ chia sẻ 2 chiều: reader lỗi fatal → set `dead`
+>   để consumer thoát cùng; consumer thoát (disabled/stop) → set `dead` để
+>   reader còn sống (bàn phím khác) thoát theo, tránh treo `Grabbed` (ungrab
+>   trễ = bàn phím vẫn bị chiếm).
+> - ĐỪNG gộp reader+processor lại "cho đơn giản" hay "giảm 1 thread" dưới
+>   bất kỳ danh nghĩa tối ưu nào — đây chính là cấu trúc đã gây bug.
 
 ---
 

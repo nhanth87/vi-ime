@@ -151,14 +151,14 @@ impl Injector {
             InjectorKind::Xdotool => "xdotool",
         }
     }
-    /// BackSpace × n, then type `text` — one process, so the app receives
-    /// everything in order. `text` only ever holds engine output (letters,
-    /// digits, diacritics), never something an option parser could eat.
+    /// BackSpace × n, then type `text`. `text` only ever holds engine output
+    /// (letters, digits, diacritics), never something an option parser could
+    /// eat.
     pub(crate) fn backspace_then_type(&mut self, backspaces: usize, text: &str) -> bool {
         if backspaces == 0 && text.is_empty() {
             return true;
         }
-        let status = match self.kind {
+        match self.kind {
             InjectorKind::Wtype => {
                 let mut cmd = Command::new("wtype");
                 for _ in 0..backspaces {
@@ -168,61 +168,83 @@ impl Injector {
                     cmd.args(["-d", "15"]);
                     cmd.arg(text);
                 }
-                cmd.status()
+                self.run(cmd, backspaces, text)
             }
             InjectorKind::Xdotool => {
-                let mut cmd = Command::new("xdotool");
-                // vi-daemon inherits whatever DISPLAY its own launcher had —
-                // field bug 2026-07-12: a session with a stale/mismatched
-                // DISPLAY (login env says :1, the real Xwayland socket
-                // OnlyOffice's X11 clients use is :0) makes xdotool fail
-                // with "Failed creating new xdo instance" and every
-                // keystroke silently drops. Same fix as the
-                // onlyoffice-desktopeditors wrapper script: probe for a
-                // live socket in /tmp/.X11-unix and override DISPLAY for
-                // just this child process, not the whole daemon.
-                if let Some(display) = resolve_x11_display() {
-                    cmd.env("DISPLAY", display);
-                }
-                // --delay 15 (per-subcommand, xdotool has no single global
-                // flag when chaining `key ... type ...` in one invocation):
-                // for non-ASCII, `xdotool type`/`key` remaps a scratch
-                // keycode to the target Unicode codepoint, taps it, then
-                // unmaps it — the SAME "keymap động" pattern this codebase
-                // bans for its own native typer (viet_typer.rs) because a
-                // lagging client can decode a tap against the OLD mapping
-                // and drop the char. Field-confirmed 2026-07-12: unpaced
-                // xdotool into ONLYOFFICE's embedded CEF surface dropped a
-                // different, random char on each of 3 back-to-back runs of
-                // the same string ("Cửa"→"Ửa", "áo"→"o", "sắt"→"st") — a
-                // burst/lag issue, not a one-time warm-up issue (an earlier
-                // fix that paused only before the FIRST keystroke of a grab
-                // session did not help). Pace every tap, same 15ms as the
-                // native typer's proven-safe interval.
+                // **Root cause (field bug 2026-07-13, xác nhận bằng debug log
+                // `[EVDEV-SYNC]` đối chiếu từng ký tự mất thật với chữ hiện
+                // ra):** bản trước gộp `key` (backspace) và `type` (chữ mới)
+                // vào MỘT process xdotool
+                // (`xdotool key --delay 15 BackSpace type --delay 15 -- "ươ"`).
+                // `--delay 15` chỉ áp dụng GIỮA các tap TRONG một subcommand —
+                // KHÔNG có khoảng nghỉ nào ở đúng điểm nối giữa `key` kết thúc
+                // và `type` bắt đầu remap scratch-keycode. `settle_ms`
+                // (20/120ms, R19) trước đây chỉ chạy SAU KHI CẢ process thoát
+                // — sai vị trí, không chèn được vào khe hở thật.
+                //
+                // Mọi lệnh có CẢ backspace VÀ ký tự có dấu (rất phổ biến —
+                // mọi lần sửa tone/quality) trúng đúng khe hở này: CEF chưa
+                // xử lý xong backspace thì keymap đã bị remap cho ký tự kế,
+                // ký tự đó rớt. Đối chiếu log thật (2026-07-13): "người"→
+                // "ngời" tại bước bs=2 suffix="ươ" (mất "ư" — ký tự ĐẦU ngay
+                // sau backspace); "chữ"→"cữ" tại bs=1 suffix="ư"; "khéo"→
+                // "kho" tại bs=2 suffix="éo" (mất "é"). xdotool luôn exit 0,
+                // không WARN nào — nó không biết CEF đã rớt gì.
+                //
+                // Fix: tách hẳn thành 2 PROCESS riêng, settle_ms giờ chèn
+                // ĐÚNG vào giữa backspace và type, không chỉ sau cùng.
+                let display = resolve_x11_display();
+                let mut ok = true;
                 if backspaces > 0 {
+                    let mut cmd = Command::new("xdotool");
+                    if let Some(d) = &display {
+                        cmd.env("DISPLAY", d);
+                    }
                     cmd.args(["key", "--delay", "15"]);
                     for _ in 0..backspaces {
                         cmd.arg("BackSpace");
                     }
+                    ok &= self.run(cmd, backspaces, "");
+                    // BackSpace dùng keycode có sẵn, không remap — nhưng vẫn
+                    // cần chờ CEF xử lý xong tap trước khi `type` kế tiếp đổi
+                    // keymap (chính là khe hở đã sập).
+                    std::thread::sleep(std::time::Duration::from_millis(20));
                 }
                 if !text.is_empty() {
+                    let mut cmd = Command::new("xdotool");
+                    if let Some(d) = &display {
+                        cmd.env("DISPLAY", d);
+                    }
                     cmd.args(["type", "--delay", "15", "--", text]);
+                    ok &= self.run(cmd, 0, text);
+                    // Field-confirmed 2026-07-12 round 2: chỉ ký tự có dấu
+                    // (remap scratch-keycode) cần nghỉ dài; ASCII dùng
+                    // keycode có sẵn nên rẻ hơn cho CEF theo kịp.
+                    //
+                    // Field-confirmed 2026-07-13 (round 4, sau khi tách 2
+                    // process ở round 3 đã fix bug gộp process): vẫn còn
+                    // flaky hiếm (~2/9 lần sửa dấu qua backspace trong 1 câu
+                    // test, ví dụ "a"→"á" hoặc "co"→"có" bị CEF nuốt mất
+                    // hẳn ký tự type ra dù xdotool exit 0) — không tất định,
+                    // không lặp lại cùng vị trí 2 lần chạy khác nhau. Khác
+                    // bug round 3 (sai VỊ TRÍ nghỉ, đã hết): đây là CEF
+                    // render không có thời hạn đảm bảo, chỉ giảm xác suất
+                    // bằng cách tăng settle, không loại bỏ được hoàn toàn.
+                    // 120ms→200ms. Nếu vẫn còn flaky, tăng tiếp — ĐỪNG hạ
+                    // xuống (đã field-confirmed không đủ 3 lần: R19 round 2,
+                    // và đây là round 4).
+                    let settle_ms = if text.chars().any(|c| !c.is_ascii()) { 200 } else { 20 };
+                    std::thread::sleep(std::time::Duration::from_millis(settle_ms));
                 }
-                let s = cmd.status();
-                // Live-echo calls this on almost every keystroke — a new
-                // xdotool PROCESS per call. `cmd.status()` only confirms
-                // xdotool finished QUEUING its X11 events, not that
-                // ONLYOFFICE's embedded CEF surface consumed/rendered them
-                // before the next invocation's keymap remap begins. Same
-                // 15ms settle the native typer pays between taps (R17:
-                // "always pace" against legacy apps), applied here between
-                // separate xdotool invocations instead of between taps
-                // inside one.
-                std::thread::sleep(std::time::Duration::from_millis(15));
-                s
+                ok
             }
-        };
-        match status {
+        }
+    }
+
+    /// Run one injector process, logging (never swallowing) a non-zero exit
+    /// or spawn failure — R19: evidence trail, not silent failure.
+    fn run(&self, mut cmd: Command, backspaces: usize, text: &str) -> bool {
+        match cmd.status() {
             Ok(s) if s.success() => true,
             Ok(s) => {
                 warn!("[EVDEV-INJECTOR] {} exited với status {s} (bs={backspaces}, text={text:?})", self.name());
