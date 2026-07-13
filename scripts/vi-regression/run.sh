@@ -26,15 +26,17 @@ note() { echo -e "${CYAN}── $1 ──${NC}"; }
 ok()   { echo -e "  ${GREEN}PASS${NC} $1"; PASS=$((PASS+1)); }
 bad()  { echo -e "  ${RED}FAIL${NC} $1"; FAIL=$((FAIL+1)); }
 
-# paste_get: doc clipboard ra stdout (Wayland wl-paste, X11 xclip fallback)
+# paste_get: doc clipboard ra stdout. Thu Wayland (wl-paste) truoc, neu
+# rong thi thu X11 (xclip) - app XWayland (OnlyOffice/Qt) viet vao X11 clipboard.
 paste_get() {
+    local out=""
     if command -v wl-paste >/dev/null 2>&1; then
-        wl-paste 2>/dev/null
-    elif command -v xclip >/dev/null 2>&1; then
-        xclip -selection clipboard -o 2>/dev/null
-    else
-        echo ""
+        out=$(wl-paste 2>/dev/null)
     fi
+    if [ -z "$out" ] && command -v xclip >/dev/null 2>&1; then
+        out=$(xclip -selection clipboard -o 2>/dev/null)
+    fi
+    echo "$out"
 }
 
 # run_office: bai LibreOffice / OnlyOffice (text field nhan IME). Go KEYS
@@ -43,16 +45,20 @@ paste_get() {
 run_office() {
     local tag="$1" sub="$2" launch="$3" mode="$4" killpat="$5"
     note "Bai $tag ($mode)"
-    pkill -f "$killpat" 2>/dev/null; sleep 1
+    pkill -f "$killpat" 2>/dev/null; sleep 2
     eval "$launch" >/dev/null 2>&1 &
-    sleep 7
+    sleep 9
     local wid
     wid=$(niri msg --json windows | python3 -c "
 import json,sys
+best=None; anyw=None
 for w in json.load(sys.stdin):
     t = w.get('title') or ''
     if '$sub' in t:
-        print(w.get('id')); break" | head -1 | tr -d '[:space:]')
+        if anyw is None: anyw = w.get('id')
+        if 'Start Center' not in t:
+            best = w.get('id'); break
+print(best or anyw or '')" | head -1 | tr -d '[:space:]')
     if [ -z "$wid" ]; then
         bad "$tag: khong tim cua so (title chua '$sub')"
         return
@@ -63,8 +69,9 @@ for w in json.load(sys.stdin):
         pkill -f "$killpat" 2>/dev/null
         return
     fi
-    # Xoa clipboard cu de phat hien copy that bai (tranh doc nham clipboard cu)
+    # Xoa clipboard ca Wayland (wl-copy) va X11 (xclip) de phat hien copy that bai
     if command -v wl-copy >/dev/null 2>&1; then wl-copy </dev/null 2>/dev/null; fi
+    if command -v xclip >/dev/null 2>&1; then xclip -selection clipboard </dev/null 2>/dev/null; fi
     python3 "$DIR/inject.py" "$mode" "$KEYS"
     sleep 0.6
     python3 "$DIR/inject.py" shortcut 'ctrl+a'
@@ -73,7 +80,7 @@ for w in json.load(sys.stdin):
     local got; got=$(paste_get | sed 's/$//' | tr -d '
 ')
     if [ -z "$got" ]; then
-        bad "$tag/$mode: clipboard rong (focus/copy that bai - co the sai ten cua so)"
+        bad "$tag/$mode: clipboard rong (focus/copy that bai - sai ten cua so hoac X11/Wayland clipboard)"
         if command -v grim >/dev/null 2>&1; then grim "$OUT/$tag-$mode.png"; echo "  -> screenshot: $OUT/$tag-$mode.png"; fi
         pkill -f "$killpat" 2>/dev/null
         return
@@ -195,8 +202,8 @@ fi
 # Bai 4+5 (tuy chon): LibreOffice / OnlyOffice - app kho tinh nhat voi
 # keymap/evdev. Bat bang LO=1 / OO=1 (can app cai san + niri + wl-paste/xclip).
 if [ "${LO:-0}" = "1" ]; then
-    run_office "libreoffice" "LibreOffice Writer" "libreoffice --writer --nologo" seq "libreoffice"
-    run_office "libreoffice" "LibreOffice Writer" "libreoffice --writer --nologo" rollover "libreoffice"
+    run_office "libreoffice" "LibreOffice" "libreoffice -env:UserInstallation=file:///tmp/lo-regress --writer --nologo" seq "libreoffice"
+    run_office "libreoffice" "LibreOffice" "libreoffice -env:UserInstallation=file:///tmp/lo-regress --writer --nologo" rollover "libreoffice"
 fi
 if [ "${OO:-0}" = "1" ]; then
     run_office "onlyoffice" "ONLYOFFICE" "onlyoffice-desktopeditors" seq "onlyoffice-desktopeditors"
