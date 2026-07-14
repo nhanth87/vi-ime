@@ -121,6 +121,12 @@ pub struct ImeAppState {
     /// of text-input-v3 batch). While >0, `TextChangeCause::Other`
     /// is suppressed — it is our own vk typing, not external.
     pub(crate) live_echo_pending: u32,
+    /// Timestamp of the most recent `sync_shown` call. Used
+    /// as a secondary guard: if an `Other` cause slips through
+    /// when counter=0 but a live-echo update is still settling
+    /// (app hasn't finished rendering), the `Done` handler skips
+    /// the drop if this is recent enough (<200ms).
+    pub(crate) last_live_echo_at: Option<Instant>,
 }
 
 /// Preedit-only compositions are DROPPED on a mouse click (R8) — the field
@@ -167,6 +173,7 @@ impl ImeAppState {
             game_mode: false,
             last_key_at: None,
             live_echo_pending: 0,
+            last_live_echo_at: None,
         }
     }
 

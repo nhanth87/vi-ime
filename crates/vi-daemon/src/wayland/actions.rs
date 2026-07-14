@@ -333,14 +333,19 @@ impl ImeAppState {
         // at that point, the `Other` cause is NOT suppressed and
         // composition gets dropped (tone keys appear as literal digits).
         self.live_echo_pending = self.live_echo_pending.saturating_add(1);
+        self.last_live_echo_at = Some(std::time::Instant::now());
         if !self
             .viet
             .backspace_then_type(shown.len() - common, &suffix, paced)
         {
             tracing::warn!(
-                "[VIET-TYPER] không gõ được (bs={}, \"{suffix}\") — giữ nguyên",
+                "[VIET-TYPER] không gõ được (bs={}, \"{suffix}\") — giữ nguyên shown_word",
                 shown.len() - common
             );
+            // DO NOT update shown_word — the app still shows the old text.
+            // The next sync_shown will compute the correct diff against
+            // the actual app state, not our stale guess.
+            return;
         }
         self.shown_word.clear();
         self.shown_word.push_str(target);

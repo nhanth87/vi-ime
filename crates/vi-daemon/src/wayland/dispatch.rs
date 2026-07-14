@@ -141,8 +141,18 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                 // (mouse click inside the SAME field never fires
                 // Deactivate — this is the only signal we get). R8: drop
                 // the half-typed word, never commit it at the new cursor.
+                // Secondary guard: even if external_change is true
+                // and counter is 0, don't drop if a live-echo update
+                // is still settling (app hasn't finished rendering).
+                // A mid-word `Other` cause with a recent `sync_shown`
+                // (<200ms) is very likely our own vk typing, not a
+                // genuine external edit.
+                let recent_live = state
+                    .last_live_echo_at
+                    .map_or(false, |t| t.elapsed().as_millis() < 200);
                 if std::mem::take(&mut state.external_change)
                     && state.engine.has_pending()
+                    && !recent_live
                 {
                     info!(
                         "[SCENARIO] 🖱️ external cursor/text change — \
