@@ -33,6 +33,8 @@ pub struct RuntimeConfig {
     mode_from_user: AtomicBool,
     /// Game mode: raw key passthrough, no IME processing.
     game_mode: AtomicBool,
+    /// App honors surrounding-text → delete_surrounding_text safe (P0).
+    surrounding_capable: AtomicBool,
     /// app_id of the currently focused window. Not an atomic (it's a String),
     /// so it lives behind a Mutex; only read when the generation changed, so
     /// the hot key path stays lock-free. Drives per-app plugin routing +
@@ -66,6 +68,8 @@ pub struct RuntimeSnapshot {
     pub mode_from_user: bool,
     /// Game mode active: raw key passthrough, no IME processing.
     pub game_mode: bool,
+    /// App honors surrounding-text → delete_surrounding_text is safe (P0).
+    pub surrounding_capable: bool,
     pub generation: u64,
 }
 
@@ -82,6 +86,7 @@ impl Default for RuntimeSnapshot {
             emoji: true,
             mode_from_user: false,
             game_mode: false,
+            surrounding_capable: false,
             generation: 0,
         }
     }
@@ -177,6 +182,7 @@ impl RuntimeConfig {
             emoji: self.emoji.load(Ordering::Relaxed),
             mode_from_user: self.mode_from_user.load(Ordering::Relaxed),
             game_mode: self.game_mode.load(Ordering::Relaxed),
+            surrounding_capable: self.surrounding_capable.load(Ordering::Relaxed),
             generation,
         }
     }

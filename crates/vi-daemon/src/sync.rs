@@ -43,6 +43,7 @@ pub fn to_snapshot(eff: &EffectiveConfig) -> RuntimeSnapshot {
         emoji: eff.emoji,
         mode_from_user: false,
         game_mode: false,
+        surrounding_capable: false,
         generation: 0,
     }
 }

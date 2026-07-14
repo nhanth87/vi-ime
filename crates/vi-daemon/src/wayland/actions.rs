@@ -209,15 +209,20 @@ impl ImeAppState {
         // (user chọn NonPreedit chính vì không muốn gạch chân). Từ hiện
         // nguyên khối qua commit_string ở word boundary.
         let silent = !live && self.engine.mode() == ImeMode::NonPreedit;
+        // P0: app honors surrounding-text → atomic commit, no sleep-dance.
+        let capable = live && self.app_surrounding_capable();
 
         match action {
             NonPreeditAction::Buffer | NonPreeditAction::UpdatePreedit(_) => {
-                if live {
+                let target = self.engine.inner().preedit_output();
+                if capable {
+                    // P0: app capable → atomic commit, no sleep-dance.
+                    self.live_commit(im, &target);
+                } else if live {
                     // Live conversion: the screen follows the rendered form
                     // key by key ("nha" + '6' → "nhâ" instantly, live
                     // style). Mid-word backspace is the same diff, one
                     // char shorter.
-                    let target = self.engine.inner().preedit_output();
                     self.sync_shown(&target);
                 } else if !silent {
                     let s = self.engine.inner().preedit_string().to_string();
@@ -227,7 +232,10 @@ impl ImeAppState {
             NonPreeditAction::CommitWithBackspace { text, .. } => {
                 crate::godmod::log_commit(!text.is_ascii());
                 info!("[COMMIT] word done: \"{text}\" + replay code={keycode}");
-                if live {
+                if capable {
+                    // P0: app capable → atomic, no VietTyper needed.
+                    self.live_commit(im, &text);
+                } else if live {
                     // Screen already shows the rendered form (live sync) —
                     // usually a no-op diff, then replay the boundary key.
                     self.sync_shown(&text);
@@ -253,7 +261,10 @@ impl ImeAppState {
                 im.commit(self.serial);
             }
             NonPreeditAction::ClearPreedit => {
-                if live {
+                if capable {
+                    // P0: word deleted → atomic clear.
+                    self.live_commit(im, "");
+                } else if live {
                     // Word fully deleted by backspace — remove what we own.
                     self.sync_shown("");
                 } else if !silent {

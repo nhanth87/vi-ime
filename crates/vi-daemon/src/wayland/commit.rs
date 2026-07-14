@@ -44,5 +44,6 @@ impl ImeAppState {
     /// (click, focus change) whatever is on screen stays where it was.
     pub(crate) fn reset_word_state(&mut self) {
         self.shown_word.clear();
+        self.committed_bytes = 0;
     }
 }

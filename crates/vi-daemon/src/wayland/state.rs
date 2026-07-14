@@ -127,6 +127,10 @@ pub struct ImeAppState {
     /// (app hasn't finished rendering), the `Done` handler skips
     /// the drop if this is recent enough (<200ms).
     pub(crate) last_live_echo_at: Option<Instant>,
+    /// P0 — app-capable path: bytes committed via `commit_string` for the
+    /// current word (so `delete_surrounding_text` can undo to the right
+    /// boundary). Reset by `reset_word_state()`.
+    pub(crate) committed_bytes: usize,
 }
 
 /// Preedit-only compositions are DROPPED on a mouse click (R8) — the field
@@ -174,6 +178,7 @@ impl ImeAppState {
             last_key_at: None,
             live_echo_pending: 0,
             last_live_echo_at: None,
+            committed_bytes: 0,
         }
     }
 
@@ -191,6 +196,32 @@ impl ImeAppState {
         // Field Url/Secure/NumericRaw KHÔNG bao giờ tới đây — process_key
         // (actions.rs) đã raw-passthrough + return trước khi gọi apply_action.
         self.engine.mode() == ImeMode::NonPreedit && self.viet.ready()
+    }
+
+    /// P0: Does the current app honor `surrounding_text`?
+    /// If yes, `delete_surrounding_text + commit_string` is safe (atomic).
+    pub(crate) fn app_surrounding_capable(&self) -> bool {
+        if self.surrounding_seen {
+            return true;
+        }
+        self.runtime
+            .as_ref()
+            .map(|rt| rt.snapshot().surrounding_capable)
+            .unwrap_or(false)
+    }
+
+    /// P0 live-commit: atomic `delete_surrounding_text + commit_string`
+    /// for apps that honor surrounding-text. Replaces `sync_shown`
+    /// (VietTyper sleep-dance) entirely for capable apps.
+    pub(crate) fn live_commit(&mut self, im: &ZwpInputMethodV2, target: &str) {
+        if self.committed_bytes > 0 {
+            im.delete_surrounding_text(self.committed_bytes as u32, 0);
+        }
+        if !target.is_empty() {
+            im.commit_string(target.to_string());
+        }
+        im.commit(self.serial);
+        self.committed_bytes = target.len();
     }
 
     /// ms left until the idle auto-commit fires, or None when unarmed.
