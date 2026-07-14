@@ -4,6 +4,8 @@ Copyright (c) 2024-2026 vi-im contributors
 -->
 
 # `VI-IME — Bộ gõ tiếng Việt siêu nhẹ cho Wayland`
+[![VI-IME gõ tiếng việt mọi nơi]([https://youtube.com](https://www.youtube.com/watch?v=1cv0QnDNLHQ&feature=youtu.be))]([https://youtube.com](https://www.youtube.com/watch?v=1cv0QnDNLHQ&feature=youtu.be))
+
 
 ### ⬇️ [Tải bản mới nhất (AppImage)](https://github.com/nhanth87/vi-ime/releases)
 
