@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! Live runtime configuration shared between the daemon and the IME thread.
 //!
 //! The daemon writes a new snapshot (atomics, no locks); the IME event loop

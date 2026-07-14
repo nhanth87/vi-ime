@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! Physical mouse-click watcher (evdev) — the last-resort click signal.
 //!
 //! Field-tested 2026-07-09: some apps send NO protocol signal on a mouse

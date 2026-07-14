@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! Plugin system for vi-ime.
 //! Plugins form a middleware chain: ALL matching plugins process each key.
 //! Global plugins (handles_app returns true for everything) run for every app.

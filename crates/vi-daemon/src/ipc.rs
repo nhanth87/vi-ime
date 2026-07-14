@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! Unix socket IPC server — phục vụ vi-settings QuickShell client.
 //!
 //! Giao thức: JSON lines qua Unix stream socket. Mỗi request là một dòng JSON,

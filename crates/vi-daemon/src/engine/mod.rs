@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 #![allow(dead_code)]
 //! Vietnamese IME core (was the `vi-engine` leaf crate, folded in to cut crate
 //! count). Free of any Wayland/GUI deps; all I/O goes through the `Engine` API.

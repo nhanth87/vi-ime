@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 // main.qml — vi-settings: ONE small, self-contained, centered window.
 //
 // Self-contained on purpose: a single file, no qrc pages, no separate IPC

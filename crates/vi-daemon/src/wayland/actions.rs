@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! Key processing: keycode → engine action → Wayland/virtual-keyboard output.
 //!
 //! **Preedit everywhere** — all output uses commit_string / set_preedit_string.

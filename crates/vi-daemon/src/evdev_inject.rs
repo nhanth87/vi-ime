@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! Unicode injection + keycode mapping for the evdev fallback
 //! (split from evdev_mode.rs to honor the 300-line rule, R4).
 

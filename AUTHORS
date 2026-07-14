@@ -1,0 +1,4 @@
+Tran Huu Nhan <nhanth87@gmail.com>
+Original author and primary developer of vi-im.
+Vietnamese Unicode composition engine (NFD algebra, glyph decomposition),
+Wayland input-method protocol integration, evdev fallback engine.

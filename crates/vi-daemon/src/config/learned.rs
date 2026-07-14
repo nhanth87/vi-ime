@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! Learned cache — runtime-observed app capabilities, the second layer of
 //! the 4-layer resolution (user override > learned > builtin > global).
 //!

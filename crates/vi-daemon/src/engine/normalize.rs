@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! Normalization pass: raw keystrokes → quality-marked chars + syllable tone.
 //!
 //! Handles Telex/VNI modifier semantics with a UNIFIED undo mechanism:

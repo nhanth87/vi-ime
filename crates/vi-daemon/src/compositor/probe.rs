@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! Registry probe — list the compositor's advertised globals.
 //!
 //! The globals are the ground truth for "can vi-im run here": no

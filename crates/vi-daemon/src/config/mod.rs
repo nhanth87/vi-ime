@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! vi-ime configuration: schema types, effective-config resolution,
 //! and the `ConfigManager` that loads/saves `setting.conf`.
 

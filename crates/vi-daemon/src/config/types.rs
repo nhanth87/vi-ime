@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! Core config types: enums, per-app/per-site overrides, and the `Setting` root.
 
 use serde::{Deserialize, Serialize};

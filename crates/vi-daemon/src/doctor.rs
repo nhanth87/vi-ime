@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! `vi-ime --doctor` — one-shot diagnosis, the vi-im analogue of
 //! fcitx5-diagnose. Walks the stack bottom-up and says which LAYER is
 //! broken, so users paste ONE output into a bug report instead of running

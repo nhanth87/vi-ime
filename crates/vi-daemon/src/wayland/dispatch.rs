@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 use tracing::{info, warn};
 use wayland_client::protocol::wl_keyboard::KeyState;
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};

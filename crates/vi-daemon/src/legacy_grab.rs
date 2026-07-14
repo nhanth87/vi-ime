@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! Automatic evdev fallback for apps `zwp_input_method_v2` cannot reach.
 //!
 //! Two confirmed cases (field-tested 2026-07-10, see fix-plan):

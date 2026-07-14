@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! Compositor-agnostic focus tracking via zwlr_foreign_toplevel_management_v1.
 //!
 //! Every wlroots-based compositor (Sway, Hyprland, river, labwc, Wayfire…)

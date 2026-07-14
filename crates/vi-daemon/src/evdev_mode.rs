@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! evdev fallback for apps invisible to `zwp_input_method_v2` (XWayland/X11
 //! clients, LibreOffice's one-shot VCL text-input — see legacy_grab.rs).
 //! Opt-in globally via `--evdev`, or engaged automatically per-app.

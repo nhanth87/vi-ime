@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-only
-# Copyright (c) 2024-2026 vi-im contributors
+# Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 #
 # Build vi-im-x86_64.AppImage: bundles vi-ime (daemon+tray) and vi-settings
 # (QML config window launcher) + the QML source + icons into one portable

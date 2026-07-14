@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! Live composer for the evdev fallback (split from evdev_mode.rs, R4).
 //!
 //! LIVE echo model: letter/tone keys are consumed from the grabbed keyboard

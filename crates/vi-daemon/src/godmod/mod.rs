@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! vi-godmod — Debug & Development Telemetry
 //!
 //! Logs EVERY keystroke with full context: timestamp, char, keycode,

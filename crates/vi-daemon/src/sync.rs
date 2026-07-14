@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! Bridging vi-config types → vi-engine runtime snapshots.
 //! vi-engine is the crate-DAG leaf, so the enum duplication between
 //! vi-config and vi-engine is intentional; this is the single mapping point.

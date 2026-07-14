@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! Engine facade — thin state machine over the unified syllable engine.
 //!
 //! Raw keys are the single source of truth. Every keystroke the whole word is

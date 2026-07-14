@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
-# Copyright (c) 2024-2026 vi-im contributors
+# Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 """Generate the vi-im tray icons: a sky-blue rounded square with a bold
 white glyph — 'V' when Vietnamese input is on, 'E' when it's off (raw
 English passthrough). Pure stdlib (writes SVG XML directly), no

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 /// Vietnamese tone marks (thanh điệu).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Tone {

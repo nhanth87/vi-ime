@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! Hard protocol signals the IME thread reports back to the daemon.
 //!
 //! These are FACTS from the wire (capability detection), not heuristics:

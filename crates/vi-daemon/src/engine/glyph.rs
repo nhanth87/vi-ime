@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! Unicode algebra — diacritics as codepoint math, not character tables.
 //!
 //! A Vietnamese letter is `base × quality × tone`. Internally we only ever

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2024-2026 vi-im contributors
+// Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! /proc inspection — cheap kernel-boundary signals about the focused app.
 //!
 //! Only used when the compositor IPC provides a PID (niri does). Read-only,
