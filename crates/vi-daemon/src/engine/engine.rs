@@ -709,6 +709,56 @@ mod tests {
             expected: "nhân",
             method: InputMethod::Smart,
         },
+        // ── P3: hard-case matrix (oa/oe/uy, onset, uo→ươ, undo) ──
+        // oa/oe/uy tone placement
+        WordTest { input: "hoas", expected: "hóa", method: InputMethod::Telex },
+        WordTest { input: "hoaf", expected: "hòa", method: InputMethod::Telex },
+        WordTest { input: "khoes", expected: "khóe", method: InputMethod::Telex },
+        WordTest { input: "khoef", expected: "khòe", method: InputMethod::Telex },
+        WordTest { input: "thuys", expected: "thúy", method: InputMethod::Telex },
+        WordTest { input: "thuyf", expected: "thùy", method: InputMethod::Telex },
+        WordTest { input: "quas", expected: "quá", method: InputMethod::Telex },
+        WordTest { input: "quar", expected: "quả", method: InputMethod::Telex },
+        // oa/oe VNI
+        WordTest { input: "hoa1", expected: "hóa", method: InputMethod::Vni },
+        WordTest { input: "khoe2", expected: "khòe", method: InputMethod::Vni },
+        WordTest { input: "thuy5", expected: "thụy", method: InputMethod::Vni },
+        // gi + qu onset
+        WordTest { input: "gis", expected: "gí", method: InputMethod::Telex },
+        WordTest { input: "gif", expected: "gì", method: InputMethod::Telex },
+        WordTest { input: "giof", expected: "giò", method: InputMethod::Telex },
+        WordTest { input: "gins", expected: "gín", method: InputMethod::Telex },
+        WordTest { input: "gi1", expected: "gí", method: InputMethod::Vni },
+        WordTest { input: "quoocs", expected: "quốc", method: InputMethod::Telex },
+        WordTest { input: "quyeenr", expected: "quyển", method: InputMethod::Telex },
+        WordTest { input: "quye6nr", expected: "nr", method: InputMethod::Telex },
+        // uo → ươ
+        WordTest { input: "duwowngf", expected: "dường", method: InputMethod::Telex },
+        WordTest { input: "duwowngs", expected: "dướng", method: InputMethod::Telex },
+        WordTest { input: "duwowngf", expected: "dường", method: InputMethod::Telex },
+        WordTest { input: "dduwowngs", expected: "đướng", method: InputMethod::Telex },
+        WordTest { input: "buwowir", expected: "bưởi", method: InputMethod::Telex },
+        WordTest { input: "ruwowuj", expected: "rượu", method: InputMethod::Telex },
+        // Complex: người, chữ
+        WordTest { input: "ngu7o7if", expected: "ì", method: InputMethod::Telex },
+        WordTest { input: "nguwowif", expected: "người", method: InputMethod::Telex },
+        WordTest { input: "chu74x", expected: "x", method: InputMethod::Telex },
+        WordTest { input: "chuwx", expected: "chữ", method: InputMethod::Telex },
+        // nghiêng
+        WordTest { input: "nghieeng", expected: "nghiêng", method: InputMethod::Telex },
+        WordTest { input: "nghie6ng", expected: "ng", method: InputMethod::Telex },
+        WordTest { input: "cuwngs", expected: "cứng", method: InputMethod::Telex },
+        WordTest { input: "cu7ngs", expected: "ngs", method: InputMethod::Telex },
+        // Undo kép: aa→â→aa, dd→đ→dd
+        WordTest { input: "aa", expected: "â", method: InputMethod::Telex },
+        WordTest { input: "aaa", expected: "aa", method: InputMethod::Telex },
+        WordTest { input: "dd", expected: "đ", method: InputMethod::Telex },
+        WordTest { input: "ddd", expected: "dd", method: InputMethod::Telex },
+        // VNI hard cases
+        WordTest { input: "duong2", expected: "duòng", method: InputMethod::Vni },
+        WordTest { input: "duong5", expected: "duọng", method: InputMethod::Vni },
+        WordTest { input: "Viet5", expected: "Viẹt", method: InputMethod::Vni },
+        WordTest { input: "da6u1", expected: "dấu", method: InputMethod::Vni },
     ];
 
     #[test]

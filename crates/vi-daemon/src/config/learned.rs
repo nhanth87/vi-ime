@@ -24,6 +24,21 @@ pub struct LearnedProfile {
     pub surrounding_text: Option<bool>,
     /// App attached a text input (IME Activate seen) at least once.
     pub ime_activated: Option<bool>,
+    /// Did `delete_surrounding_text` actually work? After we call
+    /// `delete_surrounding_text`, the next `surrounding_text` should reflect
+    /// the deletion. `Some(true)` = confirmed; `Some(false)` = tried but
+    /// surrounding text didn't change.
+    #[serde(default)]
+    pub honors_delete_surrounding: Option<bool>,
+    /// Is this app running under XWayland? Detected via advisor plugin
+    /// (`/proc/PID` check).
+    #[serde(default)]
+    pub is_xwayland: Option<bool>,
+    /// Does this app need re-arming? After Deactivate → Activate cycle, some
+    /// apps (LibreOffice VCL) only activate once per session and then need
+    /// evdev fallback. `Some(true)` = confirmed re-arming needed.
+    #[serde(default)]
+    pub rearms_enable: Option<bool>,
     /// Unix seconds of the last update (absolute, not relative).
     #[serde(default)]
     pub updated_at: u64,
@@ -45,6 +60,14 @@ impl LearnedProfile {
             Some(false) => Some(ImeMode::Preedit),
             _ => None, // supported or unknown → builtin/global decides
         }
+    }
+
+    /// App can use the atomic delete+commit path if:
+    /// (a) it sends `surrounding_text`, AND
+    /// (b) it honors `delete_surrounding_text` (not confirmed to fail).
+    pub fn surrounding_capable(&self) -> bool {
+        self.surrounding_text == Some(true)
+            && self.honors_delete_surrounding != Some(false)
     }
 }
 
