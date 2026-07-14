@@ -45,6 +45,8 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::os::fd::{AsFd, FromRawFd, OwnedFd};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use tracing::warn;
@@ -278,34 +280,94 @@ pub(crate) fn build_static_keymap() -> (String, HashMap<char, (u32, u8)>) {
     (text, map)
 }
 
+/// A single type command from the main event loop to the typer thread.
+#[derive(Debug)]
+enum TypeCmd {
+    Type { backspaces: usize, suffix: String, paced: bool },
+    Shutdown,
+}
+
 pub(crate) struct VietTyper {
-    /// `None` = own connection unavailable (no Wayland display or
-    /// compositor lacks `zwp_virtual_keyboard_manager_v1`) — live path off.
-    conn: Option<(EventQueue<TyperSink>, ZwpVirtualKeyboardV1)>,
+    /// Non-blocking channel to the typer thread. `None` when unavailable.
+    tx: Option<std::sync::mpsc::Sender<TypeCmd>>,
     start: Instant,
     /// Static char → (keycode, level). Built once with the keymap.
+    /// Shared with the typer thread (read-only after construction).
     map: HashMap<char, (u32, u8)>,
-    /// Modifier mask currently depressed on this keyboard (level selector).
-    cur_mask: u32,
+    /// In-flight type commands (incremented on send, decremented by thread
+    /// on completion). Used by the live_echo_pending guard to suppress
+    /// TextChangeCause::Other while the typer thread is still typing.
+    inflight: Arc<AtomicU64>,
 }
 
 impl VietTyper {
-    /// Opens its OWN Wayland connection/`EventQueue` (2026-07-13 — see
-    /// module docs for why: `roundtrip()` on the main IME connection's
-    /// queue would be re-entrant dispatch, unsafe to call from inside a key
-    /// handler). Uploads the ONE static keymap immediately: Blink applies
-    /// keymaps with unbounded lag, so the upload must happen long before
-    /// the first word, not per-word (R17 — mọi biến thể keymap-động đều
-    /// fail thực địa).
+    /// Opens a Wayland connection in a DEDICATED THREAD (P0b: zero sleep in
+    /// event loop). The thread uploads the static keymap, then sits in a
+    /// `recv()` loop executing type commands with proper pacing (roundtrip
+    /// + sleep per glyph). The main loop sends commands non-blocking.
     pub(crate) fn new() -> Self {
         let (text, map) = build_static_keymap();
-        match Self::connect(&text) {
-            Some(conn) => Self { conn: Some(conn), start: Instant::now(), map, cur_mask: 0 },
-            None => {
-                warn!("[VIET-TYPER] không mở được Wayland connection riêng — live path tắt");
-                Self { conn: None, start: Instant::now(), map: HashMap::new(), cur_mask: 0 }
+        let Some((mut queue, vk)) = Self::connect(&text) else {
+            warn!("[VIET-TYPER] không mở được Wayland connection riêng — live path tắt");
+            return Self { tx: None, start: Instant::now(), map: HashMap::new(), inflight: Arc::new(AtomicU64::new(0)) };
+        };
+        let map_shared = map.clone();
+        let (tx, rx) = std::sync::mpsc::channel::<TypeCmd>();
+        let inflight = Arc::new(AtomicU64::new(0));
+        let inflight_clone = inflight.clone();
+
+        std::thread::spawn(move || {
+            let start = Instant::now();
+            let mut mask_now: u32 = 0;
+
+            let tap = |vk: &ZwpVirtualKeyboardV1, code: u32, level: u8,
+                        mask_now: &mut u32, t: &mut u32| {
+                let want = LEVEL_MASKS[level as usize];
+                if *mask_now != want {
+                    vk.modifiers(want, 0, 0, 0);
+                    *mask_now = want;
+                }
+                vk.key(*t, code, 1);
+                vk.key(t.wrapping_add(1), code, 0);
+                *t = t.wrapping_add(2);
+            };
+
+            for cmd in rx {
+                match cmd {
+                    TypeCmd::Type { backspaces, suffix, paced } => {
+                        let mut t = start.elapsed().as_millis() as u32;
+                        for _ in 0..backspaces {
+                            let (code, level) = map_shared[&'\u{0008}'];
+                            tap(&vk, code, level, &mut mask_now, &mut t);
+                            if paced {
+                                let _ = queue.roundtrip(&mut TyperSink);
+                                std::thread::sleep(std::time::Duration::from_millis(15));
+                            }
+                        }
+                        if paced && backspaces > 0 {
+                            std::thread::sleep(std::time::Duration::from_millis(20));
+                        }
+                        for ch in suffix.chars() {
+                            let (code, level) = map_shared[&ch];
+                            tap(&vk, code, level, &mut mask_now, &mut t);
+                            if paced {
+                                let _ = queue.roundtrip(&mut TyperSink);
+                                std::thread::sleep(std::time::Duration::from_millis(15));
+                            }
+                        }
+                        if mask_now != 0 {
+                            vk.modifiers(0, 0, 0, 0);
+                            mask_now = 0;
+                        }
+                        let _ = queue.flush();
+                        inflight_clone.fetch_sub(1, Ordering::Release);
+                    }
+                    TypeCmd::Shutdown => break,
+                }
             }
-        }
+        });
+
+        Self { tx: Some(tx), start: Instant::now(), map, inflight }
     }
 
     fn connect(keymap_text: &str) -> Option<(EventQueue<TyperSink>, ZwpVirtualKeyboardV1)> {
@@ -321,109 +383,38 @@ impl VietTyper {
         Some((queue, vk))
     }
 
-    /// The live path is usable (own connection opened AND keymap uploaded).
     pub(crate) fn ready(&self) -> bool {
-        self.conn.is_some() && !self.map.is_empty()
+        self.tx.is_some() && !self.map.is_empty()
     }
 
-    /// Type `s` on the static keymap. All-or-nothing: false = nothing sent.
     pub(crate) fn type_str(&mut self, s: &str) -> bool {
         self.backspace_then_type(0, s, false)
     }
 
-    /// BackSpace × n, then type `s`, ALL on this one keyboard — keymap is
-    /// STATIC (uploaded once at creation), each char is (keycode, level) and
-    /// the level rides `vk.modifiers()` on the same object right before the
-    /// tap, so ordering is protocol-guaranteed end-to-end.
-    ///
-    /// `paced` = pace after each tap. Burst-mode is fine for known
-    /// terminals; VCL/gtk3 swallows BS+char bursts whole (probe-verified
-    /// 2026-07-10, and again 2026-07-13 for TWO consecutive tone/quality
-    /// fixes on the same word — "chữ"→"chu") and Blink drops burst taps
-    /// under load — non-terminal apps pass `paced=true`. Each BackSpace
-    /// gets its own `roundtrip()` (real confirmation, not just `flush()`)
-    /// before anything follows — same scheme `evdev_typer.rs` field-proved
-    /// 2026-07-10 for the evdev fallback path, now here too since this
-    /// typer owns its own queue.
-    ///
-    /// Khi `paced`, MỖI glyph composed CŨNG được `roundtrip()` (không chỉ
-    /// `flush()`) + 15ms, và có thêm 20ms settle TRƯỚC glyph đầu sau
-    /// backspace — đường Wayland live-echo có raw-key forward song song từ
-    /// vk passthrough trên cùng seat, nên cần xác nhận mạnh hơn evdev để VCL
-    /// không áp sai level (lớp lỗi "người"->"nguời", ư mất dấu sừng).
+    /// P0b: NON-BLOCKING. Checks coverage, sends command to typer thread,
+    /// returns immediately. The thread does all roundtrip/sleep pacing.
     pub(crate) fn backspace_then_type(&mut self, backspaces: usize, s: &str, paced: bool) -> bool {
-        let Some((queue, vk)) = &mut self.conn else { return false };
-        if self.map.is_empty() {
-            return false;
-        }
-        if backspaces == 0 && s.is_empty() {
-            return true;
-        }
-        // All-or-nothing: verify coverage BEFORE sending anything.
+        let Some(tx) = &self.tx else { return false };
+        if self.map.is_empty() { return false; }
+        if backspaces == 0 && s.is_empty() { return true; }
         if let Some(bad) = s.chars().find(|c| !self.map.contains_key(c)) {
             warn!("[VIET-TYPER] ký tự ngoài bảng tĩnh: {bad:?} — không gõ được");
             return false;
         }
-
-        let mut t = self.start.elapsed().as_millis() as u32;
-        let mut mask_now = self.cur_mask;
-        let tap = |vk: &ZwpVirtualKeyboardV1, code: u32, level: u8, mask_now: &mut u32, t: &mut u32| {
-            let want = LEVEL_MASKS[level as usize];
-            if *mask_now != want {
-                vk.modifiers(want, 0, 0, 0);
-                *mask_now = want;
-            }
-            vk.key(*t, code, 1);
-            vk.key(t.wrapping_add(1), code, 0);
-            *t = t.wrapping_add(2);
-        };
-
-        for _ in 0..backspaces {
-            let (code, level) = self.map[&'\u{0008}'];
-            tap(vk, code, level, &mut mask_now, &mut t);
-            if paced {
-                // Real confirmation, not just flush — VCL/gtk3 swallows a
-                // BS+char burst whole when the next tap arrives before this
-                // one is compositor-processed (field bug 2026-07-10/13).
-                let _ = queue.roundtrip(&mut TyperSink);
-                std::thread::sleep(std::time::Duration::from_millis(15));
-            }
+        self.inflight.fetch_add(1, Ordering::Release);
+        if tx.send(TypeCmd::Type { backspaces, suffix: s.to_string(), paced }).is_err() {
+            self.inflight.fetch_sub(1, Ordering::Release);
+            warn!("[VIET-TYPER] thread đã chết — không gửi được lệnh");
+            return false;
         }
-        // Settle TRƯỚC ký tự composed đầu sau backspace — bài học evdev
-        // round-5 (2026-07-13): ký tự ĐẦU của một suffix ≥2 ký tự ngay sau
-        // backspace rất dễ bị áp sai level (VCL chưa ổn định keymap mới sau
-        // BS). Đường Wayland live-echo còn có raw-key forward SONG SONG từ
-        // connection thứ 2 (vk passthrough), nên cần nghỉ thêm trước glyph
-        // đầu để compositor/VCL kịp áp keymap trước khi tap tới.
-        if paced && backspaces > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        for ch in s.chars() {
-            let (code, level) = self.map[&ch];
-            tap(vk, code, level, &mut mask_now, &mut t);
-            if paced {
-                // roundtrip THẬT (không chỉ flush) sau MỖI glyph composed:
-                // đường Wayland có raw-key forward song song từ vk thứ 2 trên
-                // CÙNG seat, nên cần xác nhận compositor đã xử lý xong từng
-                // glyph (áp đúng level modifier) trước glyph kế. flush chỉ đẩy
-                // byte ra socket, KHÔNG đảm bảo VCL áp đúng level — đây chính
-                // là lớp lỗi "ư"->"u" (ư mất dấu sừng = áp sai level). Mirroring
-                // evdev_typer (đã field-proven) nhưng MẠNH HƠN vì có concurrency
-                // xuyên thiết bị. Terminal (paced=false) không đổi: flush-only.
-                let _ = queue.roundtrip(&mut TyperSink);
-                std::thread::sleep(std::time::Duration::from_millis(15));
-            }
-        }
-        // Never leave synthetic modifiers depressed on the seat.
-        if mask_now != 0 {
-            vk.modifiers(0, 0, 0, 0);
-            mask_now = 0;
-        }
-        self.cur_mask = mask_now;
-        let _ = queue.flush();
         true
     }
+
+    pub(crate) fn inflight(&self) -> u64 {
+        self.inflight.load(Ordering::Acquire)
+    }
 }
+
 
 #[cfg(test)]
 mod tests {
