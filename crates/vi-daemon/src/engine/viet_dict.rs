@@ -55,6 +55,66 @@ pub fn is_english_word(raw_keys: &[char]) -> bool {
     ENGLISH_COMMON.contains(word.as_str())
 }
 
+/// Heuristic: the raw keys look like a URL, file path, or code token —
+/// NOT natural-language text that should be composed as Vietnamese.
+/// Used to suppress Telex/VNI composition on browser address bars,
+/// terminal commands, and code editors where ContentType signals are
+/// absent (evdev fallback).
+pub fn looks_like_non_text(raw_keys: &[char]) -> bool {
+    let s: String = raw_keys.iter().collect();
+    let lower = s.to_lowercase();
+    // URL patterns
+    if lower.contains("://")
+        || lower.contains("http")
+        || lower.contains("www.")
+        || lower.ends_with(".com")
+        || lower.ends_with(".org")
+        || lower.ends_with(".net")
+        || lower.ends_with(".dev")
+        || lower.ends_with(".io")
+        || lower.ends_with(".vn")
+        || lower.contains(".com/")
+    {
+        return true;
+    }
+    // Unix/terminal patterns
+    if lower.starts_with("ssh ")
+        || lower.starts_with("git ")
+        || lower.starts_with("sudo ")
+        || lower.starts_with("docker ")
+        || lower.starts_with("pip ")
+        || lower.starts_with("npm ")
+        || lower.starts_with("cargo ")
+        || lower.starts_with("./")
+        || lower.starts_with("/usr/")
+        || lower.starts_with("/home/")
+        || lower.starts_with("/etc/")
+        || lower.starts_with("cd ")
+        || lower.starts_with("ls ")
+        || lower.starts_with("rm ")
+        || lower.starts_with("cp ")
+        || lower.starts_with("mv ")
+        || lower.starts_with("cat ")
+        || lower.starts_with("echo ")
+    {
+        return true;
+    }
+    // Code/identifier patterns
+    if lower.starts_with("def ")
+        || lower.starts_with("fn ")
+        || lower.starts_with("class ")
+        || lower.starts_with("import ")
+        || lower.starts_with("from ")
+        || lower.starts_with("const ")
+        || lower.starts_with("let ")
+        || lower.starts_with("var ")
+        || lower.starts_with("pub ")
+    {
+        return true;
+    }
+    false
+}
+
 /// Check if a rendered syllable (lowercase, tones stripped) is a valid
 /// Vietnamese syllable.
 pub fn is_viet_syllable(rendered_base: &str) -> bool {

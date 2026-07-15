@@ -20,7 +20,8 @@
 - R1. Pipeline immutable (qua plugin only)
 - R2. Preedit-everywhere (commit_string, KHÔNG delete_surrounding_text)
 - R3. NonPreeditAction extend-only
-- R4. File ≤300 dòng
+- R4. File ≤300 dòng (production code ≤500; test files exempt; main.rs:670 exception)
+- R4b. Split test modules with `#[path]` attribute (`engine_tests.rs`, `viet_typer_tests.rs`)
 - R5. 2 crate: vi-daemon + vi-settings
 - R6. Godmod = debug only
 - R7. commit_string cho mọi mode
@@ -335,7 +336,8 @@
 | `unwrap()` ngoài test | 🔴 | Crash |
 | Đổi NonPreeditAction | 🔴 | Break dispatch |
 | Bỏ Deactivate auto-commit | 🔴 | Mất chữ |
-| File > 300 dòng | 🟡 | AI context |
+| File > 500 dòng | 🔴 | AI context — tách ngay |
+| File > 300 dòng | 🟡 | Cân nhắc tách |
 | Circular dep | 🔴 | Không compile |
 | Thiếu test | 🟡 | Regression |
 
@@ -368,7 +370,7 @@
 
 - [ ] `cargo check` clean
 - [ ] `cargo test` all pass
-- [ ] No file > 300 dòng
+- [ ] Production files ≤500 dòng (test files exempt, main.rs:670 — daemon entry)
 - [ ] No `unwrap()` in production
 - [ ] New code has tests
 - [ ] No circular deps

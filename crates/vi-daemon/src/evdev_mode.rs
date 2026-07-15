@@ -90,6 +90,11 @@ fn wait_keys_clear(dev: &evdev::Device, stop: &AtomicBool) -> bool {
 }
 
 /// Find and grab every real keyboard (devices that report letter keys).
+/// Explicitly skips pointer-capable devices (mice, touchpads, combined
+/// keyboard+touchpad units) to avoid stealing mouse events from the
+/// compositor — field bug 2026-07-15: some laptop internal keyboards
+/// report as combined devices with `KEY_A` + `BTN_LEFT`, and grabbing
+/// them silences all mouse clicks/scroll for the terminal.
 fn grab_all_keyboards(stop: &AtomicBool) -> Vec<Grabbed> {
     let mut keyboards: Vec<Grabbed> = Vec::new();
     for (path, dev) in evdev::enumerate() {
@@ -101,18 +106,44 @@ fn grab_all_keyboards(stop: &AtomicBool) -> Vec<Grabbed> {
         let is_kbd = dev
             .supported_keys()
             .is_some_and(|k| k.contains(KeyCode::KEY_A) && k.contains(KeyCode::KEY_Z));
-        if is_kbd {
-            let mut dev = dev;
-            if !wait_keys_clear(&dev, stop) {
-                continue; // stop was set while waiting (focus already left)
+        if !is_kbd {
+            continue;
+        }
+        // 2026-07-15: do NOT grab devices that also act as pointers.
+        // A combined keyboard+touchpad (common on laptops) advertises both
+        // letter keys AND mouse buttons / relative axes — grabbing it
+        // steals mouse events from the compositor (terminal scroll = history,
+        // clicks ignored). The evdev fallback only needs the keyboard.
+        let has_pointer = {
+            let keys = dev.supported_keys();
+            let rel = dev.supported_relative_axes();
+            let abs = dev.supported_absolute_axes();
+            let has_mouse_btn = keys.is_some_and(|k| {
+                k.contains(KeyCode::BTN_LEFT)
+                    || k.contains(KeyCode::BTN_RIGHT)
+                    || k.contains(KeyCode::BTN_MIDDLE)
+            });
+            let has_axes = rel.is_some_and(|r| r.iter().next().is_some())
+                || abs.is_some_and(|a| a.iter().next().is_some());
+            has_mouse_btn || has_axes
+        };
+        if has_pointer {
+            info!(
+                "evdev: skipping pointer-capable device {:?} ({name}) — would steal mouse events",
+                path
+            );
+            continue;
+        }
+        let mut dev = dev;
+        if !wait_keys_clear(&dev, stop) {
+            continue;
+        }
+        match dev.grab() {
+            Ok(()) => {
+                info!("evdev: grabbing {:?} ({})", path, dev.name().unwrap_or("?"));
+                keyboards.push(Grabbed(dev));
             }
-            match dev.grab() {
-                Ok(()) => {
-                    info!("evdev: grabbing {:?} ({})", path, dev.name().unwrap_or("?"));
-                    keyboards.push(Grabbed(dev));
-                }
-                Err(e) => warn!("evdev: cannot grab {:?}: {e} (need group `input`?)", path),
-            }
+            Err(e) => warn!("evdev: cannot grab {:?}: {e} (need group `input`?)", path),
         }
     }
     keyboards

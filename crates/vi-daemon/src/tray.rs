@@ -54,50 +54,7 @@ impl Default for TrayState {
 /// finds nothing at `<path>/vi-im.svg` because the real file sits one
 /// level deeper. Kept out of `~/.local/share/icons` entirely to avoid
 /// mixing conventions.
-fn install_icons() -> Option<PathBuf> {
-    let base = std::env::var("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-        .ok()?;
-    let dir = base.join("vi-im/icons");
-    std::fs::create_dir_all(&dir).ok()?;
-    for (name, svg) in [(ICON_ON, ICON_ON_SVG), (ICON_OFF, ICON_OFF_SVG)] {
-        let path = dir.join(format!("{name}.svg"));
-        if std::fs::write(&path, svg).is_err() {
-            warn!("[TRAY] could not install icon {:?}", path);
-        } else {
-            info!("[TRAY] installed icon {:?} ({} bytes)", path, svg.len());
-        }
-    }
-    Some(dir)
-}
 
-/// Read tray-relevant config from disk.
-fn read_state(path: &PathBuf) -> (InputMethod, ImeMode, bool) {
-    ConfigManager::new(Some(path.clone()))
-        .map(|m| {
-            let s = m.setting();
-            (s.input_method, s.ime_mode, s.enabled)
-        })
-        .unwrap_or((InputMethod::Telex, ImeMode::Preedit, true))
-}
-
-/// Convert InputMethod to display label.
-fn method_label(method: InputMethod) -> &'static str {
-    match method {
-        InputMethod::Telex => "Telex",
-        InputMethod::Vni => "VNI",
-        InputMethod::Smart => "Tự do",
-    }
-}
-
-/// Convert ImeMode to display label.
-fn mode_label(mode: ImeMode) -> &'static str {
-    match mode {
-        ImeMode::Preedit => "Preedit (gạch chân)",
-        ImeMode::NonPreedit => "NonPreedit (gõ thẳng)",
-    }
-}
 
 /// Tray update signal type.
 #[derive(Debug, Clone, Copy)]
@@ -522,3 +479,7 @@ pub fn spawn(config_path: PathBuf, settings_exe: Option<PathBuf>) -> Sender<Upda
     info!("[TRAY] Ayatana AppIndicator tray registered (GTK thread)");
     update_tx
 }
+
+#[path = "tray_helpers.rs"]
+mod tray_helpers;
+use tray_helpers::*;
