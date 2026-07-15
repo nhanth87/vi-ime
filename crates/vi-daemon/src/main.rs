@@ -373,6 +373,7 @@ fn main() {
                     godmod::set_app(app_id);
                 }
                 if app_changed {
+<<<<<<< Updated upstream
                     // IME tắt = mệnh lệnh tối cao (KHÔNG override): evdev
                     // fallback grab bàn phím vật lý + compose độc lập với
                     // đường Wayland, nên PHẢI tự tôn trọng cờ enabled — nếu
@@ -400,6 +401,40 @@ fn main() {
                                 .as_deref()
                                 .map(|id| ClientProfile::detect(id))
                                 .unwrap_or_else(ClientProfile::default);
+=======
+                    let wants_legacy = current_app_id
+                        .as_deref()
+                        .is_some_and(legacy_grab::is_legacy_app);
+                    // Chrome/Chromium X11 detection via /proc: niri's XWayland
+                    // bridge sends a FAKE Activate that doesn't actually work
+                    // (commit_string never reaches the X11 client). Detect X11
+                    // mode via cmdline and force evdev IMMEDIATELY, bypassing
+                    // the probe timeout and ignoring the spurious Activate.
+                    let wants_xwayland_evdev = !wants_legacy
+                        && current_app_id
+                            .as_deref()
+                            .is_some_and(legacy_grab::is_xwayland_fallback_app)
+                        && focus_pid.is_some_and(|pid| {
+                            advisor::read_proc(pid).is_some_and(|info| {
+                                let cmdline = info.cmdline.to_lowercase();
+                                // X11 mode: has explicit --ozone-platform=x11,
+                                // OR is Chrome-like without --ozone-platform=wayland
+                                cmdline.contains("--ozone-platform=x11")
+                                    || (!cmdline.contains("--ozone-platform=wayland")
+                                        && !cmdline.contains("--enable-features=UseOzonePlatform"))
+                            })
+                        });
+                    let engage_evdev = wants_legacy || wants_xwayland_evdev;
+                    match (engage_evdev, legacy_grab.is_some()) {
+                        (true, false) => {
+                            if wants_xwayland_evdev {
+                                info!(
+                                    "[XWAYLAND] {:?} running X11 mode (detected via /proc cmdline) — \
+                                     forcing evdev fallback immediately",
+                                    current_app_id
+                                );
+                            }
+>>>>>>> Stashed changes
                             legacy_grab = Some(legacy_grab::LegacyGrab::start(
                                 engine_input_method(config_manager.setting().input_method),
                                 Arc::clone(&runtime),
@@ -457,6 +492,7 @@ fn main() {
                 // Activates, the Wayland path owns it — release the grab.
                 // A later focus without Activate re-engages it (LibreOffice
                 // never re-arms after the first focus, see R16 Bài học 4).
+<<<<<<< Updated upstream
                 // When the focused app Activates via Wayland, the protocol
                 // path owns it — release the evdev grab. This is authoritative:
                 // the Wayland path has ContentType visibility (URL/password
@@ -466,13 +502,39 @@ fn main() {
                 // URLs like xn--con-jla) AND commit_string DID reach Chrome
                 // (ngu7a3→ngửa in the log), so the "keep grab" exception was
                 // both harmful and based on a false premise — removed.
+=======
+                //
+                // EXCEPTION (fix 2026-07-12): Chrome/Chromium X11 via niri's
+                // XWayland bridge sends a SPURIOUS Activate that doesn't
+                // actually work (commit_string never reaches the X11 client).
+                // Don't drop the evdev grab for known XWayland fallback apps
+                // that were detected as X11 via /proc cmdline inspection.
+>>>>>>> Stashed changes
                 if matches!(fb, crate::wayland::feedback::ImeFeedback::Activated)
                     && legacy_grab.is_some()
                 {
-                    info!(
-                        "[LEGACY-GRAB] app Activate qua Wayland — nhả evdev grab, protocol path xử lý"
-                    );
-                    legacy_grab = None;
+                    let is_xwayland_chrome = current_app_id
+                        .as_deref()
+                        .is_some_and(legacy_grab::is_xwayland_fallback_app)
+                        && current_focus.pid.is_some_and(|pid| {
+                            advisor::read_proc(pid).is_some_and(|info| {
+                                let cmdline = info.cmdline.to_lowercase();
+                                cmdline.contains("--ozone-platform=x11")
+                                    || (!cmdline.contains("--ozone-platform=wayland")
+                                        && !cmdline.contains("--enable-features=useozone"))
+                            })
+                        });
+                    if is_xwayland_chrome {
+                        info!(
+                            "[LEGACY-GRAB] ignoring spurious Activate from XWayland bridge \
+                             (Chrome X11 — commit_string won't reach it)"
+                        );
+                    } else {
+                        info!(
+                            "[LEGACY-GRAB] app Activate qua Wayland — nhả evdev grab, protocol path xử lý"
+                        );
+                        legacy_grab = None;
+                    }
                 }
                 // Phase 7: the Wayland thread detected a one-shot app
                 // (LibreOffice VCL: no re-arm on refocus). Engage evdev
