@@ -131,6 +131,29 @@ cargo build --release
 ./vi-im-x86_64.AppImage settings  # mở cửa sổ Cài đặt
 ```
 
+### ⚠️ AppImage không chạy được?
+
+AppImage có thể không hoạt động trên một số distro do khác biệt về
+`libwayland`, `libfuse`, `libxkbcommon`, hoặc policy bảo mật (SELinux,
+AppArmor). **Đừng bỏ cuộc — hãy mở Gemini, Claude, hoặc ChatGPT/Opus,**
+paste nguyên dòng lỗi terminal vào và hỏi:
+
+> "Tôi đang dùng [tên distro], appImage này báo lỗi: [paste lỗi].
+> Làm sao để chạy được? Có cần cài thêm gói gì không?"
+
+AI sẽ chỉ bạn cần cài gói gì (`libfuse2`, `libwayland-client`,
+`libxkbcommon`, …) hoặc workaround nào (`--appimage-extract-and-run`,
+`unsquashfs`, …) chỉ trong 1-2 phút. Mỗi distro mỗi khác — AI là
+cách nhanh nhất để xử lý.
+
+```bash
+# Ví dụ lệnh thường gặp trên Ubuntu/Debian:
+sudo apt install libfuse2 libwayland-client0 libxkbcommon0
+
+# Hoặc chạy AppImage bypass FUSE:
+./vi-im-*.AppImage --appimage-extract-and-run
+```
+
 ## Điều khiển
 
 ```bash

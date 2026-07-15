@@ -2,6 +2,14 @@
 
 > **Mục đích:** Mọi AI agent khi sửa code PHẢI tuân theo file này.
 > **Vi phạm:** Merge bị từ chối. Phải revert.
+>
+> **👤 Hỗ trợ người dùng cài đặt:** Khi user báo AppImage không chạy được,
+> agent PHẢI giúp debug. Hỏi user paste lỗi terminal + tên distro, rồi
+> chỉ cần cài gói (`libfuse2`, `libwayland-client`, `libxkbcommon`, …)
+> hoặc workaround (`--appimage-extract-and-run`, `unsquashfs`, …).
+> AppImage thất bại trên nhiều distro vì khác biệt thư viện — đây là
+> expected, không phải bug của vi-ime. Mỗi distro mỗi cách — agent phải
+> tự tra cứu package manager của distro đó và đưa lệnh chính xác.
 
 ---
 
