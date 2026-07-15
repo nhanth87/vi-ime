@@ -28,9 +28,10 @@ use std::thread::JoinHandle;
 
 use tracing::info;
 
+use crate::client_profile::ClientProfile;
 use crate::engine::InputMethod;
 use crate::evdev_mode;
-use crate::wayland::RuntimeConfig;
+use crate::wayland::{ActivePath, RuntimeConfig};
 
 /// app_id prefixes (case-insensitive) known to be unreachable via
 /// `zwp_input_method_v2`. Structural limitation, not a user preference —
@@ -105,26 +106,38 @@ pub fn is_xwayland_fallback_app(app_id: &str) -> bool {
 pub struct LegacyGrab {
     stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
+    /// Held so `Drop` can set `active_path` back to Wayland.
+    runtime: Option<Arc<RuntimeConfig>>,
 }
 
 impl LegacyGrab {
-    /// `force_xdotool_typer`: see `needs_injector_typer` — pass the verdict
-    /// for the app being engaged (computed by the caller from its app_id).
+    /// `profile`: per-client timing profile from `ClientProfile::detect()` —
+    /// controls pacing delays and whether to prefer the xdotool injector.
     pub fn start(
         method: InputMethod,
         runtime: Arc<RuntimeConfig>,
-        force_xdotool_typer: bool,
+        profile: ClientProfile,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
-        info!("[LEGACY-GRAB] engaging evdev fallback (app outside zwp_input_method_v2 reach)");
+
+        // Phase 7: Atomic Path Handshake — claim the active path BEFORE
+        // spawning the evdev thread so the Wayland IM thread sees it and
+        // skips key processing immediately (no race window).
+        runtime.set_active_path(ActivePath::Evdev);
+        info!(
+            "[PATH-HANDSHAKE] switching to evdev path (active_path=Evdev) [{}]",
+            profile.label
+        );
+        info!("[LEGACY-GRAB] engaging evdev fallback (app outside zwp_input_method_v2 reach) [{}]", profile.label);
+        let runtime2 = Arc::clone(&runtime);
         let handle = std::thread::Builder::new()
             .name("vi-legacy-grab".into())
             .spawn(move || {
-                evdev_mode::run_scoped(method, &stop2, Some(runtime), force_xdotool_typer)
+                evdev_mode::run_scoped(method, &stop2, Some(runtime2), profile)
             })
             .ok();
-        Self { stop, handle }
+        Self { stop, handle, runtime: Some(runtime) }
     }
 }
 
@@ -133,6 +146,12 @@ impl Drop for LegacyGrab {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(h) = self.handle.take() {
             let _ = h.join();
+        }
+        // Phase 7: Atomic Path Handshake — evdev thread has joined (all
+        // physical keyboards ungrabbed), return ownership to Wayland path.
+        if let Some(rt) = &self.runtime {
+            rt.set_active_path(ActivePath::Wayland);
+            info!("[PATH-HANDSHAKE] switching to Wayland path (active_path=Wayland)");
         }
         info!("[LEGACY-GRAB] released (focus left the app)");
     }

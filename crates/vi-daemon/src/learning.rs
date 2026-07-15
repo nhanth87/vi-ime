@@ -110,6 +110,12 @@ impl Adaptation {
                         info!("[BLAME] {verdict}");
                     }
             }
+            ImeFeedback::OneShotDetected => {
+                // Phase 7: the Wayland thread classified the current app
+                // as one-shot. Handled by the daemon's main loop (engages
+                // evdev fallback). Nothing to learn from this signal.
+                info!("[LEARNING] one-shot detected for {:?} — evdev fallback should engage", app_id);
+            }
         }
         self.dirty = true; // telemetry counters moved regardless
         self.persist_if_due();

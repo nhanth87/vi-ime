@@ -8,6 +8,7 @@ use std::process::Command;
 use evdev::KeyCode;
 use tracing::{info, warn};
 
+use crate::client_profile::ClientProfile;
 use crate::evdev_typer::EvdevTyper;
 
 /// Unicode output channel: a persistent virtual keyboard when the
@@ -39,8 +40,8 @@ impl Typer {
     /// entirely: it types via a temporary per-character keysym remap +
     /// `XTestFakeKeyEvent`, never touching a custom modifier mask, so
     /// there is nothing for the embedding hop to drop.
-    pub(crate) fn detect(force_xdotool: bool) -> Option<Self> {
-        if force_xdotool {
+    pub(crate) fn detect(profile: ClientProfile) -> Option<Self> {
+        if profile.needs_injector {
             if let Some(inj) = Injector::detect_xdotool_preferred() {
                 info!(
                     "evdev fallback: Unicode qua {} (app cần xdotool — virtual keyboard mất level Mod3/Mod5)",
@@ -53,8 +54,9 @@ impl Typer {
                  dùng virtual keyboard, có thể gõ sai dấu"
             );
         }
-        if let Some(t) = EvdevTyper::new() {
-            info!("evdev fallback: Unicode qua virtual keyboard bền vững (native)");
+        let label = profile.label;
+        if let Some(t) = EvdevTyper::new(profile) {
+            info!("evdev fallback: Unicode qua virtual keyboard bền vững (native) [{label}]");
             return Some(Typer::Native(t));
         }
         Injector::detect().map(|inj| {
@@ -327,7 +329,7 @@ pub fn doctor_lines() -> Vec<String> {
                 .to_string(),
         );
     }
-    if crate::evdev_typer::EvdevTyper::new().is_some() {
+    if crate::evdev_typer::EvdevTyper::new(ClientProfile::default()).is_some() {
         out.push("✅ Unicode typer: virtual keyboard (native, không cần wtype)".to_string());
     } else {
         match Injector::detect() {

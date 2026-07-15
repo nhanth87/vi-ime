@@ -25,6 +25,10 @@ mod syllable;
 pub(crate) mod tone;
 mod types;
 pub(crate) mod viet_dict;
+pub(crate) mod cheat;
+
+#[cfg(test)]
+mod stress_fast_typing;
 
 pub use engine::Engine;
 pub use style::ToneStyle;

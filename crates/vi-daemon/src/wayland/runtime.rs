@@ -13,6 +13,31 @@ use std::sync::Mutex;
 use crate::engine::fast_engine::NonPreeditEngine;
 use crate::engine::{ImeMode, InputMethod, OutputMode, ToneStyle};
 
+/// Which input path currently owns key processing.
+/// Purpose: atomic handshake between Wayland IM thread and evdev-fallback
+/// thread so they never race during a focus switch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum ActivePath {
+    /// Normal Wayland input-method-v2 path (grab + process key events).
+    #[default]
+    Wayland = 0,
+    /// evdev fallback path (physical keyboard grab + compose).
+    Evdev = 1,
+    /// Neither path is active (transition guard, startup, disabled).
+    None = 2,
+}
+
+impl ActivePath {
+    fn from_u8(v: u8) -> Self {
+        match v {
+            1 => ActivePath::Evdev,
+            2 => ActivePath::None,
+            _ => ActivePath::Wayland,
+        }
+    }
+}
+
 /// Lock-free shared config. Writers call [`RuntimeConfig::store`];
 /// the IME thread calls [`RuntimeConfig::snapshot`] per key/activate event.
 #[derive(Debug, Default)]
@@ -51,6 +76,11 @@ pub struct RuntimeConfig {
     /// preedit before the app reacts — waiting for the next key is too
     /// late). -1 = not available.
     click_fd: AtomicI32,
+    /// Phase 7 atomic path handshake: which input path owns key processing.
+    /// 0=Wayland, 1=Evdev, 2=None/Transitioning.
+    /// Set BEFORE spawning/dropping LegacyGrab. Read by the Wayland IM thread
+    /// at the top of `process_key` — if not Wayland, skip (evdev has it).
+    active_path: AtomicU8,
 }
 
 /// A decoded, immutable view of the runtime config.
@@ -71,6 +101,8 @@ pub struct RuntimeSnapshot {
     /// App honors surrounding-text → delete_surrounding_text is safe (P0).
     pub surrounding_capable: bool,
     pub generation: u64,
+    /// Phase 7: which input path currently owns key processing.
+    pub active_path: ActivePath,
 }
 
 impl Default for RuntimeSnapshot {
@@ -87,6 +119,7 @@ impl Default for RuntimeSnapshot {
             mode_from_user: false,
             game_mode: false,
             surrounding_capable: false,
+            active_path: ActivePath::Wayland,
             generation: 0,
         }
     }
@@ -183,6 +216,7 @@ impl RuntimeConfig {
             mode_from_user: self.mode_from_user.load(Ordering::Relaxed),
             game_mode: self.game_mode.load(Ordering::Relaxed),
             surrounding_capable: self.surrounding_capable.load(Ordering::Relaxed),
+            active_path: ActivePath::from_u8(self.active_path.load(Ordering::Relaxed)),
             generation,
         }
     }
@@ -204,6 +238,19 @@ impl RuntimeConfig {
     /// Current focused app_id (cloned). Read only on a generation change.
     pub fn app_id(&self) -> Option<String> {
         self.app_id.lock().ok().and_then(|s| s.clone())
+    }
+
+    /// Phase 7: atomically set the active input path. Called by the daemon
+    /// BEFORE spawning LegacyGrab (→ Evdev) and on LegacyGrab::drop (→ Wayland).
+    /// Immediate — no generation bump; read by process_key on EVERY key event.
+    pub fn set_active_path(&self, path: ActivePath) {
+        self.active_path.store(path as u8, Ordering::Release);
+    }
+
+    /// Phase 7: which input path currently owns key processing.
+    /// Called by the Wayland IM thread at the top of process_key.
+    pub fn active_path(&self) -> ActivePath {
+        ActivePath::from_u8(self.active_path.load(Ordering::Acquire))
     }
 
     /// Record one physical mouse click (evdev watcher thread). No

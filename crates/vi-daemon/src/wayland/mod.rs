@@ -19,7 +19,7 @@ pub mod virtual_keyboard;
 pub mod xkb;
 
 pub use feedback::{FeedbackFn, ImeFeedback};
-pub use runtime::{RuntimeConfig, RuntimeSnapshot};
+pub use runtime::{ActivePath, RuntimeConfig, RuntimeSnapshot};
 
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
@@ -134,10 +134,10 @@ fn run_ime_internal(
                 revents: 0,
             },
         ];
-        // Timeout only while an idle auto-commit is armed (a composition
-        // that exists solely as preedit) — otherwise block forever (R15).
+        // Timeout while an idle auto-commit or re-arm detection is armed —
+        // otherwise block forever (R15).
         let timeout = state
-            .idle_commit_deadline_ms()
+            .poll_timeout_ms()
             .map(|ms| ms.max(1))
             .unwrap_or(-1);
         let ret = unsafe { libc::poll(pfds.as_mut_ptr(), 2, timeout) };
@@ -173,8 +173,9 @@ fn run_ime_internal(
             drop(read_guard);
         }
         if ret == 0 {
-            // Poll timeout: the idle auto-commit deadline passed.
+            // Poll timeout: the idle auto-commit or re-arm deadline passed.
             state.idle_commit(&conn);
+            state.check_rearm_timeout();
         }
 
         if let Err(e) = event_queue.dispatch_pending(&mut state) {

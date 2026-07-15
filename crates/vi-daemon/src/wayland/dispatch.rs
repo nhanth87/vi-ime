@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
+use std::time::Instant;
 use tracing::{info, warn};
 use wayland_client::protocol::wl_keyboard::KeyState;
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
@@ -72,6 +73,20 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                     "[SCENARIO] ✅ ACTIVATE — IME={mode} composer attached, grabbing keyboard..."
                 );
                 state.active = true;
+                // Phase 5 re-arm detection: track how many times Activate
+                // fires. Apps like LibreOffice VCL call enable() once and
+                // never re-arm on refocus — detected here by the absence
+                // of a second Activate within REARM_WINDOW_MS.
+                state.enable_count = state.enable_count.saturating_add(1);
+                state.last_enable_ts = Some(Instant::now());
+                if state.enable_count >= 2 {
+                    // Confirmed: this app re-arms properly.
+                    state.app_rearms = true;
+                }
+                info!(
+                    "[REARM] enable_count={} app_rearms={}",
+                    state.enable_count, state.app_rearms
+                );
                 // Only clear the per-field classification on a REAL app switch.
                 // A same-app re-activation (focus churn: DEACTIVATE→ACTIVATE with
                 // no field change) must KEEP Terminal/Secure — the app sends

@@ -129,7 +129,11 @@ impl Engine {
     /// single-syllable list, which wrongly mangles valid multi-char Vietnamese
     /// ("ấ", "mất" → raw "aas"/"maas"; field bug 2026-07-12). Dictionary
     /// English-restore is the safe, targeted part of R9.
-    pub fn smart_commit_english_only(&self) -> String {
+    pub fn smart_commit_english_only(&self, app_id: Option<&str>) -> String {
+        // Cheat system: field-reported false positives get forced English
+        if let Some(forced) = super::cheat::should_force_english(app_id, &self.raw_keys) {
+            return forced;
+        }
         if self.method != InputMethod::Smart || !self.auto_detect {
             return self.preedit_output();
         }

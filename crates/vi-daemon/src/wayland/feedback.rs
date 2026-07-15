@@ -39,6 +39,10 @@ pub enum ImeFeedback {
     KeyChatter { keycode: u32 },
     /// Per-keystroke stage latency sample (see [`PipelineStage`]).
     StageSample { stage: PipelineStage, us: u32 },
+    /// Phase 7: the current app has been classified as one-shot (no re-arm
+    /// on refocus, like LibreOffice VCL). The daemon should engage the evdev
+    /// fallback for this app so typing works on the next focus.
+    OneShotDetected,
 }
 
 /// Callback the daemon installs to receive feedback. Must be non-blocking.

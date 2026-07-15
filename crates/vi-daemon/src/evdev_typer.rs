@@ -33,6 +33,7 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
 
 use std::collections::HashMap;
 
+use crate::client_profile::ClientProfile;
 use crate::wayland::viet_typer::{
     build_static_keymap, memfd_keymap, KEYMAP_FORMAT_XKB_V1, LEVEL_MASKS,
 };
@@ -107,12 +108,14 @@ pub(crate) struct EvdevTyper {
     map: HashMap<char, (u32, u8)>,
     /// Modifier mask currently depressed (level selector) — mirrors VietTyper.
     cur_mask: u32,
+    /// Per-client pacing profile (adaptive delays from ClientProfile).
+    profile: ClientProfile,
 }
 
 impl EvdevTyper {
     /// None when there is no Wayland display or the compositor lacks
     /// `zwp_virtual_keyboard_manager_v1` (caller falls back to xdotool).
-    pub(crate) fn new() -> Option<Self> {
+    pub(crate) fn new(profile: ClientProfile) -> Option<Self> {
         let conn = Connection::connect_to_env().ok()?;
         let (globals, mut queue) = registry_queue_init::<TyperState>(&conn).ok()?;
         let qh = queue.handle();
@@ -126,7 +129,7 @@ impl EvdevTyper {
         let (fd, size) = memfd_keymap(&text)?;
         vk.keymap(KEYMAP_FORMAT_XKB_V1, fd.as_fd(), size);
         queue.roundtrip(&mut TyperState).ok()?;
-        Some(Self { queue, vk, start: Instant::now(), map, cur_mask: 0 })
+        Some(Self { queue, vk, start: Instant::now(), map, cur_mask: 0, profile })
     }
 
     /// BackSpace × n, then type `text`. All-or-nothing: false = nothing sent.
@@ -172,16 +175,38 @@ impl EvdevTyper {
             vk.key(t.wrapping_add(1), code, 0);
             *t = t.wrapping_add(2);
         };
-        for _ in 0..backspaces {
-            tap(&self.vk, bs_code, bs_level, &mut mask_now, &mut t);
-            // VCL/gtk3 (LibreOffice) swallows an event burst that mixes
-            // BackSpace with other keys WHOLE — probe-verified 2026-07-10:
-            // BS+"ệ" flushed together typed NOTHING (both keys dropped,
-            // monotonic timestamps don't help), while BS alone, multi-char
-            // bursts, and BS→15ms pause→chars all work. So each BackSpace
-            // is flushed and given its own beat before anything follows.
+        if backspaces > 1 && self.profile.batch_safe {
+            // Batch-safe apps (Chromium/XWayland, Firefox/Wayland, terminals,
+            // default): fire all BackSpace taps back-to-back without per-BS
+            // roundtrip, then confirm the whole batch with ONE roundtrip +
+            // ONE batch_delay before any composed glyphs arrive.
+            for _ in 0..backspaces {
+                tap(&self.vk, bs_code, bs_level, &mut mask_now, &mut t);
+            }
             let _ = self.queue.roundtrip(&mut TyperState);
-            std::thread::sleep(std::time::Duration::from_millis(15));
+            if self.profile.batch_delay_ms > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(
+                    self.profile.batch_delay_ms,
+                ));
+            }
+        } else {
+            // Non-batch-safe apps (LibreOffice VCL, OnlyOffice CEF — swallows
+            // BS+char bursts whole, probe-verified 2026-07-10) and the single-BS
+            // case: per-BS roundtrip + sleep so each BackSpace has its own beat
+            // before anything follows.
+            for _ in 0..backspaces {
+                tap(&self.vk, bs_code, bs_level, &mut mask_now, &mut t);
+                let _ = self.queue.roundtrip(&mut TyperState);
+                std::thread::sleep(std::time::Duration::from_millis(
+                    self.profile.backspace_delay_ms,
+                ));
+            }
+        }
+        // Adaptive settle: apps known to drop the first glyph after BackSpace
+        // (LibreOffice VCL, OnlyOffice CEF) get extra time before the first
+        // composed character arrives (pre_first_glyph_delay_ms from ClientProfile).
+        if backspaces > 0 && self.profile.pre_first_glyph_delay_ms > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(self.profile.pre_first_glyph_delay_ms));
         }
         for ch in text.chars() {
             let (code, level) = self.map[&ch];
@@ -191,7 +216,7 @@ impl EvdevTyper {
             // "cua73"→"cưử", 2026-07-10). This typer only ever targets
             // legacy apps (LibreOffice/OnlyOffice), so always pace.
             let _ = self.queue.flush();
-            std::thread::sleep(std::time::Duration::from_millis(15));
+            std::thread::sleep(std::time::Duration::from_millis(self.profile.glyph_delay_ms));
         }
         // Never leave synthetic modifiers depressed on the seat.
         if mask_now != 0 {

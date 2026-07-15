@@ -17,6 +17,7 @@ use crate::plugin::PluginManager;
 
 use crate::wayland::feedback::{FeedbackFn, ImeFeedback};
 use crate::wayland::runtime::{self, RuntimeConfig};
+use crate::client_profile::ClientProfile;
 use crate::wayland::viet_typer::VietTyper;
 use crate::wayland::virtual_keyboard::VkForwarder;
 use crate::wayland::xkb::XkbState;
@@ -131,6 +132,14 @@ pub struct ImeAppState {
     /// current word (so `delete_surrounding_text` can undo to the right
     /// boundary). Reset by `reset_word_state()`.
     pub(crate) committed_bytes: usize,
+    /// Phase 5 re-arm detection: how many times `Activate` fired since startup.
+    pub(crate) enable_count: u32,
+    /// When the most recent `Activate` arrived — arms the 2-second one-shot
+    /// detection window.
+    pub(crate) last_enable_ts: Option<Instant>,
+    /// True = this app properly re-arms (`Activate` seen ≥2 times).
+    /// Optimistic default; set to false after 2s with no second Activate.
+    pub(crate) app_rearms: bool,
 }
 
 /// Preedit-only compositions are DROPPED on a mouse click (R8) — the field
@@ -142,6 +151,10 @@ pub struct ImeAppState {
 /// than this finalizes the word, so a LATE tone key starts a new word
 /// (rare; tone keys follow within a word almost immediately).
 const IDLE_COMMIT_MS: u128 = 1500;
+
+/// Phase 5 re-arm window: if no second `Activate` arrives within this time,
+/// the app is classified as one-shot (like LibreOffice VCL).
+const REARM_WINDOW_MS: u128 = 2000;
 
 impl ImeAppState {
     pub(crate) fn new(
@@ -158,7 +171,7 @@ impl ImeAppState {
             serial: 0,
             ime_enabled: true,
             vk: VkForwarder::new(virtual_keyboard),
-            viet: VietTyper::new(),
+            viet: VietTyper::new(ClientProfile::default()),
             key_buffer: VecDeque::with_capacity(16),
             shown_word: String::new(),
             runtime: None,
@@ -179,6 +192,9 @@ impl ImeAppState {
             live_echo_pending: 0,
             last_live_echo_at: None,
             committed_bytes: 0,
+            enable_count: 0,
+            last_enable_ts: None,
+            app_rearms: true,
         }
     }
 
@@ -251,6 +267,57 @@ impl ImeAppState {
         let _ = conn.flush();
     }
 
+    /// Phase 5: true if the current app is one-shot (enable() called once,
+    /// no re-arm on refocus — like LibreOffice VCL).
+    pub(crate) fn is_one_shot_app(&self) -> bool {
+        !self.app_rearms
+    }
+
+    /// ms left until the re-arm detection window closes, or None when
+    /// not armed (already confirmed, already classified, or no activate yet).
+    pub(crate) fn rearm_deadline_ms(&self) -> Option<i32> {
+        // Only armed during the optimistic window: first Activate seen,
+        // not yet confirmed by a second one, and not yet timed out.
+        if self.enable_count != 1 || !self.app_rearms {
+            return None;
+        }
+        let elapsed = self.last_enable_ts?.elapsed().as_millis();
+        Some(REARM_WINDOW_MS.saturating_sub(elapsed).min(i32::MAX as u128) as i32)
+    }
+
+    /// Check whether the 2-second re-arm window closed without a second
+    /// Activate. If so, classify the app as one-shot and log.
+    /// Phase 7: also emits `ImeFeedback::OneShotDetected` so the daemon
+    /// can engage the evdev fallback for this app.
+    pub(crate) fn check_rearm_timeout(&mut self) {
+        if self.enable_count == 1 && self.app_rearms {
+            if let Some(ts) = self.last_enable_ts {
+                if ts.elapsed().as_millis() >= REARM_WINDOW_MS {
+                    self.app_rearms = false;
+                    info!(
+                        "[REARM] enable_count={} app_rearms=false — app classified as one-shot (no re-arm within {}ms)",
+                        self.enable_count, REARM_WINDOW_MS
+                    );
+                    // Phase 7: signal the daemon to engage evdev fallback.
+                    self.emit(crate::wayland::feedback::ImeFeedback::OneShotDetected);
+                }
+            }
+        }
+    }
+
+    /// Combined deadline for poll timeout: the sooner of idle-commit and
+    /// re-arm detection, or None if neither is armed.
+    pub(crate) fn poll_timeout_ms(&self) -> Option<i32> {
+        let idle = self.idle_commit_deadline_ms();
+        let rearm = self.rearm_deadline_ms();
+        match (idle, rearm) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        }
+    }
+
     /// Delivery-stage latency (compositor → us) for one key event, in µs.
     /// Uses a running minimum as the inter-clock offset; the first samples
     /// calibrate, later samples measure genuine transport delay.
@@ -293,6 +360,15 @@ impl ImeAppState {
     /// type at all). Disabled→enabled re-grabs on the next `Activate`.
     pub(crate) fn maybe_reconfigure(&mut self) {
         let Some(rt) = &self.runtime else { return };
+        // Always update app context for cheat system (cheap, no generation gate)
+        let app_id = rt.app_id();
+        if app_id != self.current_app_id {
+            self.current_app_id = app_id.clone();
+            self.engine.set_app_context(app_id);
+            if let Some(ref id) = self.current_app_id {
+                self.plugin_manager.on_focus_change(id);
+            }
+        }
         let snap = rt.snapshot();
         if snap.generation == self.last_generation {
             return;

@@ -51,6 +51,7 @@ use std::time::Instant;
 
 use tracing::warn;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
+use crate::client_profile::ClientProfile;
 use wayland_client::protocol::wl_registry;
 use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle};
@@ -298,6 +299,8 @@ pub(crate) struct VietTyper {
     /// on completion). Used by the live_echo_pending guard to suppress
     /// TextChangeCause::Other while the typer thread is still typing.
     inflight: Arc<AtomicU64>,
+    /// Adaptive timing profile (backspace, glyph, pre-first-glyph delays).
+    profile: ClientProfile,
 }
 
 impl VietTyper {
@@ -305,16 +308,17 @@ impl VietTyper {
     /// event loop). The thread uploads the static keymap, then sits in a
     /// `recv()` loop executing type commands with proper pacing (roundtrip
     /// + sleep per glyph). The main loop sends commands non-blocking.
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(profile: ClientProfile) -> Self {
         let (text, map) = build_static_keymap();
         let Some((mut queue, vk)) = Self::connect(&text) else {
             warn!("[VIET-TYPER] không mở được Wayland connection riêng — live path tắt");
-            return Self { tx: None, start: Instant::now(), map: HashMap::new(), inflight: Arc::new(AtomicU64::new(0)) };
+            return Self { tx: None, start: Instant::now(), map: HashMap::new(), inflight: Arc::new(AtomicU64::new(0)), profile };
         };
         let map_shared = map.clone();
         let (tx, rx) = std::sync::mpsc::channel::<TypeCmd>();
         let inflight = Arc::new(AtomicU64::new(0));
         let inflight_clone = inflight.clone();
+        let thread_profile = profile.clone();
 
         std::thread::spawn(move || {
             let start = Instant::now();
@@ -341,18 +345,18 @@ impl VietTyper {
                             tap(&vk, code, level, &mut mask_now, &mut t);
                             if paced {
                                 let _ = queue.roundtrip(&mut TyperSink);
-                                std::thread::sleep(std::time::Duration::from_millis(15));
+                                std::thread::sleep(std::time::Duration::from_millis(thread_profile.backspace_delay_ms));
                             }
                         }
                         if paced && backspaces > 0 {
-                            std::thread::sleep(std::time::Duration::from_millis(20));
+                            std::thread::sleep(std::time::Duration::from_millis(thread_profile.pre_first_glyph_delay_ms));
                         }
                         for ch in suffix.chars() {
                             let (code, level) = map_shared[&ch];
                             tap(&vk, code, level, &mut mask_now, &mut t);
                             if paced {
                                 let _ = queue.roundtrip(&mut TyperSink);
-                                std::thread::sleep(std::time::Duration::from_millis(15));
+                                std::thread::sleep(std::time::Duration::from_millis(thread_profile.glyph_delay_ms));
                             }
                         }
                         if mask_now != 0 {
@@ -367,7 +371,7 @@ impl VietTyper {
             }
         });
 
-        Self { tx: Some(tx), start: Instant::now(), map, inflight }
+        Self { tx: Some(tx), start: Instant::now(), map, inflight, profile }
     }
 
     fn connect(keymap_text: &str) -> Option<(EventQueue<TyperSink>, ZwpVirtualKeyboardV1)> {

@@ -32,6 +32,17 @@ impl ImeAppState {
     /// sequences (the buffer holds keys while `waiting_for_done`).
     pub(crate) fn process_key(&mut self, keycode: u32, _conn: &Connection) {
         self.maybe_reconfigure();
+
+        // Phase 7: Atomic Path Handshake — if evdev owns key processing,
+        // skip the Wayland engine entirely. This is a defense-in-depth
+        // guard against the transition window where both paths could
+        // receive the same physical key event.
+        if let Some(rt) = &self.runtime {
+            if rt.active_path() != crate::wayland::ActivePath::Wayland {
+                return;
+            }
+        }
+
         let Some(im) = self.input_method.clone() else {
             return;
         };

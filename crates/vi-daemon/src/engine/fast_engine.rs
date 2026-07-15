@@ -37,6 +37,8 @@ pub struct NonPreeditEngine {
     /// mid-candidate. Only ever engaged while the Vietnamese engine has no
     /// pending composition, so the two never fight over a keystroke.
     emoji_buf: String,
+    /// Current focused app_id for cheat/override system.
+    app_context: Option<String>,
 }
 
 impl NonPreeditEngine {
@@ -48,7 +50,13 @@ impl NonPreeditEngine {
             raw_count: 0,
             emoji_enabled: false,
             emoji_buf: String::new(),
+            app_context: None,
         }
+    }
+
+    /// Set the current app context for cheat/override rules.
+    pub fn set_app_context(&mut self, app_id: Option<String>) {
+        self.app_context = app_id;
     }
 
     /// Toggle emoji expansion (wired from config snapshot).
@@ -78,7 +86,7 @@ impl NonPreeditEngine {
                 // Engine boundary does this, but NonPreedit apps (Chrome,
                 // terminal, LibreOffice) route HERE — using preedit_output
                 // directly skipped the restore → "test"→"tét" (field 2026-07-12).
-                let committed = self.inner.smart_commit_english_only();
+                let committed = self.inner.smart_commit_english_only(self.app_context.as_deref());
                 let raw_len = self.raw_count;
                 self.inner.reset();
                 self.raw_count = 0;
@@ -98,7 +106,7 @@ impl NonPreeditEngine {
         // Word boundaries (space, punctuation) commit immediately
         if is_word_boundary(ch, self.inner.method()) {
             if self.inner.has_preedit() {
-                let committed = self.inner.smart_commit_english_only();
+                let committed = self.inner.smart_commit_english_only(self.app_context.as_deref());
                 let raw_len = self.raw_count;
                 self.inner.reset();
                 self.raw_count = 0;
@@ -137,7 +145,7 @@ impl NonPreeditEngine {
             Action::PassThrough => {
                 self.raw_count = self.raw_count.saturating_sub(1);
                 if self.inner.has_preedit() {
-                    let committed = self.inner.smart_commit_english_only();
+                    let committed = self.inner.smart_commit_english_only(self.app_context.as_deref());
                     let raw_len = self.raw_count;
                     self.inner.reset();
                     self.raw_count = 0;

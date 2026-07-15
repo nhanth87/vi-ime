@@ -9,6 +9,7 @@
 
 mod advisor;
 mod click_watch;
+mod client_profile;
 mod clipboard_convert;
 mod compositor;
 mod config;
@@ -39,27 +40,58 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use tracing::{error, info, warn};
+use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
-/// Non-blocking tracing init (P0-1). The default `fmt()` writer takes a lock
-/// and does a synchronous write(2) to stderr per event — when stderr is a
-/// journald pipe that syscall can stall for ~100ms, which showed up as the
-/// 95ms `stage_engine` spikes. A background thread drains the log queue so
-/// the keystroke path only pays for formatting. The returned guard must stay
-/// alive for the daemon's lifetime (drops flush the queue).
-fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
-    let (writer, guard) = tracing_appender::non_blocking(std::io::stderr());
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .with_writer(writer)
+/// Non-blocking tracing init (P0-1). Writes to stderr via a background thread
+/// AND to a rotating log file at ~/.local/share/vi-ime/vi-ime.log for field
+/// debugging. The file log captures ALL log levels (trace→error) while stderr
+/// respects RUST_LOG for interactive use. The returned guards must stay alive
+/// for the daemon's lifetime (drop flushes the queues).
+fn init_tracing() -> (tracing_appender::non_blocking::WorkerGuard, tracing_appender::non_blocking::WorkerGuard) {
+    // File log: rotating daily, max 3 files of 5MB each
+    let log_dir = {
+        let mut d = std::path::PathBuf::from(
+            std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+                format!("{home}/.local/share")
+            })
+        );
+        d.push("vi-ime");
+        d
+    };
+    let _ = std::fs::create_dir_all(&log_dir);
+    let file_appender = tracing_appender::rolling::Builder::new()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix("vi-ime")
+        .filename_suffix("log")
+        .max_log_files(3)
+        .build(&log_dir)
+        .expect("Failed to create log file appender");
+    let (file_writer, file_guard) = tracing_appender::non_blocking(file_appender);
+    let (stderr_writer, stderr_guard) = tracing_appender::non_blocking(std::io::stderr());
+
+    // Combined layer: file gets everything, stderr respects RUST_LOG
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(file_writer)
+        .with_ansi(false)
+        .with_target(true);
+    let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_writer(stderr_writer);
+
+    tracing_subscriber::registry()
+        .with(file_layer)
+        .with(stderr_layer.with_filter(env_filter))
         .init();
-    guard
+
+    tracing::info!("Log file: {}/vi-ime.log", log_dir.display());
+    (file_guard, stderr_guard)
 }
 
 use crate::engine::fast_engine::CompositorKind;
 
+use crate::client_profile::ClientProfile;
 use crate::compositor::{AppCategory, FocusEvent};
 use crate::config::ConfigManager;
 use crate::events::DaemonEvent;
@@ -82,7 +114,7 @@ fn main() {
             .map(|m| m.setting().input_method)
             .unwrap_or(crate::config::InputMethod::Telex);
         let engine_method = engine_input_method(method);
-        let _log_guard = init_tracing();
+        let (_log_guard, _stderr_guard) = init_tracing();
         if let Err(e) = evdev_mode::run(engine_method) {
             eprintln!("vi-ime evdev: {e}");
             std::process::exit(1);
@@ -162,7 +194,7 @@ fn main() {
         return;
     }
 
-    let _log_guard = init_tracing();
+    let (_log_guard, _stderr_guard) = init_tracing();
 
     info!("vi-ime daemon starting...");
 
@@ -364,13 +396,14 @@ fn main() {
                             .is_some_and(legacy_grab::is_legacy_app);
                     match (wants_legacy, legacy_grab.is_some()) {
                         (true, false) => {
-                            let force_xdotool = current_app_id
+                            let profile = current_app_id
                                 .as_deref()
-                                .is_some_and(legacy_grab::needs_injector_typer);
+                                .map(|id| ClientProfile::detect(id))
+                                .unwrap_or_else(ClientProfile::default);
                             legacy_grab = Some(legacy_grab::LegacyGrab::start(
                                 engine_input_method(config_manager.setting().input_method),
                                 Arc::clone(&runtime),
-                                force_xdotool,
+                                profile,
                             ));
                         }
                         (false, true) => legacy_grab = None,
@@ -441,6 +474,28 @@ fn main() {
                     );
                     legacy_grab = None;
                 }
+                // Phase 7: the Wayland thread detected a one-shot app
+                // (LibreOffice VCL: no re-arm on refocus). Engage evdev
+                // fallback so the user can type Vietnamese on the next focus.
+                if matches!(
+                    fb,
+                    crate::wayland::feedback::ImeFeedback::OneShotDetected
+                ) && legacy_grab.is_none()
+                    && config_manager.setting().enabled
+                {
+                    if let Some(ref app_id) = current_app_id {
+                        if legacy_grab::is_legacy_app(app_id) {
+                            info!(
+                                "[ONE-SHOT] {app_id} classified as one-shot — engaging evdev fallback now"
+                            );
+                            legacy_grab = Some(legacy_grab::LegacyGrab::start(
+                                engine_input_method(config_manager.setting().input_method),
+                                Arc::clone(&runtime),
+                                ClientProfile::detect(app_id),
+                            ));
+                        }
+                    }
+                }
                 let changed = adapt.handle_feedback(current_app_id.as_deref(), fb);
                 if changed {
                     info!(
@@ -490,7 +545,7 @@ fn main() {
                     legacy_grab = Some(legacy_grab::LegacyGrab::start(
                         engine_input_method(config_manager.setting().input_method),
                         Arc::clone(&runtime),
-                        legacy_grab::needs_injector_typer(&app_id),
+                        ClientProfile::detect(&app_id),
                     ));
                 }
             }

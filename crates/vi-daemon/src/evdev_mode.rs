@@ -48,6 +48,7 @@ use evdev::uinput::VirtualDevice;
 use evdev::{Device, EventType, InputEvent, KeyCode};
 use tracing::{error, info, warn};
 
+use crate::client_profile::ClientProfile;
 use crate::engine::InputMethod;
 use crate::evdev_compose::Composer;
 use crate::evdev_inject::Typer;
@@ -299,15 +300,28 @@ fn run_loop(
 /// runs ALONGSIDE the normal Wayland IM thread, only for the apps that
 /// protocol can't reach, released the instant focus leaves the app.
 ///
-/// `force_xdotool_typer`: see `legacy_grab::needs_injector_typer` — the
-/// caller resolves this from the focused app's app_id.
+/// `profile`: per-client timing profile from `ClientProfile::detect()` —
+/// controls pacing delays and whether to prefer the xdotool injector.
 pub fn run_scoped(
     method: InputMethod,
     stop: &AtomicBool,
     runtime: Option<Arc<RuntimeConfig>>,
-    force_xdotool_typer: bool,
+    profile: ClientProfile,
 ) {
-    let Some(typer) = Typer::detect(force_xdotool_typer) else {
+    // Phase 7: Atomic Path Handshake — log the transition for diagnostics.
+    // The active_path was already set to Evdev by LegacyGrab::start before
+    // spawning this thread; this log confirms the evdev path is running.
+    if let Some(rt) = &runtime {
+        let path = rt.active_path();
+        info!(
+            "[PATH-HANDSHAKE] evdev run_scoped starting — active_path={path:?} [{}]",
+            profile.label
+        );
+    } else {
+        info!("[PATH-HANDSHAKE] evdev run_scoped starting (global --evdev mode)");
+    }
+
+    let Some(typer) = Typer::detect(profile) else {
         warn!("evdev fallback: no Unicode typer (no virtual-keyboard support, no `xdotool`)");
         return;
     };
@@ -329,7 +343,7 @@ pub fn run_scoped(
 /// Entry point for `--evdev`. Blocks forever (or until error). Never returns Ok
 /// in normal operation; returns Err on a fatal setup problem so main can log it.
 pub fn run(method: InputMethod) -> Result<(), Box<dyn std::error::Error>> {
-    let typer = Typer::detect(false).ok_or(
+    let typer = Typer::detect(ClientProfile::default()).ok_or(
         "no Unicode typer — compositor lacks zwp_virtual_keyboard_v1 and `xdotool` is missing",
     )?;
     static NEVER_STOP: AtomicBool = AtomicBool::new(false);

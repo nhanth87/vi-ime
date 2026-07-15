@@ -221,7 +221,7 @@ impl Composer {
             // R9 English-restore at word end: `test`→`test`, not `tét`.
             // Mirrors the NonPreeditEngine boundary sites (fast_engine.rs);
             // english_only never second-guesses valid Vietnamese (`ấ`).
-            let target = self.engine.inner().smart_commit_english_only();
+            let target = self.engine.inner().smart_commit_english_only(None);
             // sync=true: word ending → roundtrip (next key is cross-channel).
             self.sync_shown(&target, true);
         }

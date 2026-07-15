@@ -32,7 +32,7 @@ serde_json = "1"
 toml = "0.8"
 dirs = "6"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
 # Non-blocking log writer: hot path (per-keystroke) must never block on a
 # journald/stderr write syscall — a background thread drains the queue.
 tracing-appender = "0.2"

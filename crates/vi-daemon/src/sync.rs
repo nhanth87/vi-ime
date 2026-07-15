@@ -44,6 +44,7 @@ pub fn to_snapshot(eff: &EffectiveConfig) -> RuntimeSnapshot {
         mode_from_user: false,
         game_mode: false,
         surrounding_capable: false,
+        active_path: crate::wayland::ActivePath::Wayland,
         generation: 0,
     }
 }
