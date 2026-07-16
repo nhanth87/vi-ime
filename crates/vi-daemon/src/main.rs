@@ -373,35 +373,6 @@ fn main() {
                     godmod::set_app(app_id);
                 }
                 if app_changed {
-<<<<<<< Updated upstream
-                    // IME tắt = mệnh lệnh tối cao (KHÔNG override): evdev
-                    // fallback grab bàn phím vật lý + compose độc lập với
-                    // đường Wayland, nên PHẢI tự tôn trọng cờ enabled — nếu
-                    // không, "tắt bộ gõ" xong vào Chrome/Electron X11 vẫn ra
-                    // tiếng Việt (field bug 2026-07-12). Tắt → không engage.
-                    // Only LibreOffice/OnlyOffice (structurally unreachable via
-                    // zwp_input_method_v2) engage evdev immediately. Chrome/
-                    // Electron X11 do NOT force evdev on focus — they wait for
-                    // the ProbeTimeout path (below), which fires only if NO
-                    // Wayland Activate arrives. Field-proven 2026-07-12: forcing
-                    // evdev immediately for Chrome stole the address bar from
-                    // the Wayland path (which has ContentType/URL passthrough),
-                    // composing Vietnamese into URLs. The probe-timeout path is
-                    // the conservative fallback that only engages when the app
-                    // genuinely can't be reached.
-                    // IME tắt = mệnh lệnh tối cao (R18): không engage khi off.
-                    let ime_on = config_manager.setting().enabled;
-                    let wants_legacy = ime_on
-                        && current_app_id
-                            .as_deref()
-                            .is_some_and(legacy_grab::is_legacy_app);
-                    match (wants_legacy, legacy_grab.is_some()) {
-                        (true, false) => {
-                            let profile = current_app_id
-                                .as_deref()
-                                .map(|id| ClientProfile::detect(id))
-                                .unwrap_or_else(ClientProfile::default);
-=======
                     let wants_legacy = current_app_id
                         .as_deref()
                         .is_some_and(legacy_grab::is_legacy_app);
@@ -425,6 +396,10 @@ fn main() {
                             })
                         });
                     let engage_evdev = wants_legacy || wants_xwayland_evdev;
+                    let profile = current_app_id
+                        .as_deref()
+                        .map(|id| ClientProfile::detect(id))
+                        .unwrap_or_else(ClientProfile::default);
                     match (engage_evdev, legacy_grab.is_some()) {
                         (true, false) => {
                             if wants_xwayland_evdev {
@@ -434,7 +409,7 @@ fn main() {
                                     current_app_id
                                 );
                             }
->>>>>>> Stashed changes
+
                             legacy_grab = Some(legacy_grab::LegacyGrab::start(
                                 engine_input_method(config_manager.setting().input_method),
                                 Arc::clone(&runtime),
@@ -492,24 +467,13 @@ fn main() {
                 // Activates, the Wayland path owns it — release the grab.
                 // A later focus without Activate re-engages it (LibreOffice
                 // never re-arms after the first focus, see R16 Bài học 4).
-<<<<<<< Updated upstream
-                // When the focused app Activates via Wayland, the protocol
-                // path owns it — release the evdev grab. This is authoritative:
-                // the Wayland path has ContentType visibility (URL/password
-                // fields → raw passthrough), which evdev lacks. Field-proven
-                // 2026-07-12: keeping the grab on a Chrome X11 "spurious"
-                // Activate made the address bar compose Vietnamese (garbled
-                // URLs like xn--con-jla) AND commit_string DID reach Chrome
-                // (ngu7a3→ngửa in the log), so the "keep grab" exception was
-                // both harmful and based on a false premise — removed.
-=======
                 //
                 // EXCEPTION (fix 2026-07-12): Chrome/Chromium X11 via niri's
                 // XWayland bridge sends a SPURIOUS Activate that doesn't
                 // actually work (commit_string never reaches the X11 client).
                 // Don't drop the evdev grab for known XWayland fallback apps
                 // that were detected as X11 via /proc cmdline inspection.
->>>>>>> Stashed changes
+
                 if matches!(fb, crate::wayland::feedback::ImeFeedback::Activated)
                     && legacy_grab.is_some()
                 {

@@ -110,6 +110,27 @@ impl Composer {
             return;
         }
 
+        // Backspace OUTSIDE composition: the screen text was typed through
+        // the virtual-keyboard typer, NOT uinput. Forwarding raw backspace
+        // through uinput (`emit`) lands on a different device than what
+        // produced the text → compositor/client may reject/drop it, so the
+        // second backspace (or backspace past a deleted word) stops working.
+        // Route through the SAME typer path instead, with roundtrip for
+        // ordering guarantees (field bug 2026-07-15: backspace stops after
+        // 1 char outside of a composed word).
+        if code == KeyCode::KEY_BACKSPACE {
+            if value != 0 {
+                // Force-settle any leftover shown tracking, then issue one
+                // raw BackSpace via the typer (the same device that wrote the
+                // text) so the compositor respects it.
+                if !self.shown.is_empty() {
+                    self.finish_word();
+                }
+                self.typer.backspace_then_type(1, "", true);
+            }
+            return;
+        }
+
         let Some(ch) = key_to_char(code, self.shift) else {
             // Non-composing key (space, Enter, arrows…): the rendered word
             // is ALREADY on screen (live echo) — just stop tracking it,
