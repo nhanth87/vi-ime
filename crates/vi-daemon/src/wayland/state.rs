@@ -472,3 +472,6 @@ impl ImeAppState {
 
 #[path = "state_timing.rs"]
 mod state_timing;
+
+#[path = "state_hint_tests.rs"]
+mod state_hint_tests;
