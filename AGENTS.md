@@ -371,6 +371,39 @@
 ### Sau khi kết thúc task
 4. **Update Supememory:** ghi tóm tắt task (file, rule, decision).
 5. **Update `/understand`** nếu có thay đổi kiến trúc.
+---
+
+## 🔌 Wayland Protocols — vi-ime Implementation Status
+
+> Chi tiết: [`doc/wayland-protocols.md`](doc/wayland-protocols.md)
+> Theo dõi: wayland-protocols MR #79 (text-input-v3.2), wayland-devel mailing list
+
+| Protocol | Version | Status | Compositor support | vi-ime code |
+|----------|---------|--------|-------------------|-------------|
+| `zwp_input_method_v2` | v1 (latest) | ✅ **Used** | niri, Hyprland, Sway, COSMIC, river, phoc, Treeland, Wayfire | `dispatch.rs`, `actions.rs`, `mod.rs` |
+| `zwp_text_input_v3` | **v3.2** (2026-04) | 🔧 **Integrated** | 16/16 compositors | `dispatch.rs`, `state.rs` |
+| `zwp_virtual_keyboard_v1` | v1 | ✅ **Used** | Most compositors | `viet_typer.rs`, `evdev_typer.rs` |
+| `libei` | v1.4.1 | 📋 **Planned** | Portal-based (future) | Not yet — will replace evdev grab |
+
+### text-input-v3.2 features (merged April 2026, in wayland-protocols)
+
+```
+State:     dispatch.rs + state.rs (ContentHintV3)
+Hints:     no_emoji (0x800) → engine.set_emoji_enabled(false)
+           preedit_shown (0x1000) → log for NonPreedit optimization
+           on_screen_input_provided (0x400) → skip OSK popup
+Compat:    raw_hint=0 when compositor doesn't send v3.2
+```
+
+### text-input-v3.3 (planned, NOT yet merged)
+- Key event forwarding → will fix type-to-search, backspace hold
+- W3C `isComposing` compliance → Chromium/Firefox
+- Reduce dependency on wl_keyboard
+
+### Build checklist (add v3.2 features)
+- [ ] `cargo check` clean
+- [ ] `cargo test` all pass
+- [ ] Release AppImage + upload to GitHub
 
 ---
 
