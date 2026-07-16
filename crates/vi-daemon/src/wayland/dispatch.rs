@@ -15,7 +15,7 @@ use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::{
 
 use crate::engine::ImeMode;
 use crate::wayland::feedback::ImeFeedback;
-use crate::wayland::state::{FieldSensitivity, ImeAppState};
+use crate::wayland::state::{ContentHintV3, FieldSensitivity, ImeAppState};
 use crate::wayland::{ImUserData, KeyboardGrabUserData};
 
 /// ⚠️ Chrome/Firefox depend on this: `ContentPurpose::Url` → `FieldSensitivity::Url`
@@ -136,6 +136,7 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                 state.active = false;
                 state.key_buffer.clear();
                 state.field_sensitivity = FieldSensitivity::Normal;
+                state.content_hint_v3 = ContentHintV3::default();
                 state.surrounding_seen = false;
                 state.external_change = false;
                 state.live_echo_pending = 0;
@@ -264,11 +265,36 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                     state.external_change = is_other;
                 }
             }
-            Event::ContentType { hint: _, purpose } => {
+            Event::ContentType { hint, purpose } => {
                 let sens = match purpose {
                     WEnum::Value(p) => sensitivity_of(p),
                     WEnum::Unknown(_) => FieldSensitivity::Normal,
                 };
+                // text-input-v3.2 content_hint flags — extract raw bits
+                // before the WEnum mapping discards unknown values.
+                // Compositors that use v3.2 send these; older ones don't.
+                let raw_hint = match hint {
+                    WEnum::Value(h) => h.bits(),
+                    WEnum::Unknown(n) => n,
+                };
+                let hint_v3 = ContentHintV3 {
+                    on_screen_input: raw_hint & 0x400 != 0,
+                    no_emoji: raw_hint & 0x800 != 0,
+                    preedit_shown: raw_hint & 0x1000 != 0,
+                };
+                if hint_v3.no_emoji != state.content_hint_v3.no_emoji {
+                    info!("[HINT-V3] no_emoji={} — {} emoji expansion",
+                        hint_v3.no_emoji,
+                        if hint_v3.no_emoji { "disabling" } else { "enabling" }
+                    );
+                    state.engine.set_emoji_enabled(!hint_v3.no_emoji);
+                }
+                if hint_v3.preedit_shown != state.content_hint_v3.preedit_shown {
+                    info!("[HINT-V3] preedit_shown={} — client renders preedit in-place",
+                        hint_v3.preedit_shown
+                    );
+                }
+                state.content_hint_v3 = hint_v3;
                 if sens != state.field_sensitivity {
                     info!("[CONTENT-TYPE] field sensitivity → {sens:?} (had_pending={})", state.engine.has_pending());
                     state.field_sensitivity = sens;

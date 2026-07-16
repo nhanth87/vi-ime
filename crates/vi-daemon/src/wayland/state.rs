@@ -44,6 +44,22 @@ pub(crate) enum FieldSensitivity {
     Terminal,
 }
 
+/// text-input-v3.2 content_hint flags (bitmask) extracted from
+/// the raw `hint` u32 before the enum mapping discards unknown bits.
+/// Only the v3.2 additions are tracked here; the v3.0 base hints
+/// are already covered by `ContentHint` or `ContentPurpose`.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ContentHintV3 {
+    /// `on_screen_input_provided` (0x400): the client already has its own
+    /// on-screen keyboard — IME should not emit a competing OSK/popup.
+    pub on_screen_input: bool,
+    /// `no_emoji` (0x800): the field does not want emoji candidates.
+    pub no_emoji: bool,
+    /// `preedit_shown` (0x1000): the client renders preedit text in-place
+    /// (mirrors NonPreedit mode — vi-ime can skip preedit_string requests).
+    pub preedit_shown: bool,
+}
+
 // ============================================================================
 // Key event buffer entry for rollover handling
 // ============================================================================
@@ -91,6 +107,9 @@ pub struct ImeAppState {
     pub(crate) current_app_id: Option<String>,
     /// Per-field class from the app's content_type (transient, R2-adjacent).
     pub(crate) field_sensitivity: FieldSensitivity,
+    /// text-input-v3.2 content_hint flags extracted from raw u32 bitmask.
+    /// Updated on every ContentType event; reset to default on Deactivate.
+    pub(crate) content_hint_v3: ContentHintV3,
     /// Whether the ime_mode in the active snapshot was an explicit USER
     /// choice — ContentType-Terminal must not override that (layer order).
     pub(crate) mode_from_user: bool,
@@ -179,6 +198,7 @@ impl ImeAppState {
             plugin_manager: Self::init_plugins(),
             current_app_id: None,
             field_sensitivity: FieldSensitivity::default(),
+            content_hint_v3: ContentHintV3::default(),
             mode_from_user: false,
             surrounding_seen: false,
             external_change: false,
