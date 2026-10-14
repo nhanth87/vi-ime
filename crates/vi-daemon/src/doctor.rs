@@ -24,6 +24,20 @@ const NEED: &[(&str, &str, bool)] = &[
     ("zwlr_foreign_toplevel_manager_v1", "focus tracking generic (không có → cần niri/hyprland IPC)", false),
 ];
 
+/// Experimental successors of input-method-v2 (wayland-protocols 1.49,
+/// `experimental/`). vi-im does not speak them yet; the doctor only reports
+/// whether the compositor offers them so we know when a backend is viable.
+/// `xx_input_method_v2` has NO `grab_keyboard` — key interception moves to
+/// `xx_keyboard_filter_v1` (consume / passthrough), so both are required.
+const FUTURE: &[(&str, &str)] = &[
+    ("xx_input_method_manager_v2", "IME protocol thế hệ mới (thay zwp_input_method_v2)"),
+    ("xx_keyboard_filter_manager_v1", "chặn phím cho xx-input-method (thay grab_keyboard)"),
+];
+
+/// `zwp_text_input_v3` version 2 == text-input v3.2 (hints on_screen_input /
+/// no_emoji / preedit_shown, actions, language).
+const TEXT_INPUT_V32: u32 = 2;
+
 pub fn run() {
     println!("═══ vi-ime doctor ═══\n");
 
@@ -77,6 +91,18 @@ pub fn run() {
         let mark = if ok { "✅" } else if *hard { "❌" } else { "⚠️ " };
         println!("  {mark} {iface} — {why}");
         fatal |= !ok && *hard;
+    }
+    if let Some((_, v)) = globals.iter().find(|(n, _)| n == "zwp_text_input_manager_v3") {
+        let note = if *v >= TEXT_INPUT_V32 {
+            "v3.2 — compositor gửi hint no_emoji / preedit_shown"
+        } else {
+            "v3.0/3.1 — không có hint v3.2 (không phải lỗi)"
+        };
+        println!("  ℹ️  zwp_text_input_manager_v3 version {v}: {note}");
+    }
+    for (iface, why) in FUTURE {
+        let mark = if probe::has_global(&globals, iface) { "🆕" } else { "·" };
+        println!("  {mark} {iface} — {why}");
     }
     if fatal {
         println!("\n  KẾT LUẬN: compositor này thiếu protocol bắt buộc → dùng wlroots-based");

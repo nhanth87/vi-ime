@@ -180,6 +180,7 @@ impl ImeAppState {
         engine: NonPreeditEngine,
         _compositor: CompositorKind,
         virtual_keyboard: Option<ZwpVirtualKeyboardV1>,
+        conn: &wayland_client::Connection,
     ) -> Self {
         Self {
             engine,
@@ -190,7 +191,7 @@ impl ImeAppState {
             serial: 0,
             ime_enabled: true,
             vk: VkForwarder::new(virtual_keyboard),
-            viet: VietTyper::new(ClientProfile::default()),
+            viet: VietTyper::new(ClientProfile::default(), conn),
             key_buffer: VecDeque::with_capacity(16),
             shown_word: String::new(),
             runtime: None,

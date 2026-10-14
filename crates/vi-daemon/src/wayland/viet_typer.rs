@@ -304,14 +304,25 @@ pub(crate) struct VietTyper {
 }
 
 impl VietTyper {
-    /// Opens a Wayland connection in a DEDICATED THREAD (P0b: zero sleep in
+    /// Creates the typer's virtual keyboard on the IME's OWN connection but a
+    /// SEPARATE event queue, driven by a DEDICATED THREAD (P0b: zero sleep in
     /// event loop). The thread uploads the static keymap, then sits in a
     /// `recv()` loop executing type commands with proper pacing (roundtrip
     /// + sleep per glyph). The main loop sends commands non-blocking.
-    pub(crate) fn new(profile: ClientProfile) -> Self {
+    ///
+    /// SAME CLIENT is mandatory (2026-10-15, Hyprland): compositors only
+    /// exempt a virtual keyboard from the input-method keyboard grab when it
+    /// belongs to the grabbing client (Hyprland `shouldIgnoreVirtualKeyboard`
+    /// compares `wl_client`). A typer on its own `Connection` is a foreign
+    /// client → every glyph it types is routed BACK into our grab → the
+    /// engine re-composes its own output ("VViViVie…" feedback loop, nothing
+    /// usable reaches the app). niri happened to tolerate the old setup.
+    /// The separate queue keeps `roundtrip()` here from re-entering the main
+    /// queue's dispatch.
+    pub(crate) fn new(profile: ClientProfile, conn: &Connection) -> Self {
         let (text, map) = build_static_keymap();
-        let Some((mut queue, vk)) = Self::connect(&text) else {
-            warn!("[VIET-TYPER] không mở được Wayland connection riêng — live path tắt");
+        let Some((mut queue, vk)) = Self::connect(conn, &text) else {
+            warn!("[VIET-TYPER] không tạo được virtual keyboard — live path tắt");
             return Self { tx: None, start: Instant::now(), map: HashMap::new(), inflight: Arc::new(AtomicU64::new(0)), profile };
         };
         let map_shared = map.clone();
@@ -374,9 +385,9 @@ impl VietTyper {
         Self { tx: Some(tx), start: Instant::now(), map, inflight, profile }
     }
 
-    fn connect(keymap_text: &str) -> Option<(EventQueue<TyperSink>, ZwpVirtualKeyboardV1)> {
-        let conn = Connection::connect_to_env().ok()?;
-        let (globals, mut queue) = registry_queue_init::<TyperSink>(&conn).ok()?;
+    fn connect(conn: &Connection, keymap_text: &str) -> Option<(EventQueue<TyperSink>, ZwpVirtualKeyboardV1)> {
+        // registry_queue_init creates a NEW event queue on the shared connection.
+        let (globals, mut queue) = registry_queue_init::<TyperSink>(conn).ok()?;
         let qh = queue.handle();
         let seat: WlSeat = globals.bind(&qh, 1..=9, ()).ok()?;
         let mgr: ZwpVirtualKeyboardManagerV1 = globals.bind(&qh, 1..=1, ()).ok()?;

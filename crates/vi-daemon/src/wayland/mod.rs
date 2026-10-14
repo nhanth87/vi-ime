@@ -70,10 +70,11 @@ fn run_ime_internal(
     // Virtual keyboard: required to re-inject grabbed keys we don't consume.
     // Missing it means shortcuts/navigation die inside the grab — warn loudly.
     // (VietTyper — the SECOND virtual keyboard that types composed words —
-    // opens its OWN Wayland connection now, see viet_typer.rs 2026-07-13:
-    // it needs `roundtrip()` for real compositor confirmation, which would
-    // be re-entrant dispatch if called on THIS event queue from inside a
-    // key handler.)
+    // shares THIS connection but uses its own event queue: it needs
+    // `roundtrip()` for real compositor confirmation, which would be
+    // re-entrant dispatch on THIS queue from inside a key handler, and it
+    // must be the same wl_client as the grab or Hyprland feeds its output
+    // back into the grab — see viet_typer.rs 2026-10-15.)
     let virtual_keyboard = match globals.bind::<ZwpVirtualKeyboardManagerV1, _, _>(&qh, 1..=1, ()) {
         Ok(mgr) => Some(mgr.create_virtual_keyboard(&seat, &qh, VkUserData)),
         Err(_) => {
@@ -85,7 +86,7 @@ fn run_ime_internal(
     let input_method = im_manager.get_input_method(&seat, &qh, ImUserData);
     info!("Got zwp_input_method_v2");
 
-    let mut state = ImeAppState::new(engine, compositor, virtual_keyboard);
+    let mut state = ImeAppState::new(engine, compositor, virtual_keyboard, &conn);
     state.input_method = Some(input_method);
     state.feedback = feedback;
     if let Some(rt) = runtime {
