@@ -8,6 +8,8 @@ Copyright (c) 2024-2026 vi-im contributors
 
 https://github.com/user-attachments/assets/68af79c3-ae8c-4b50-9be9-1eaf87dfc53a
 
+0,8ns cho 1 tu
+<img width="1688" height="589" alt="image" src="https://github.com/user-attachments/assets/a7892189-2e22-4371-9b5e-15e487fdb8c4" />
 
 
 
