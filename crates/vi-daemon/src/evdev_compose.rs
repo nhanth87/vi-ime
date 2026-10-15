@@ -14,6 +14,7 @@ use evdev::{EventType, InputEvent, KeyCode};
 use tracing::info;
 
 use crate::engine::fast_engine::NonPreeditEngine;
+use crate::engine::macro_dict::HotkeyKey;
 use crate::engine::{ImeMode, InputMethod, NonPreeditAction};
 use crate::evdev_inject::{key_to_char, Typer};
 
@@ -66,6 +67,42 @@ impl Composer {
         self.engine.set_emoji_enabled(enabled);
     }
 
+    /// Publish fresh R-macro tables (pointer-checked inside — ~free).
+    pub(crate) fn set_macros(&mut self, macros: std::sync::Arc<crate::engine::macro_dict::MacroDict>) {
+        self.engine.set_macros(macros);
+    }
+
+    /// R-macro hotkey identity for a chord on the grabbed keyboard.
+    /// Plain/shift-only keys never qualify.
+    fn match_hotkey(&self, code: KeyCode) -> Option<String> {
+        let ctrl = self.sysmods & 0b11 != 0;
+        let alt = self.sysmods & 0b1100 != 0;
+        let sup = self.sysmods & 0b110000 != 0;
+        if !(ctrl || alt || sup) {
+            return None;
+        }
+        let key = Self::hotkey_key(code, self.shift)?;
+        self.engine.match_hotkey(ctrl, alt, sup, self.shift, &key)
+    }
+
+    /// Chord key identity: alphanumerics (lowercased) via the same mapping
+    /// as composition; F1–F12 and named keys by evdev code.
+    fn hotkey_key(code: KeyCode, shift: bool) -> Option<HotkeyKey> {
+        if let Some(c) = key_to_char(code, shift) {
+            return Some(HotkeyKey::Char(c.to_ascii_lowercase()));
+        }
+        Some(match code.code() {
+            59..=68 => HotkeyKey::F((code.code() - 58) as u8),
+            57 => HotkeyKey::Space,
+            28 => HotkeyKey::Enter,
+            15 => HotkeyKey::Tab,
+            14 => HotkeyKey::Backspace,
+            1 => HotkeyKey::Escape,
+            111 => HotkeyKey::Delete,
+            _ => return None,
+        })
+    }
+
     /// One key event from a grabbed keyboard (value: 0=release 1=press 2=repeat).
     pub(crate) fn handle(&mut self, ui: &mut VirtualDevice, code: KeyCode, value: i32) {
         // Track shift for ASCII casing; forward it (apps need modifiers).
@@ -93,6 +130,16 @@ impl Composer {
         // select all, not feed 'a' to the engine (field bug 2026-07-10).
         if self.sysmods != 0 {
             if value != 0 {
+                // R-macro hotkey: chord → expansion, consuming the chord
+                // (releases still forwarded below so nothing sticks). The
+                // evdev thread only runs while the IME is enabled
+                // (consumer_loop breaks otherwise) — R18 holds.
+                if let Some(text) = self.match_hotkey(code) {
+                    info!("[MACRO] hotkey → {} chars", text.chars().count());
+                    self.finish_word();
+                    self.typer.backspace_then_type(0, &text, true);
+                    return;
+                }
                 self.finish_word();
             }
             emit(ui, code, value);
@@ -242,7 +289,9 @@ impl Composer {
             // R9 English-restore at word end: `test`→`test`, not `tét`.
             // Mirrors the NonPreeditEngine boundary sites (fast_engine.rs);
             // english_only never second-guesses valid Vietnamese (`ấ`).
-            let target = self.engine.inner().smart_commit_english_only(None);
+            // R-macro keyword expansion wins over the heuristic (same order
+            // as the Wayland path — `commit_text`).
+            let target = self.engine.commit_text(None);
             // sync=true: word ending → roundtrip (next key is cross-channel).
             self.sync_shown(&target, true);
         }

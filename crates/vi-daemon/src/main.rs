@@ -94,6 +94,7 @@ use crate::engine::fast_engine::CompositorKind;
 use crate::client_profile::ClientProfile;
 use crate::compositor::{AppCategory, FocusEvent};
 use crate::config::ConfigManager;
+use crate::engine::macro_dict::MacroDict;
 use crate::events::DaemonEvent;
 use crate::learning::Adaptation;
 use crate::sync::resolved_to_snapshot;
@@ -659,6 +660,13 @@ fn apply_config(
     let resolved =
         setting.effective_config_layered(current_app_id.as_deref(), title, learned.as_ref());
     runtime.store(&resolved_to_snapshot(&resolved));
+    // R-macro: publish keyword + hotkey tables (parsed once here, shared as
+    // Arc; both IME paths pick them up — Wayland via maybe_reconfigure,
+    // evdev via the consumer loop).
+    runtime.store_macros(Arc::new(MacroDict::build(
+        &setting.macros,
+        &setting.macro_hotkeys,
+    )));
 }
 
 /// Per-site rules apply only inside browsers (title = tab name).

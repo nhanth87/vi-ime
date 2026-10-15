@@ -316,6 +316,9 @@ impl ImeAppState {
                 self.plugin_manager.on_focus_change(id);
             }
         }
+        // R-macro: refresh keyword/hotkey tables (pointer-checked inside —
+        // no rebuild when the config didn't change, ~free per call).
+        self.engine.set_macros(rt.macros());
         let snap = rt.snapshot();
         if snap.generation == self.last_generation {
             return;

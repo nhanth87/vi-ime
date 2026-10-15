@@ -12,6 +12,8 @@ use std::os::unix::io::{AsRawFd, OwnedFd};
 
 use tracing::{error, info};
 
+use crate::engine::macro_dict::HotkeyKey;
+
 // ---------------------------------------------------------------------------
 // FFI constants
 // ---------------------------------------------------------------------------
@@ -243,6 +245,25 @@ impl XkbState {
     pub(crate) fn is_shift_active(&self) -> bool {
         if self.state.is_null() { return false; }
         unsafe { xkb_state_mod_index_is_active(self.state, 0, 0) != 0 }
+    }
+
+    /// R-macro hotkey identity for a grabbed keycode (evdev codes, no +8 —
+    /// `keycode_to_char` adds it internally). Alphanumerics lowercase-folded;
+    /// F1–F12 and named non-text keys by number.
+    pub(crate) fn hotkey_key(&self, keycode: u32) -> Option<HotkeyKey> {
+        if let Some(c) = self.keycode_to_char(keycode) {
+            return Some(HotkeyKey::Char(c.to_ascii_lowercase()));
+        }
+        match keycode {
+            59..=68 => Some(HotkeyKey::F((keycode - 58) as u8)),
+            57 => Some(HotkeyKey::Space),
+            28 => Some(HotkeyKey::Enter),
+            15 => Some(HotkeyKey::Tab),
+            14 => Some(HotkeyKey::Backspace),
+            1 => Some(HotkeyKey::Escape),
+            111 => Some(HotkeyKey::Delete),
+            _ => None,
+        }
     }
 }
 

@@ -8,7 +8,7 @@
 //! "ass"→"as", "ddd"→"dd", "uww"→"uw", "a66"→"a6".
 
 use crate::engine::glyph;
-use crate::engine::syllable::is_vowel_char;
+use crate::engine::syllable::{is_plausible, is_vowel_char};
 use crate::engine::tone::Tone;
 use crate::engine::types::InputMethod;
 
@@ -62,8 +62,15 @@ pub fn normalize(lower_keys: &[char], method: InputMethod) -> NormResult {
 
         // ── Tone keys ──
         if let Some(t) = tone_for_key(ch, method, has_vowel) {
+            // Double-key undo ("ass"→"as") only fires on a syllable-plausible
+            // prefix (structural formula, R14 — no vowel tables): on anything
+            // else the tone it would cancel never rendered (Raw fallback
+            // showed raw keys), so the cancel is byte-identical — an
+            // invisible keypress. Fall through to a plain tone set instead,
+            // which visibly advances via the Raw echo.
             if let LastMod::Tone(k) = last
                 && k == ch
+                && is_plausible(&out)
             {
                 // Same tone key twice → cancel tone, emit literal, go literal
                 tone = Tone::Level;
@@ -92,6 +99,9 @@ pub fn normalize(lower_keys: &[char], method: InputMethod) -> NormResult {
         // again undoes it: restore S, then k lands literally.
         //   dd→đ, +d  → "d"+"d" = dd      uw→ư, +w → "u"+"w" = uw
         //   uo+w→ươ, +w → "uo"+"w" = uow  w→ư, +w  → ""+"w"  = w
+        // Same plausibility gate as the tone-double above: on a non-syllable
+        // the merge never rendered, so reverting it changes nothing on
+        // screen — skip the undo and let the key go literal instead.
         if let LastMod::Merge {
             start,
             len,
@@ -99,6 +109,7 @@ pub fn normalize(lower_keys: &[char], method: InputMethod) -> NormResult {
             revert,
         } = last
             && ch == key
+            && is_plausible(&out)
         {
             out.splice(start..start + len, revert.iter().copied());
             out.push(ch);

@@ -8,9 +8,10 @@
 //! depends only on `vi-engine` (crate DAG rule R5).
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicU8, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::engine::fast_engine::NonPreeditEngine;
+use crate::engine::macro_dict::MacroDict;
 use crate::engine::{ImeMode, InputMethod, OutputMode, ToneStyle};
 
 /// Which input path currently owns key processing.
@@ -81,6 +82,11 @@ pub struct RuntimeConfig {
     /// Set BEFORE spawning/dropping LegacyGrab. Read by the Wayland IM thread
     /// at the top of `process_key` — if not Wayland, skip (evdev has it).
     active_path: AtomicU8,
+    /// R-macro tables (keyword + hotkey). Behind a Mutex like `app_id` (not
+    /// an atomic — it's a map); read on generation change, so the hot key
+    /// path stays lock-free. Shared `Arc`: engine skips rebuilds via
+    /// pointer check.
+    macros: Mutex<Arc<MacroDict>>,
 }
 
 /// A decoded, immutable view of the runtime config.
@@ -238,6 +244,22 @@ impl RuntimeConfig {
     /// Current focused app_id (cloned). Read only on a generation change.
     pub fn app_id(&self) -> Option<String> {
         self.app_id.lock().ok().and_then(|s| s.clone())
+    }
+
+    /// Publish fresh R-macro tables and bump generation so both IME paths
+    /// pick them up (`maybe_reconfigure`, evdev consumer loop). Called on
+    /// config apply only — never per keystroke.
+    pub fn store_macros(&self, macros: Arc<MacroDict>) {
+        if let Ok(mut slot) = self.macros.lock() {
+            *slot = macros;
+        }
+        self.generation.fetch_add(1, Ordering::Release);
+    }
+
+    /// Current macro tables (cloned `Arc` — cheap). Engine skips rebuilds
+    /// via pointer check when nothing changed.
+    pub fn macros(&self) -> Arc<MacroDict> {
+        self.macros.lock().ok().map(|m| Arc::clone(&m)).unwrap_or_else(|| Arc::new(MacroDict::default()))
     }
 
     /// Phase 7: atomically set the active input path. Called by the daemon

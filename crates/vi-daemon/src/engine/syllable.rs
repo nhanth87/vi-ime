@@ -127,6 +127,24 @@ fn is_onset_only(chars: &[char]) -> bool {
         .any(|init| init.chars().count() == chars.len() && starts_with(chars, init))
 }
 
+/// Structural plausibility gate for the undo-escapes in `normalize`
+/// (double tone key, double merge key): true when these chars decompose, or
+/// form a bare onset mid-typing ("d" before "d9"→đ). Pure structure (R14) —
+/// onset/nucleus/coda decomposition + NFD-base vowel test, no vowel tables,
+/// no dictionary. On anything else the modifier goes literal, so every press
+/// visibly advances (usernames like "nhanth87", code, English): the merge an
+/// undo would revert was never visible there (Raw fallback showed raw keys),
+/// making the revert a byte-identical no-op — an invisible "dead" keypress.
+pub(crate) fn is_plausible(chars: &[char]) -> bool {
+    if chars.is_empty() {
+        return false;
+    }
+    match decompose(chars) {
+        Some(_) => true,
+        None => is_onset_only(chars),
+    }
+}
+
 // ── Decomposition (structural, table-free) ────────────────────────────────
 
 /// Decompose into {onset, nucleus, coda}, longest valid initial first with

@@ -27,7 +27,31 @@ fn vi_engine_stage(us: u32) -> ImeFeedback {
     }
 }
 
+/// Terminal app_ids whose bursts are known safe unpaced (mirrors the
+/// `paced` computation in `sync_shown` — keep the two in sync).
+fn typer_unpaced_for(app_id: Option<&str>) -> bool {
+    app_id.is_some_and(|id| {
+        let id = id.to_lowercase();
+        crate::compositor::KNOWN_TERMINALS.contains(&id.as_str())
+    })
+}
+
 impl ImeAppState {
+    /// R-macro hotkey identity for this chord. Plain/shift-only keys never
+    /// qualify (a bare letter must keep typing, not trigger macros).
+    /// Caller gates R18 (enabled) + R11b (composable field) first.
+    fn match_macro_hotkey(&self, keycode: u32) -> Option<String> {
+        let ctrl = self.xkb.is_control_active();
+        let alt = self.xkb.is_mod_active("Mod1");
+        let sup = self.xkb.is_mod_active("Mod4");
+        let shift = self.xkb.is_shift_active();
+        if !(ctrl || alt || sup) {
+            return None;
+        }
+        let key = self.xkb.hotkey_key(keycode)?;
+        self.engine.match_hotkey(ctrl, alt, sup, shift, &key)
+    }
+
     /// Handle one pressed key from the buffer. Runs only between commit
     /// sequences (the buffer holds keys while `waiting_for_done`).
     pub(crate) fn process_key(&mut self, keycode: u32, _conn: &Connection) {
@@ -95,6 +119,36 @@ impl ImeAppState {
         // key through so the app's keybinding fires.
         if self.xkb.is_system_modifier_active() {
             self.finalize_word(&im);
+            // R-macro hotkey: chord → expansion instead of passthrough.
+            // R18: only when the IME is on. R11b: never in Secure/Url fields
+            // (composition never reaches the engine there either).
+            if self.ime_enabled
+                && matches!(
+                    self.field_sensitivity,
+                    FieldSensitivity::Normal | FieldSensitivity::Terminal
+                )
+                && let Some(text) = self.match_macro_hotkey(keycode)
+            {
+                info!("[MACRO] hotkey → {} chars", text.chars().count());
+                // Same-channel ordering (R17/R21): live path types on the
+                // typer (never commit_string after vk traffic — cross-channel
+                // reorder); silent path has no vk traffic outstanding, so
+                // commit_string stays ordered. R23: arm the guard BEFORE.
+                self.live_echo_pending = self.live_echo_pending.saturating_add(1);
+                self.last_live_echo_at = Some(std::time::Instant::now());
+                if self.live_echo() {
+                    let paced = !typer_unpaced_for(self.current_app_id.as_deref());
+                    self.viet.backspace_then_type(0, &text, paced);
+                } else {
+                    im.commit_string(text);
+                    im.commit(self.serial);
+                }
+                // Engine already reset by finalize_word above; drop the diff
+                // base — the inserted text shifts the cursor, so the old
+                // shown_word no longer describes the screen.
+                self.reset_word_state();
+                return;
+            }
             self.vk.press(keycode);
             return;
         }
@@ -342,10 +396,7 @@ impl ImeAppState {
         // client áp keymap trễ một nhịp, tap giải mã theo keymap CŨ →
         // "quà"→"q", "kẹ"→"k" (đúng lớp lỗi R16 đã cảnh báo: mọi biến thể
         // ít-pace-hơn đều fail thực địa). app_id None → paced (phía an toàn).
-        let paced = !self.current_app_id.as_deref().is_some_and(|id| {
-            let id = id.to_lowercase();
-            crate::compositor::KNOWN_TERMINALS.contains(&id.as_str())
-        });
+        let paced = !typer_unpaced_for(self.current_app_id.as_deref());
         // Arm the live-echo guard BEFORE the vk call: each `sync_shown`
         // increments the counter; `Done` (end of text-input-v3 batch)
         // decrements it. The increment MUST happen before

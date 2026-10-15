@@ -1,5 +1,7 @@
 # AGENTS.md — vi-ime AI Agent Design Contract
 
+**JDK: N/A (Rust).** Not a Java project. If a task involves another tree under `ethiopia-working-dir`, **ask** which JDK before Java build/test. Workspace rule: [`../../AGENTS.md`](../../AGENTS.md).
+
 > **Mục đích:** Mọi AI agent khi sửa code PHẢI tuân theo file này.
 > **Vi phạm:** Merge bị từ chối. Phải revert.
 >

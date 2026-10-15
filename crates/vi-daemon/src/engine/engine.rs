@@ -113,6 +113,12 @@ impl Engine {
         self.raw_keys.len()
     }
 
+    /// Raw word as typed (tone keys included) — macro-expansion key and
+    /// English-restore input. Cheap clone, called only at word boundaries.
+    pub fn raw_word(&self) -> String {
+        self.raw_keys.iter().collect()
+    }
+
     /// Buffer formatted for committing: applies the output mode (NFC/NFD).
     pub fn preedit_output(&self) -> String {
         match self.output_mode {
@@ -285,3 +291,4 @@ impl Engine {
 #[cfg(test)]
 #[path = "engine_tests.rs"]
 mod engine_tests;
+

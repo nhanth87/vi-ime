@@ -41,6 +41,18 @@
 //! không còn rủi ro re-entrant. BackSpace roundtrip thật (không chỉ flush)
 //! + 15ms, ký tự flush + 15ms — giống chính xác scheme `evdev_typer.rs` đã
 //! field-confirm hoạt động.
+//!
+//! **Shared wl_client (c80c777, 2026-10-15):** đoạn trên mô tả hành vi cũ
+//! (pre-c80c777, nay chỉ còn khi `VI_IME_TYPER_OWN_CONNECTION=1`). Mặc định
+//! typer tạo virtual keyboard trên CHÍNH connection của IME (queue riêng):
+//! Hyprland chỉ miễn grab cho vk cùng wl_client với grab-holder
+//! (`shouldIgnoreVirtualKeyboard`) — vk của connection riêng bị đẩy ngược
+//! vào grab ("VViViVie…"). Routing vk↔grab là UNSPECIFIED (cả hai XML
+//! input-method-v2 và virtual-keyboard-v1 đều không yêu cầu miễn trừ nào),
+//! nên giữ cờ A/B này cho tới khi cả hai mode field-xanh trên từng compositor.
+//! XWayland: typer này chỉ phục vụ đường Wayland live (`sync_shown` — app
+//! X11 không bao giờ Activate nên luôn đi evdev fallback) — cờ này không
+//! đổi hành vi XWayland trên bất kỳ desktop nào.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -49,7 +61,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use tracing::warn;
+use tracing::{info, warn};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use crate::client_profile::ClientProfile;
 use wayland_client::protocol::wl_registry;
@@ -303,6 +315,18 @@ pub(crate) struct VietTyper {
     profile: ClientProfile,
 }
 
+/// roundtrip with anomaly logging: compositor ack slower than 50ms means
+/// glyphs visibly lag behind typing (field 2026-10-15: user re-presses keys
+/// thinking they didn't register). Normal LAN-local roundtrips are <5ms.
+fn timed_roundtrip(queue: &mut EventQueue<TyperSink>, what: &str) {
+    let t0 = Instant::now();
+    let _ = queue.roundtrip(&mut TyperSink);
+    let ms = t0.elapsed().as_millis();
+    if ms >= 50 {
+        warn!("[VIET-TYPER] roundtrip chậm: {ms}ms ({what}) — glyph hiện trễ");
+    }
+}
+
 impl VietTyper {
     /// Creates the typer's virtual keyboard on the IME's OWN connection but a
     /// SEPARATE event queue, driven by a DEDICATED THREAD (P0b: zero sleep in
@@ -321,9 +345,27 @@ impl VietTyper {
     /// queue's dispatch.
     pub(crate) fn new(profile: ClientProfile, conn: &Connection) -> Self {
         let (text, map) = build_static_keymap();
-        let Some((mut queue, vk)) = Self::connect(conn, &text) else {
+        // A/B diagnostic (field 2026-10-15, Hyprland freeze): =1 khôi phục
+        // hành vi pre-c80c777 (connection riêng). Mặc định (unset) share
+        // connection của IME. Xem module docs.
+        let own_conn = if std::env::var("VI_IME_TYPER_OWN_CONNECTION").is_ok() {
+            match Connection::connect_to_env() {
+                Ok(c) => {
+                    info!("[VIET-TYPER] VI_IME_TYPER_OWN_CONNECTION=1 — connection riêng (A/B test)");
+                    Some(c)
+                }
+                Err(e) => {
+                    warn!("[VIET-TYPER] own connection thất bại ({e}) — live path tắt");
+                    return Self::inactive(profile);
+                }
+            }
+        } else {
+            None
+        };
+        let conn_ref: &Connection = own_conn.as_ref().unwrap_or(conn);
+        let Some((mut queue, vk)) = Self::connect(conn_ref, &text) else {
             warn!("[VIET-TYPER] không tạo được virtual keyboard — live path tắt");
-            return Self { tx: None, start: Instant::now(), map: HashMap::new(), inflight: Arc::new(AtomicU64::new(0)), profile };
+            return Self::inactive(profile);
         };
         let map_shared = map.clone();
         let (tx, rx) = std::sync::mpsc::channel::<TypeCmd>();
@@ -332,6 +374,9 @@ impl VietTyper {
         let thread_profile = profile.clone();
 
         std::thread::spawn(move || {
+            // Giữ owned connection sống cùng queue của nó (no-op `None`
+            // trên đường shared — `Connection` đó do IME sở hữu).
+            let _conn_keep: Option<Connection> = own_conn;
             let start = Instant::now();
             let mut mask_now: u32 = 0;
 
@@ -355,7 +400,7 @@ impl VietTyper {
                             let (code, level) = map_shared[&'\u{0008}'];
                             tap(&vk, code, level, &mut mask_now, &mut t);
                             if paced {
-                                let _ = queue.roundtrip(&mut TyperSink);
+                                timed_roundtrip(&mut queue, "bs");
                                 std::thread::sleep(std::time::Duration::from_millis(thread_profile.backspace_delay_ms));
                             }
                         }
@@ -366,7 +411,7 @@ impl VietTyper {
                             let (code, level) = map_shared[&ch];
                             tap(&vk, code, level, &mut mask_now, &mut t);
                             if paced {
-                                let _ = queue.roundtrip(&mut TyperSink);
+                                timed_roundtrip(&mut queue, "glyph");
                                 std::thread::sleep(std::time::Duration::from_millis(thread_profile.glyph_delay_ms));
                             }
                         }
@@ -383,6 +428,19 @@ impl VietTyper {
         });
 
         Self { tx: Some(tx), start: Instant::now(), map, inflight, profile }
+    }
+
+    /// Typer without a worker thread: every `backspace_then_type` fails open
+    /// (`false` → caller keeps `shown_word`; NonPreedit falls back to
+    /// silent-buffer + `commit_string`). Never blocks, never grabs.
+    fn inactive(profile: ClientProfile) -> Self {
+        Self {
+            tx: None,
+            start: Instant::now(),
+            map: HashMap::new(),
+            inflight: Arc::new(AtomicU64::new(0)),
+            profile,
+        }
     }
 
     fn connect(conn: &Connection, keymap_text: &str) -> Option<(EventQueue<TyperSink>, ZwpVirtualKeyboardV1)> {

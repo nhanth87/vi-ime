@@ -576,6 +576,39 @@ mod tests {
         assert_eq!(e.preedit_string(), "as");
     }
 
+    /// Field 2026-10-15 ("nhanth87" cần 3-4 lần bấm mỗi số): undo-escape chỉ
+    /// cháy trên từ syllable-plausible (công thức cấu trúc `is_plausible`,
+    /// không bảng vowel) — còn lại phím đi literal, mỗi lần bấm đều hiện.
+    #[test]
+    fn vni_double_digit_on_invalid_word_stays_visible() {
+        let mut e = Engine::new(InputMethod::Vni);
+        for c in "nhatnth88".chars() {
+            e.push_key(c);
+        }
+        assert_eq!(e.preedit_string(), "nhatnth88");
+        e.push_key('8');
+        e.push_key('7');
+        assert_eq!(e.preedit_string(), "nhatnth8887");
+    }
+
+    #[test]
+    fn vni_double_digit_undo_still_works_on_valid_word() {
+        let mut e = Engine::new(InputMethod::Vni);
+        for c in "a88".chars() {
+            e.push_key(c);
+        }
+        assert_eq!(e.preedit_string(), "a8");
+    }
+
+    #[test]
+    fn telex_double_tone_on_invalid_word_stays_visible() {
+        let mut e = Engine::new(InputMethod::Telex);
+        for c in "nhatnss".chars() {
+            e.push_key(c);
+        }
+        assert_eq!(e.preedit_string(), "nhatnss");
+    }
+
     #[test]
     fn backspace_tieng_to_tien() {
         let mut e = Engine::new(InputMethod::Telex);

@@ -40,8 +40,19 @@ impl Typer {
     /// entirely: it types via a temporary per-character keysym remap +
     /// `XTestFakeKeyEvent`, never touching a custom modifier mask, so
     /// there is nothing for the embedding hop to drop.
+    ///
+    /// Hyprland (field bug 2026-10-15): EVERY XWayland app needs xdotool.
+    /// Chrome X11 (`--ozone-platform=x11`) decoded the native typer's keys
+    /// against the PHYSICAL keymap, not our static 8-level one — "tu" (VNI
+    /// "từ") came out "=+1p1p", i.e. SAFE_CODES base symbols. The engine
+    /// side was correct (`[EVDEV-SYNC]` t→tu→tư→từ). Same Chrome/typer pair
+    /// works on niri, so the virtual-keyboard keymap is not reaching the X
+    /// client through Hyprland's XWayland. xdotool remaps inside the X
+    /// server itself, so it does not depend on that path.
     pub(crate) fn detect(profile: ClientProfile) -> Option<Self> {
-        if profile.needs_injector {
+        let hyprland = crate::engine::fast_engine::CompositorKind::detect()
+            == crate::engine::fast_engine::CompositorKind::Hyprland;
+        if profile.needs_injector || hyprland {
             if let Some(inj) = Injector::detect_xdotool_preferred() {
                 info!(
                     "evdev fallback: Unicode qua {} (app cần xdotool — virtual keyboard mất level Mod3/Mod5)",

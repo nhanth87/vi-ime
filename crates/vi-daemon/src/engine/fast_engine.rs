@@ -6,7 +6,9 @@
 //! (delete → wait for `done` ack → commit), which replaced the old
 //! fixed/adaptive delay approach entirely.
 
+use crate::engine::macro_dict::{HotkeyKey, MacroDict};
 use crate::engine::{Action, Engine, ImeMode, InputMethod, NonPreeditAction};
+use std::sync::Arc;
 
 // ============================================================================
 // NonPreeditEngine
@@ -39,6 +41,10 @@ pub struct NonPreeditEngine {
     emoji_buf: String,
     /// Current focused app_id for cheat/override system.
     app_context: Option<String>,
+    /// Keyword + hotkey macro tables (R-macro). Shared `Arc` pulled from the
+    /// runtime on reconfig — `set_macros` skips rebuilds via pointer check,
+    /// so per-keypress pulls stay ~free.
+    macros: Arc<MacroDict>,
 }
 
 impl NonPreeditEngine {
@@ -51,6 +57,7 @@ impl NonPreeditEngine {
             emoji_enabled: false,
             emoji_buf: String::new(),
             app_context: None,
+            macros: Arc::new(MacroDict::default()),
         }
     }
 
@@ -65,6 +72,40 @@ impl NonPreeditEngine {
         if !enabled {
             self.emoji_buf.clear();
         }
+    }
+
+    /// Publish fresh macro tables (R-macro). Pointer-checked: same `Arc`
+    /// (no config change) skips the rebuild, so per-keypress pulls stay ~free.
+    pub fn set_macros(&mut self, macros: Arc<MacroDict>) {
+        if !Arc::ptr_eq(&self.macros, &macros) {
+            self.macros = macros;
+        }
+    }
+
+    /// Hotkey macro match for a modifier chord. Empty table = instant `None`.
+    pub fn match_hotkey(
+        &self,
+        ctrl: bool,
+        alt: bool,
+        sup: bool,
+        shift: bool,
+        key: &HotkeyKey,
+    ) -> Option<String> {
+        self.macros.match_hotkey(ctrl, alt, sup, shift, key)
+    }
+
+    /// Boundary commit text: an explicit keyword macro wins over the
+    /// English-restore heuristic (user config beats guessing). Keyed on the
+    /// RAW word as typed; empty table = one HashMap miss, then the normal path.
+    /// Call BEFORE `inner.reset()` — raw keys are still intact here.
+    pub fn commit_text(&self, app: Option<&str>) -> String {
+        let raw = self.inner.raw_word();
+        if !raw.is_empty()
+            && let Some(expansion) = self.macros.expand_keyword(&raw)
+        {
+            return expansion;
+        }
+        self.inner.smart_commit_english_only(app)
     }
 
     /// Process one keypress. Returns the action for the Wayland layer.
@@ -86,7 +127,7 @@ impl NonPreeditEngine {
                 // Engine boundary does this, but NonPreedit apps (Chrome,
                 // terminal, LibreOffice) route HERE — using preedit_output
                 // directly skipped the restore → "test"→"tét" (field 2026-07-12).
-                let committed = self.inner.smart_commit_english_only(self.app_context.as_deref());
+                let committed = self.commit_text(self.app_context.as_deref());
                 let raw_len = self.raw_count;
                 self.inner.reset();
                 self.raw_count = 0;
@@ -106,7 +147,7 @@ impl NonPreeditEngine {
         // Word boundaries (space, punctuation) commit immediately
         if is_word_boundary(ch, self.inner.method()) {
             if self.inner.has_preedit() {
-                let committed = self.inner.smart_commit_english_only(self.app_context.as_deref());
+                let committed = self.commit_text(self.app_context.as_deref());
                 let raw_len = self.raw_count;
                 self.inner.reset();
                 self.raw_count = 0;
@@ -145,7 +186,7 @@ impl NonPreeditEngine {
             Action::PassThrough => {
                 self.raw_count = self.raw_count.saturating_sub(1);
                 if self.inner.has_preedit() {
-                    let committed = self.inner.smart_commit_english_only(self.app_context.as_deref());
+                    let committed = self.commit_text(self.app_context.as_deref());
                     let raw_len = self.raw_count;
                     self.inner.reset();
                     self.raw_count = 0;
@@ -383,3 +424,7 @@ impl CompositorKind {
 fn is_word_boundary(ch: char, method: InputMethod) -> bool {
     crate::engine::syllable::is_word_boundary(ch, method)
 }
+
+#[cfg(test)]
+#[path = "fast_macro_tests.rs"]
+mod macro_boundary_tests;

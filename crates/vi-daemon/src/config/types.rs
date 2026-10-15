@@ -148,6 +148,14 @@ pub struct Setting {
     /// matched against the focused window's title (e.g. "facebook").
     #[serde(default)]
     pub site_configs: HashMap<String, AppConfig>,
+    /// Keyword macros (gõ tắt): typed word + word boundary → replacement.
+    /// Example: `[macros] vn = "Việt Nam"`. Empty = feature off.
+    #[serde(default)]
+    pub macros: HashMap<String, String>,
+    /// Hotkey macros: modifier chord → replacement, consuming the chord.
+    /// Example: `[macro_hotkeys] "ctrl+alt+m" = "..."`. Needs ctrl/alt/super.
+    #[serde(default)]
+    pub macro_hotkeys: HashMap<String, String>,
 }
 
 fn default_ime_mode() -> ImeMode {
@@ -174,6 +182,8 @@ impl Default for Setting {
             clipboard_convert: true,
             app_configs: HashMap::new(),
             site_configs: HashMap::new(),
+            macros: HashMap::new(),
+            macro_hotkeys: HashMap::new(),
         }
     }
 }

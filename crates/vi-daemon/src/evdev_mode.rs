@@ -52,7 +52,7 @@ use crate::client_profile::ClientProfile;
 use crate::engine::InputMethod;
 use crate::evdev_compose::Composer;
 use crate::evdev_inject::Typer;
-use crate::wayland::RuntimeConfig;
+use crate::wayland::{ActivePath, RuntimeConfig};
 
 /// A grabbed keyboard that ungrabs itself on drop (panic-safe).
 struct Grabbed(Device);
@@ -241,6 +241,7 @@ fn consumer_loop(
     // path renders them; see evdev_compose::apply CommitEmoji.
     if let Some(rt) = &runtime {
         composer.set_emoji_enabled(rt.snapshot().emoji);
+        composer.set_macros(rt.macros());
     }
     let mut last_clicks = runtime.as_ref().map(|rt| rt.clicks()).unwrap_or(0);
     // True khi thoát vì IME bị TẮT (không phải vì focus rời). Quyết định có
@@ -272,6 +273,8 @@ fn consumer_loop(
                 last_clicks = clicks;
                 composer.click_reset();
             }
+            // R-macro: live table refresh (pointer-checked — ~free).
+            composer.set_macros(rt.macros());
         }
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok((code, value)) => {
@@ -327,6 +330,20 @@ fn run_loop(
     });
 }
 
+/// Fail-open: `LegacyGrab::start` already claimed `active_path=Evdev` before
+/// spawning this thread. If we bail BEFORE the grab loop runs (no typer, no
+/// keyboard, no uinput), hand ownership back to Wayland — otherwise the
+/// Wayland thread drops every grabbed key (`process_key` early-return on
+/// non-Wayland path) while no evdev thread is alive to type them: total
+/// keyboard freeze (field 2026-10-15, Hyprland). XWayland-safe: X11 apps never
+/// Activate over input-method-v2, so the Wayland path ignores them either
+/// way — worst case the app types raw English until the next focus event.
+fn release_path_to_wayland(runtime: &Option<Arc<RuntimeConfig>>) {
+    if let Some(rt) = runtime {
+        rt.set_active_path(ActivePath::Wayland);
+    }
+}
+
 /// Scoped variant for the automatic per-app fallback (see `legacy_grab.rs`):
 /// runs ALONGSIDE the normal Wayland IM thread, only for the apps that
 /// protocol can't reach, released the instant focus leaves the app.
@@ -353,18 +370,21 @@ pub fn run_scoped(
     }
 
     let Some(typer) = Typer::detect(profile) else {
-        warn!("evdev fallback: no Unicode typer (no virtual-keyboard support, no `xdotool`)");
+        warn!("evdev fallback: no Unicode typer (no virtual-keyboard support, no `xdotool`) — fail-open to Wayland");
+        release_path_to_wayland(&runtime);
         return;
     };
     let keyboards = grab_all_keyboards(stop);
     if keyboards.is_empty() {
-        warn!("evdev fallback: no grabbable keyboard (need group `input`?) — staying passthrough");
+        warn!("evdev fallback: no grabbable keyboard (need group `input`?) — fail-open to Wayland");
+        release_path_to_wayland(&runtime);
         return;
     }
     let ui = match build_uinput_mirror() {
         Ok(ui) => ui,
         Err(e) => {
-            error!("evdev fallback: cannot create uinput mirror: {e}");
+            error!("evdev fallback: cannot create uinput mirror: {e} — fail-open to Wayland");
+            release_path_to_wayland(&runtime);
             return;
         }
     };
@@ -393,4 +413,25 @@ pub fn run(method: InputMethod) -> Result<(), Box<dyn std::error::Error>> {
     info!("evdev mode ACTIVE — vi-ime is the sole keyboard handler now.");
     run_loop(keyboards, ui, typer, method, &NEVER_STOP, None);
     Ok(())
+}
+
+#[cfg(test)]
+mod scoped_fail_open_tests {
+    use super::*;
+    use crate::wayland::RuntimeSnapshot;
+
+    /// Bail-before-grab must hand the path back to Wayland (field 2026-10-15:
+    /// stuck Evdev + dead worker = every grabbed key swallowed = total freeze).
+    #[test]
+    fn early_bail_releases_path_to_wayland() {
+        let rt = Arc::new(RuntimeConfig::new(&RuntimeSnapshot::default()));
+        rt.set_active_path(ActivePath::Evdev);
+        release_path_to_wayland(&Some(Arc::clone(&rt)));
+        assert_eq!(rt.active_path(), ActivePath::Wayland);
+    }
+
+    #[test]
+    fn release_without_runtime_is_noop() {
+        release_path_to_wayland(&None);
+    }
 }
