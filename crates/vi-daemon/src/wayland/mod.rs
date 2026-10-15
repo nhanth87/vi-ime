@@ -15,6 +15,7 @@ pub mod feedback;
 pub mod runtime;
 pub mod state;
 pub mod viet_typer;
+pub(crate) mod viet_typer_conn;
 pub mod virtual_keyboard;
 pub mod xkb;
 

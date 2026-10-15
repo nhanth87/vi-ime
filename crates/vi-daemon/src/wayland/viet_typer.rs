@@ -42,17 +42,17 @@
 //! + 15ms, ký tự flush + 15ms — giống chính xác scheme `evdev_typer.rs` đã
 //! field-confirm hoạt động.
 //!
-//! **Shared wl_client (c80c777, 2026-10-15):** đoạn trên mô tả hành vi cũ
-//! (pre-c80c777, nay chỉ còn khi `VI_IME_TYPER_OWN_CONNECTION=1`). Mặc định
-//! typer tạo virtual keyboard trên CHÍNH connection của IME (queue riêng):
-//! Hyprland chỉ miễn grab cho vk cùng wl_client với grab-holder
-//! (`shouldIgnoreVirtualKeyboard`) — vk của connection riêng bị đẩy ngược
-//! vào grab ("VViViVie…"). Routing vk↔grab là UNSPECIFIED (cả hai XML
-//! input-method-v2 và virtual-keyboard-v1 đều không yêu cầu miễn trừ nào),
-//! nên giữ cờ A/B này cho tới khi cả hai mode field-xanh trên từng compositor.
+//! **Shared wl_client (c80c777, 2026-10-15) + auto-selection:** đoạn trên mô
+//! tả hành vi connection-riêng, nay là một nhánh của auto-selection
+//! (`resolve_connection`): Hyprland share connection của IME (compositor này
+//! chỉ miễn grab cho vk cùng wl_client với grab-holder), mọi compositor khác
+//! dùng connection riêng (không tranh socket với main loop). Routing vk↔grab
+//! là UNSPECIFIED (cả hai XML input-method-v2 và virtual-keyboard-v1 đều
+//! không yêu cầu miễn trừ nào). Override chẩn đoán:
+//! `VI_IME_TYPER_OWN_CONNECTION=1` / `VI_IME_TYPER_SHARED_CONNECTION=1`.
 //! XWayland: typer này chỉ phục vụ đường Wayland live (`sync_shown` — app
-//! X11 không bao giờ Activate nên luôn đi evdev fallback) — cờ này không
-//! đổi hành vi XWayland trên bất kỳ desktop nào.
+//! X11 không bao giờ Activate nên luôn đi evdev fallback) — cách chọn
+//! connection không đổi hành vi XWayland trên bất kỳ desktop nào.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -64,6 +64,8 @@ use std::time::Instant;
 use tracing::{info, warn};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use crate::client_profile::ClientProfile;
+use crate::engine::fast_engine::CompositorKind;
+use crate::wayland::viet_typer_conn::{resolve_connection, TyperConnection};
 use wayland_client::protocol::wl_registry;
 use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle};
@@ -345,22 +347,25 @@ impl VietTyper {
     /// queue's dispatch.
     pub(crate) fn new(profile: ClientProfile, conn: &Connection) -> Self {
         let (text, map) = build_static_keymap();
-        // A/B diagnostic (field 2026-10-15, Hyprland freeze): =1 khôi phục
-        // hành vi pre-c80c777 (connection riêng). Mặc định (unset) share
-        // connection của IME. Xem module docs.
-        let own_conn = if std::env::var("VI_IME_TYPER_OWN_CONNECTION").is_ok() {
-            match Connection::connect_to_env() {
+        // General auto-selection (zero config): Hyprland needs the shared
+        // connection, everywhere else uses an own connection — see
+        // `resolve_connection`. Env vars override for diagnosis.
+        let mode = resolve_connection(CompositorKind::detect());
+        let own_conn = match mode {
+            TyperConnection::Owned => match Connection::connect_to_env() {
                 Ok(c) => {
-                    info!("[VIET-TYPER] VI_IME_TYPER_OWN_CONNECTION=1 — connection riêng (A/B test)");
+                    info!("[VIET-TYPER] connection riêng ({mode:?})");
                     Some(c)
                 }
                 Err(e) => {
                     warn!("[VIET-TYPER] own connection thất bại ({e}) — live path tắt");
                     return Self::inactive(profile);
                 }
+            },
+            TyperConnection::Shared => {
+                info!("[VIET-TYPER] shared connection ({mode:?}, Hyprland cần cùng wl_client)");
+                None
             }
-        } else {
-            None
         };
         let conn_ref: &Connection = own_conn.as_ref().unwrap_or(conn);
         let Some((mut queue, vk)) = Self::connect(conn_ref, &text) else {
