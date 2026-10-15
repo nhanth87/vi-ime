@@ -15,6 +15,7 @@
 //! - `VI_IME_TYPER_SHARED_CONNECTION=1` forces Shared.
 
 use crate::engine::fast_engine::CompositorKind;
+use wayland_client::EventQueue;
 
 /// Which Wayland connection the typer's virtual keyboard lives on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +45,19 @@ pub(crate) fn auto_connection(compositor: CompositorKind) -> TyperConnection {
     match compositor {
         CompositorKind::Hyprland => TyperConnection::Shared,
         _ => TyperConnection::Owned,
+    }
+}
+
+/// Compositor-ack roundtrip with anomaly logging: slower than 50ms means
+/// glyphs visibly lag behind typing (field 2026-10-15: user re-presses keys
+/// thinking they didn't register). Normal local roundtrips are <5ms.
+/// Generic over the queue sink so both typer threads share it.
+pub(crate) fn timed_roundtrip<S>(queue: &mut EventQueue<S>, state: &mut S, what: &str) {
+    let t0 = std::time::Instant::now();
+    let _ = queue.roundtrip(state);
+    let ms = t0.elapsed().as_millis();
+    if ms >= 50 {
+        tracing::warn!("[VIET-TYPER] roundtrip chậm: {ms}ms ({what}) — glyph hiện trễ");
     }
 }
 

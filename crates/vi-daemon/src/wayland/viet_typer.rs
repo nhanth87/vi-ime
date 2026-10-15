@@ -65,7 +65,7 @@ use tracing::{info, warn};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use crate::client_profile::ClientProfile;
 use crate::engine::fast_engine::CompositorKind;
-use crate::wayland::viet_typer_conn::{resolve_connection, TyperConnection};
+use crate::wayland::viet_typer_conn::{resolve_connection, timed_roundtrip, TyperConnection};
 use wayland_client::protocol::wl_registry;
 use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle};
@@ -317,18 +317,6 @@ pub(crate) struct VietTyper {
     profile: ClientProfile,
 }
 
-/// roundtrip with anomaly logging: compositor ack slower than 50ms means
-/// glyphs visibly lag behind typing (field 2026-10-15: user re-presses keys
-/// thinking they didn't register). Normal LAN-local roundtrips are <5ms.
-fn timed_roundtrip(queue: &mut EventQueue<TyperSink>, what: &str) {
-    let t0 = Instant::now();
-    let _ = queue.roundtrip(&mut TyperSink);
-    let ms = t0.elapsed().as_millis();
-    if ms >= 50 {
-        warn!("[VIET-TYPER] roundtrip chậm: {ms}ms ({what}) — glyph hiện trễ");
-    }
-}
-
 impl VietTyper {
     /// Creates the typer's virtual keyboard on the IME's OWN connection but a
     /// SEPARATE event queue, driven by a DEDICATED THREAD (P0b: zero sleep in
@@ -405,20 +393,32 @@ impl VietTyper {
                             let (code, level) = map_shared[&'\u{0008}'];
                             tap(&vk, code, level, &mut mask_now, &mut t);
                             if paced {
-                                timed_roundtrip(&mut queue, "bs");
+                                timed_roundtrip(&mut queue, &mut TyperSink, "bs");
                                 std::thread::sleep(std::time::Duration::from_millis(thread_profile.backspace_delay_ms));
                             }
                         }
                         if paced && backspaces > 0 {
                             std::thread::sleep(std::time::Duration::from_millis(thread_profile.pre_first_glyph_delay_ms));
                         }
+                        let mut glyphs = 0u32;
                         for ch in suffix.chars() {
                             let (code, level) = map_shared[&ch];
                             tap(&vk, code, level, &mut mask_now, &mut t);
+                            glyphs += 1;
                             if paced {
-                                timed_roundtrip(&mut queue, "glyph");
                                 std::thread::sleep(std::time::Duration::from_millis(thread_profile.glyph_delay_ms));
                             }
+                        }
+                        // One confirmation per command instead of per glyph:
+                        // consecutive taps on ONE vk object are protocol-
+                        // ordered, so per-glyph roundtrips only multiplied
+                        // shared-connection contention (field 2026-10-15:
+                        // 88–177ms spikes → backlog → "dead keys"). The
+                        // per-BACKSPACE roundtrips above stay untouched —
+                        // those transitions are field-proven critical
+                        // (VCL/CEF swallow BS+char bursts, R19/R21).
+                        if paced && glyphs > 0 {
+                            timed_roundtrip(&mut queue, &mut TyperSink, "batch");
                         }
                         if mask_now != 0 {
                             vk.modifiers(0, 0, 0, 0);
