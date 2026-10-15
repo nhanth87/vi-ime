@@ -163,6 +163,9 @@ impl MacroDict {
         if hotkeys.len() > MAX_MACROS {
             tracing::warn!("[MACRO] quá {MAX_MACROS} macro phím — bỏ phần thừa");
         }
+        if !kw.is_empty() || !hk.is_empty() {
+            tracing::info!("[MACRO] tables: {} keywords, {} hotkeys", kw.len(), hk.len());
+        }
         Self {
             keywords: kw,
             hotkeys: hk,

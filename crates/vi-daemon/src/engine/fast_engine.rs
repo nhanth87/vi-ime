@@ -103,6 +103,7 @@ impl NonPreeditEngine {
         if !raw.is_empty()
             && let Some(expansion) = self.macros.expand_keyword(&raw)
         {
+            tracing::info!("[MACRO] '{raw}' → {expansion:?}");
             return expansion;
         }
         self.inner.smart_commit_english_only(app)
