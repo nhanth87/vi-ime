@@ -142,6 +142,9 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                 state.live_echo_pending = 0;
                 state.reset_word_state();
                 state.last_key_time = None;
+                // Grab gone: a held key must not keep repeating into the void.
+                state.repeat_key = None;
+                state.repeat_next = None;
                 // Never leave the app with a stuck forwarded key.
                 state.vk.release_all();
                 if let Some(grab) = state.keyboard_grab.take() {
@@ -396,6 +399,13 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, KeyboardGrabUserData> for ImeAppStat
                 }
                 // Buffer press AND release: releases ride the same queue so a
                 // forwarded press is always followed by its release in order.
+                // Client-side repeat (grab never repeats server-side):
+                // arm on press, disarm on release.
+                if pressed {
+                    state.arm_repeat(key);
+                } else {
+                    state.disarm_repeat(key);
+                }
                 state.buffer_key(key, pressed);
                 state.flush_key_buffer(conn);
             }
@@ -415,10 +425,12 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, KeyboardGrabUserData> for ImeAppStat
                 // Mirror so forwarded keys carry the right modifier state.
                 state.vk.modifiers(mods_depressed, mods_latched, mods_locked, group);
             }
-            Event::RepeatInfo {
-                rate: _,
-                delay: _,
-            } => {}
+            Event::RepeatInfo { rate, delay } => {
+                // Compositor repeat policy for client-side repeat (see
+                // state_timing arm_repeat/fire_repeat). rate 0 = no repeat.
+                state.repeat_rate = rate.max(0) as u32;
+                state.repeat_delay_ms = delay.max(0) as u64;
+            }
             _ => {}
         }
         let _ = conn.flush();

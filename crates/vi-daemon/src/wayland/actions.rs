@@ -17,7 +17,8 @@ use crate::wayland::state::{FieldSensitivity, ImeAppState};
 
 /// Modifier keycodes (evdev): LCTRL, LSHIFT, RSHIFT, LALT, CAPSLOCK,
 /// RCTRL, RALT, LMETA, RMETA. Forwarded transparently, never break a word.
-const MODIFIER_KEYS: [u32; 9] = [29, 42, 54, 56, 58, 97, 100, 125, 126];
+/// Never auto-repeat either (they're state, not input).
+pub(crate) const MODIFIER_KEYS: [u32; 9] = [29, 42, 54, 56, 58, 97, 100, 125, 126];
 
 /// Engine-stage sample (helper keeps the call site short).
 fn vi_engine_stage(us: u32) -> ImeFeedback {
@@ -52,8 +53,9 @@ impl ImeAppState {
         self.engine.match_hotkey(ctrl, alt, sup, shift, &key)
     }
 
-    /// Handle one pressed key from the buffer. Runs only between commit
-    /// sequences (the buffer holds keys while `waiting_for_done`).
+    /// Handle one pressed key from the buffer. The buffer drains inside a
+    /// single dispatch (no cross-event waiting); held keys re-enter here
+    /// via client-side repeat (see state_timing `fire_repeat`).
     pub(crate) fn process_key(&mut self, keycode: u32, _conn: &Connection) {
         self.maybe_reconfigure();
 

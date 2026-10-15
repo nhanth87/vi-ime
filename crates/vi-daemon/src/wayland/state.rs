@@ -159,6 +159,17 @@ pub struct ImeAppState {
     /// True = this app properly re-arms (`Activate` seen ≥2 times).
     /// Optimistic default; set to false after 2s with no second Activate.
     pub(crate) app_rearms: bool,
+    /// Client-side key repeat: grab keyboards don't repeat server-side —
+    /// `RepeatInfo` carries rate/delay and the CLIENT re-fires held keys.
+    /// Without this, holding Backspace/arrows deletes/moves exactly once
+    /// (field 2026-10-15). Armed on press, disarmed on release/deactivate.
+    pub(crate) repeat_key: Option<u32>,
+    /// When the next repeat fires (press time + delay, then + 1/rate).
+    pub(crate) repeat_next: Option<Instant>,
+    /// Repeats/sec from the compositor (0 = disabled — never arm).
+    pub(crate) repeat_rate: u32,
+    /// Initial delay before repeats start, ms.
+    pub(crate) repeat_delay_ms: u64,
 }
 
 /// Preedit-only compositions are DROPPED on a mouse click (R8) — the field
@@ -216,6 +227,10 @@ impl ImeAppState {
             enable_count: 0,
             last_enable_ts: None,
             app_rearms: true,
+            repeat_key: None,
+            repeat_next: None,
+            repeat_rate: 25,
+            repeat_delay_ms: 400,
         }
     }
 

@@ -1,10 +1,14 @@
 //! Re-arm detection + idle-commit timing. Extracted from state.rs (R4).
 
+use std::time::{Duration, Instant};
+
 use super::ImeAppState;
+use super::{IDLE_COMMIT_MS, REARM_WINDOW_MS};
+use crate::wayland::ActivePath;
+use crate::wayland::actions::MODIFIER_KEYS;
 use crate::wayland::feedback::ImeFeedback;
 use tracing::info;
 use wayland_client::Connection;
-use super::{IDLE_COMMIT_MS, REARM_WINDOW_MS};
 
 impl ImeAppState {
     pub(crate) fn idle_commit_deadline_ms(&self) -> Option<i32> {
@@ -69,16 +73,78 @@ impl ImeAppState {
         }
     }
 
-    /// Combined deadline for poll timeout: the sooner of idle-commit and
-    /// re-arm detection, or None if neither is armed.
+    /// Combined deadline for poll timeout: the soonest of idle-commit,
+    /// re-arm detection and key repeat, or None if none is armed.
     pub(crate) fn poll_timeout_ms(&self) -> Option<i32> {
         let idle = self.idle_commit_deadline_ms();
         let rearm = self.rearm_deadline_ms();
-        match (idle, rearm) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (Some(a), None) => Some(a),
-            (None, Some(b)) => Some(b),
-            (None, None) => None,
+        let repeat = self.repeat_deadline_ms();
+        [idle, rearm, repeat]
+            .into_iter()
+            .flatten()
+            .min()
+    }
+
+    /// ms left until the armed key repeat fires, or None when disarmed.
+    pub(crate) fn repeat_deadline_ms(&self) -> Option<i32> {
+        let next = self.repeat_next?;
+        if self.repeat_key.is_none() {
+            return None;
         }
+        let left = next.saturating_duration_since(Instant::now()).as_millis();
+        Some(left.min(i32::MAX as u128) as i32)
+    }
+
+    /// Arm client-side repeat for a freshly pressed grab key. Modifiers
+    /// never repeat (state, not input); rate 0 (compositor-disabled) disarms.
+    pub(crate) fn arm_repeat(&mut self, keycode: u32) {
+        if self.repeat_rate == 0 || MODIFIER_KEYS.contains(&keycode) {
+            self.repeat_key = None;
+            self.repeat_next = None;
+            return;
+        }
+        self.repeat_key = Some(keycode);
+        self.repeat_next = Some(Instant::now() + Duration::from_millis(self.repeat_delay_ms));
+    }
+
+    /// Disarm repeat when this key is released (a different key's release
+    /// must not kill the still-held key's repeat).
+    pub(crate) fn disarm_repeat(&mut self, keycode: u32) {
+        if self.repeat_key == Some(keycode) {
+            self.repeat_key = None;
+            self.repeat_next = None;
+        }
+    }
+
+    /// Fire a client-side repeat: re-inject the still-held key, re-arm at
+    /// the compositor's rate. Skips the game-mode toggle chord (repeating
+    /// it would flap game mode on/off). Min 25ms step: below the 20ms
+    /// rollover-coalesce window repeats would be eaten as key chatter.
+    /// No-op unless this is the owning path (evdev owns keys otherwise).
+    pub(crate) fn fire_repeat(&mut self, conn: &Connection) {
+        let Some(keycode) = self.repeat_key else { return };
+        let Some(next) = self.repeat_next else { return };
+        if Instant::now() < next {
+            return;
+        }
+        if let Some(rt) = &self.runtime
+            && rt.active_path() != ActivePath::Wayland
+        {
+            self.repeat_key = None;
+            self.repeat_next = None;
+            return;
+        }
+        if self.is_game_mode_toggle(keycode) {
+            self.repeat_key = None;
+            self.repeat_next = None;
+            return;
+        }
+        let step = 1000u64
+            .checked_div(u64::from(self.repeat_rate.max(1)))
+            .unwrap_or(40)
+            .max(25);
+        self.repeat_next = Some(Instant::now() + Duration::from_millis(step));
+        self.buffer_key(keycode, true);
+        self.flush_key_buffer(conn);
     }
 }

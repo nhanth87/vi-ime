@@ -175,9 +175,11 @@ fn run_ime_internal(
             drop(read_guard);
         }
         if ret == 0 {
-            // Poll timeout: the idle auto-commit or re-arm deadline passed.
+            // Poll timeout: idle auto-commit, re-arm window or key repeat
+            // deadline passed.
             state.idle_commit(&conn);
             state.check_rearm_timeout();
+            state.fire_repeat(&conn);
         }
 
         if let Err(e) = event_queue.dispatch_pending(&mut state) {
