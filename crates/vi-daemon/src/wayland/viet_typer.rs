@@ -393,7 +393,12 @@ impl VietTyper {
                             let (code, level) = map_shared[&'\u{0008}'];
                             tap(&vk, code, level, &mut mask_now, &mut t);
                             if paced {
-                                timed_roundtrip(&mut queue, &mut TyperSink, "bs");
+                                timed_roundtrip(
+                                    &mut queue,
+                                    &mut TyperSink,
+                                    "bs",
+                                    inflight_clone.load(Ordering::Acquire),
+                                );
                                 std::thread::sleep(std::time::Duration::from_millis(thread_profile.backspace_delay_ms));
                             }
                         }
@@ -418,7 +423,12 @@ impl VietTyper {
                         // those transitions are field-proven critical
                         // (VCL/CEF swallow BS+char bursts, R19/R21).
                         if paced && glyphs > 0 {
-                            timed_roundtrip(&mut queue, &mut TyperSink, "batch");
+                            timed_roundtrip(
+                                &mut queue,
+                                &mut TyperSink,
+                                "batch",
+                                inflight_clone.load(Ordering::Acquire),
+                            );
                         }
                         if mask_now != 0 {
                             vk.modifiers(0, 0, 0, 0);
