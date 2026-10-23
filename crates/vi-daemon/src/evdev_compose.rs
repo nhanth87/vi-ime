@@ -9,6 +9,8 @@
 //! Ctrl/Alt/Super is held are forwarded verbatim (Ctrl+A must reach the
 //! app, not the engine — field bug 2026-07-10).
 
+use std::time::{Duration, Instant};
+
 use evdev::uinput::VirtualDevice;
 use evdev::{EventType, InputEvent, KeyCode};
 use tracing::info;
@@ -34,6 +36,24 @@ pub(crate) struct Composer {
     /// falls back to a zero-based recompute. Avoids re-collecting into
     /// Vec<char> + zip on every keystroke (opt 3).
     common_bytes: usize,
+    /// When the last key PRESS went out through the uinput mirror — see
+    /// `type_out` (cross-channel ordering barrier).
+    last_uinput_press: Option<Instant>,
+}
+
+/// How long a key press forwarded through the uinput mirror needs to reach
+/// the app before the typer may write after it. The two channels race:
+/// uinput → kernel → libinput → compositor → (XWayland) → app, while
+/// `xdotool` talks to the X server directly and the native typer is a
+/// separate Wayland client. Without this, "xin chào" typed fast can come
+/// out "xinc hào": the 'c' typed by the injector overtakes the Space still
+/// in transit through the compositor (race found by code reading on
+/// Hyprland + Chrome X11, 2026-10-23 — not yet field-reproduced).
+const UINPUT_SETTLE: Duration = Duration::from_millis(30);
+
+/// Remaining wait before the typer may write after a uinput press at `last`.
+fn settle_remaining(last: Option<Instant>, now: Instant) -> Duration {
+    last.map_or(Duration::ZERO, |t| UINPUT_SETTLE.saturating_sub(now.duration_since(t)))
 }
 
 /// Bit for a system-modifier key (Ctrl/Alt/Super), 0 for everything else.
@@ -59,6 +79,7 @@ impl Composer {
             shift: false,
             sysmods: 0,
             common_bytes: 0,
+            last_uinput_press: None,
         }
     }
 
@@ -108,7 +129,7 @@ impl Composer {
         // Track shift for ASCII casing; forward it (apps need modifiers).
         if matches!(code, KeyCode::KEY_LEFTSHIFT | KeyCode::KEY_RIGHTSHIFT) {
             self.shift = value != 0;
-            emit(ui, code, value);
+            self.forward(ui, code, value);
             return;
         }
 
@@ -121,7 +142,7 @@ impl Composer {
             } else {
                 self.sysmods |= bit;
             }
-            emit(ui, code, value);
+            self.forward(ui, code, value);
             return;
         }
 
@@ -137,12 +158,12 @@ impl Composer {
                 if let Some(text) = self.match_hotkey(code) {
                     info!("[MACRO] hotkey → {} chars", text.chars().count());
                     self.finish_word();
-                    self.typer.backspace_then_type(0, &text, true);
+                    self.type_out(0, &text, true);
                     return;
                 }
                 self.finish_word();
             }
-            emit(ui, code, value);
+            self.forward(ui, code, value);
             return;
         }
 
@@ -173,7 +194,7 @@ impl Composer {
                 if !self.shown.is_empty() {
                     self.finish_word();
                 }
-                self.typer.backspace_then_type(1, "", true);
+                self.type_out(1, "", true);
             }
             return;
         }
@@ -185,7 +206,7 @@ impl Composer {
             if value != 0 {
                 self.finish_word();
             }
-            emit(ui, code, value);
+            self.forward(ui, code, value);
             return;
         };
 
@@ -194,7 +215,7 @@ impl Composer {
         // app, and if the press went through (chord released mid-key) the
         // key must not stay stuck down.
         if value == 0 {
-            emit(ui, code, 0);
+            self.forward(ui, code, 0);
             return;
         }
         let action = self.engine.push_key(ch);
@@ -219,7 +240,7 @@ impl Composer {
                 self.sync_shown(&text, true);
                 self.shown.clear();
                 self.common_bytes = 0;
-                tap(ui, code);
+                self.forward_tap(ui, code);
             }
             NonPreeditAction::CommitEmoji { text, .. } => {
                 // Emoji/flushed-literal on the evdev path. Capture was silent
@@ -229,7 +250,7 @@ impl Composer {
                 // keymap covers only ASCII+Vietnamese, so emoji glyphs type only
                 // through the wtype/xdotool injector; on the native path a
                 // multi-byte emoji is dropped (documented limit — legacy apps).
-                self.typer.backspace_then_type(0, &text, true);
+                self.type_out(0, &text, true);
                 self.shown.clear();
                 self.common_bytes = 0;
             }
@@ -239,8 +260,35 @@ impl Composer {
             }
             // Digit at word start (VNI) or digit boundary (Telex): the char
             // was consumed above, so replay it or it would be LOST.
-            NonPreeditAction::PassThrough => tap(ui, code),
+            NonPreeditAction::PassThrough => self.forward_tap(ui, code),
         }
+    }
+
+    /// Forward one key event through the uinput mirror, stamping presses
+    /// for the `type_out` barrier.
+    fn forward(&mut self, ui: &mut VirtualDevice, code: KeyCode, value: i32) {
+        emit(ui, code, value);
+        if value != 0 {
+            self.last_uinput_press = Some(Instant::now());
+        }
+    }
+
+    /// `tap` through the uinput mirror, stamped like `forward`.
+    fn forward_tap(&mut self, ui: &mut VirtualDevice, code: KeyCode) {
+        tap(ui, code);
+        self.last_uinput_press = Some(Instant::now());
+    }
+
+    /// Every typer write goes through here: wait out `UINPUT_SETTLE` after a
+    /// recent uinput press so the typed text can never overtake it. Costs
+    /// nothing at normal typing speed (keys ≥30ms apart); only bites when
+    /// keys are processed back to back (backlog, fast bursts).
+    fn type_out(&mut self, backspaces: usize, text: &str, sync: bool) {
+        let wait = settle_remaining(self.last_uinput_press.take(), Instant::now());
+        if !wait.is_zero() {
+            std::thread::sleep(wait);
+        }
+        self.typer.backspace_then_type(backspaces, text, sync);
     }
 
     /// Emit releases for any modifiers the uinput mirror still holds — on
@@ -249,8 +297,8 @@ impl Composer {
     /// (same class as the vk1 stuck-Super bug, virtual_keyboard.rs).
     pub(crate) fn release_mods(&mut self, ui: &mut VirtualDevice) {
         if self.shift {
-            emit(ui, KeyCode::KEY_LEFTSHIFT, 0);
-            emit(ui, KeyCode::KEY_RIGHTSHIFT, 0);
+            self.forward(ui, KeyCode::KEY_LEFTSHIFT, 0);
+            self.forward(ui, KeyCode::KEY_RIGHTSHIFT, 0);
             self.shift = false;
         }
         const MODS: [(u8, KeyCode); 6] = [
@@ -263,7 +311,7 @@ impl Composer {
         ];
         for (bit, code) in MODS {
             if self.sysmods & bit != 0 {
-                emit(ui, code, 0);
+                self.forward(ui, code, 0);
             }
         }
         self.sysmods = 0;
@@ -349,7 +397,7 @@ impl Composer {
             self.shown,
             bs_count
         );
-        self.typer.backspace_then_type(bs_count, suffix, sync);
+        self.type_out(bs_count, suffix, sync);
         self.shown.clear();
         self.shown.push_str(target);
         self.common_bytes = common_bytes;
@@ -376,4 +424,27 @@ fn tap(ui: &mut VirtualDevice, code: KeyCode) {
         InputEvent::new(EventType::SYNCHRONIZATION.0, 0, 0),
     ];
     let _ = ui.emit(&events);
+}
+
+#[cfg(test)]
+mod barrier_tests {
+    use super::*;
+
+    #[test]
+    fn no_recent_press_no_wait() {
+        assert_eq!(settle_remaining(None, Instant::now()), Duration::ZERO);
+    }
+
+    #[test]
+    fn fresh_press_waits_the_remainder() {
+        let t0 = Instant::now();
+        let left = settle_remaining(Some(t0), t0 + Duration::from_millis(10));
+        assert_eq!(left, UINPUT_SETTLE - Duration::from_millis(10));
+    }
+
+    #[test]
+    fn old_press_no_wait() {
+        let t0 = Instant::now();
+        assert_eq!(settle_remaining(Some(t0), t0 + UINPUT_SETTLE * 2), Duration::ZERO);
+    }
 }

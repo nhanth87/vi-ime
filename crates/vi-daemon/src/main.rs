@@ -17,6 +17,7 @@ mod doctor;
 mod engine;
 mod evdev_compose;
 mod evdev_inject;
+mod evdev_keystate;
 mod evdev_mode;
 mod evdev_typer;
 mod events;

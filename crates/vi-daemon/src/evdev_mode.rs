@@ -52,6 +52,7 @@ use crate::client_profile::ClientProfile;
 use crate::engine::InputMethod;
 use crate::evdev_compose::Composer;
 use crate::evdev_inject::Typer;
+use crate::evdev_keystate::{self, HeldKeys};
 use crate::wayland::{ActivePath, RuntimeConfig};
 
 /// A grabbed keyboard that ungrabs itself on drop (panic-safe).
@@ -75,14 +76,30 @@ const IGNORE_DEVICE_MARKERS: &[&str] = &["vi-ime", "fcitx", "ibus", "uinput", "y
 /// "giữ Super + chuyển cửa sổ sang LibreOffice" (field 2026-07-10). While
 /// we wait, events still flow to the compositor, so the release lands
 /// where it belongs. Canonical dynamic-grab trick (keyd/xremap do this).
-fn wait_keys_clear(dev: &evdev::Device, stop: &AtomicBool) -> bool {
+///
+/// Non-modifier keys stuck down in the kernel (lost release) are ignored
+/// after `evdev_keystate::STALE_KEY` — see that module (field 2026-10-23,
+/// `KEY_KP0` held for days blocked every grab).
+fn wait_keys_clear(dev: &evdev::Device, path: &std::path::Path, stop: &AtomicBool) -> bool {
+    let device = path.display().to_string();
+    let mut held = HeldKeys::new(evdev_keystate::known_stale(&device));
     loop {
         if stop.load(Ordering::Relaxed) {
             return false;
         }
         match dev.get_key_state() {
-            Ok(keys) if keys.iter().next().is_none() => return true,
-            Ok(_) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Ok(keys) => {
+                let keys: Vec<KeyCode> = keys.iter().collect();
+                if held.update(&keys, std::time::Instant::now()) {
+                    let stale = held.stale();
+                    if !stale.is_empty() {
+                        info!("evdev: ignoring stale held key(s) {stale:?} on {device} (lost release in kernel)");
+                    }
+                    evdev_keystate::remember_stale(&device, &stale);
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
             // Can't read state — proceed rather than never engaging.
             Err(_) => return true,
         }
@@ -135,7 +152,7 @@ fn grab_all_keyboards(stop: &AtomicBool) -> Vec<Grabbed> {
             continue;
         }
         let mut dev = dev;
-        if !wait_keys_clear(&dev, stop) {
+        if !wait_keys_clear(&dev, &path, stop) {
             continue;
         }
         match dev.grab() {
