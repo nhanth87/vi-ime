@@ -9,6 +9,7 @@ use evdev::KeyCode;
 use tracing::{info, warn};
 
 use crate::client_profile::ClientProfile;
+use crate::engine::macro_dict::HotkeyKey;
 use crate::evdev_typer::EvdevTyper;
 use crate::xtest_typer::XTestTyper;
 
@@ -143,6 +144,24 @@ pub(crate) fn key_to_char(code: KeyCode, shift: bool) -> Option<char> {
     } else {
         Some(base)
     }
+}
+
+/// Chord key identity: alphanumerics (lowercased) via the same mapping
+/// as composition; F1–F12 and named keys by evdev code.
+pub(crate) fn hotkey_key(code: KeyCode, shift: bool) -> Option<HotkeyKey> {
+    if let Some(c) = key_to_char(code, shift) {
+        return Some(HotkeyKey::Char(c.to_ascii_lowercase()));
+    }
+    Some(match code.code() {
+        59..=68 => HotkeyKey::F((code.code() - 58) as u8),
+        57 => HotkeyKey::Space,
+        28 => HotkeyKey::Enter,
+        15 => HotkeyKey::Tab,
+        14 => HotkeyKey::Backspace,
+        1 => HotkeyKey::Escape,
+        111 => HotkeyKey::Delete,
+        _ => return None,
+    })
 }
 
 /// Printable non-composing key → its character (US layout, like

@@ -16,9 +16,8 @@ use evdev::{EventType, InputEvent, KeyCode};
 use tracing::info;
 
 use crate::engine::fast_engine::NonPreeditEngine;
-use crate::engine::macro_dict::HotkeyKey;
 use crate::engine::{ImeMode, InputMethod, NonPreeditAction};
-use crate::evdev_inject::{boundary_char, key_to_char, Typer};
+use crate::evdev_inject::{boundary_char, hotkey_key, key_to_char, Typer};
 
 /// Live composer: the engine plus what is currently on screen for the
 /// in-progress word. Shared by `run` (--evdev) and `run_scoped` (auto
@@ -42,6 +41,13 @@ pub(crate) struct Composer {
     /// Keys whose PRESS went out through the uinput mirror and whose release
     /// hasn't yet — only these get their release forwarded (see `handle`).
     down: std::collections::HashSet<u16>,
+    /// Coalescing: the latest mid-word target not typed yet. Composing keys
+    /// only update it; `flush` (end of a drained batch, or before anything
+    /// that must stay ordered) types the whole difference in ONE typer
+    /// command. A slow typer (OnlyOffice's 150ms accent settle) then costs
+    /// one wait per BATCH instead of per key — user report 2026-10-24
+    /// "gõ trong OnlyOffice rất chậm" with per-key edits queuing up.
+    deferred: Option<String>,
 }
 
 /// How long a key press forwarded through the uinput mirror needs to reach
@@ -84,6 +90,7 @@ impl Composer {
             common_bytes: 0,
             last_uinput_press: None,
             down: std::collections::HashSet::new(),
+            deferred: None,
         }
     }
 
@@ -106,30 +113,22 @@ impl Composer {
         if !(ctrl || alt || sup) {
             return None;
         }
-        let key = Self::hotkey_key(code, self.shift)?;
+        let key = hotkey_key(code, self.shift)?;
         self.engine.match_hotkey(ctrl, alt, sup, self.shift, &key)
-    }
-
-    /// Chord key identity: alphanumerics (lowercased) via the same mapping
-    /// as composition; F1–F12 and named keys by evdev code.
-    fn hotkey_key(code: KeyCode, shift: bool) -> Option<HotkeyKey> {
-        if let Some(c) = key_to_char(code, shift) {
-            return Some(HotkeyKey::Char(c.to_ascii_lowercase()));
-        }
-        Some(match code.code() {
-            59..=68 => HotkeyKey::F((code.code() - 58) as u8),
-            57 => HotkeyKey::Space,
-            28 => HotkeyKey::Enter,
-            15 => HotkeyKey::Tab,
-            14 => HotkeyKey::Backspace,
-            1 => HotkeyKey::Escape,
-            111 => HotkeyKey::Delete,
-            _ => return None,
-        })
     }
 
     /// One key event from a grabbed keyboard (value: 0=release 1=press 2=repeat).
     pub(crate) fn handle(&mut self, ui: &mut VirtualDevice, code: KeyCode, value: i32) {
+        // Only plain composing keys (letters/digits, mid-word BackSpace)
+        // may join the deferred batch; anything else — modifiers forwarded
+        // to the app, boundaries, shortcuts — must see the screen up to date
+        // first, or the order on screen would change.
+        let composing = self.sysmods == 0
+            && (key_to_char(code, self.shift).is_some()
+                || (code == KeyCode::KEY_BACKSPACE && self.engine.has_pending()));
+        if !composing {
+            self.flush();
+        }
         // Track shift for ASCII casing; forward it (apps need modifiers).
         if matches!(code, KeyCode::KEY_LEFTSHIFT | KeyCode::KEY_RIGHTSHIFT) {
             self.shift = value != 0;
@@ -246,10 +245,11 @@ impl Composer {
                 // key ("tie" + 'e' → "tiê" instantly). preedit_output
                 // applies NFC/NFD (R12) — this is real text, not preedit.
                 // sync=false: mid-word, no roundtrip (opt 1).
-                let target = self.engine.inner().preedit_output();
-                self.sync_shown(&target, false);
+                // Deferred: typed by `flush` once the queued keys are in.
+                self.deferred = Some(self.engine.inner().preedit_output());
             }
             NonPreeditAction::CommitWithBackspace { text, .. } => {
+                self.deferred = None; // superseded: diff runs from `shown`
                 // Screen already shows the word (usually a no-op diff).
                 // Replay the boundary key that triggered the commit — the
                 // engine never includes it in the committed text.
@@ -260,6 +260,7 @@ impl Composer {
                 self.forward_tap(ui, code);
             }
             NonPreeditAction::CommitEmoji { text, .. } => {
+                self.flush();
                 // Emoji/flushed-literal on the evdev path. Capture was silent
                 // (nothing on screen) and fires only when no VN word is pending
                 // → no diff, just type `text`. Do NOT replay `code` (trigger is
@@ -272,12 +273,23 @@ impl Composer {
                 self.common_bytes = 0;
             }
             NonPreeditAction::ClearPreedit => {
+                self.deferred = None;
                 self.sync_shown("", true);
                 self.common_bytes = 0;
             }
             // Digit at word start (VNI) or digit boundary (Telex): the char
             // was consumed above, so replay it or it would be LOST.
-            NonPreeditAction::PassThrough => self.forward_tap(ui, code),
+            NonPreeditAction::PassThrough => {
+                self.flush();
+                self.forward_tap(ui, code);
+            }
+        }
+    }
+
+    /// Type the deferred mid-word target (see `deferred`).
+    pub(crate) fn flush(&mut self) {
+        if let Some(target) = self.deferred.take() {
+            self.sync_shown(&target, false);
         }
     }
 
@@ -347,6 +359,7 @@ impl Composer {
             return;
         }
         info!("[EVDEV-CLICK] chuột click khi đang gõ dở — drop tracking (R8)");
+        self.deferred = None;
         self.engine.reset();
         self.shown.clear();
         self.common_bytes = 0;
@@ -355,6 +368,7 @@ impl Composer {
     /// A non-composing key ended the word: it is already echoed on screen,
     /// so just forget it (mirrors `finalize_word` in the Wayland live path).
     pub(crate) fn finish_word(&mut self) {
+        self.deferred = None; // the commit diff below runs from `shown`
         if self.engine.has_pending() {
             // R9 English-restore at word end: `test`→`test`, not `tét`.
             // Mirrors the NonPreeditEngine boundary sites (fast_engine.rs);

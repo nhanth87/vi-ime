@@ -438,6 +438,13 @@
 > - IPC `add_app` ghi CẢ dòng: timing gửi null = về mặc định.
 > - Đổi giá trị mặc định = phải có bằng chứng field (R19/R22); OnlyOffice chỉ được TĂNG.
 
+### R30b. evdev: GỘP lệnh typer (coalescing) — phím chữ không gõ ngay
+> `Composer::deferred`: phím chữ / BackSpace giữa từ chỉ cập nhật engine + ghi đích; consumer
+> rút hết hàng đợi rồi `flush()` gõ MỘT lần phần chênh lệch. Typer chậm (OnlyOffice chờ 150ms
+> sau chữ có dấu) giờ tốn một lần chờ mỗi LÔ thay vì mỗi phím (user 2026-10-24: "OnlyOffice gõ
+> rất chậm"). BẤT KỲ đường nào forward uinput / gõ ranh giới / phím tắt phải `flush()` TRƯỚC
+> (giữ thứ tự trên màn hình); commit/clear tính diff từ `shown` nên chỉ cần bỏ `deferred`.
+
 ### R31. Log file KHÔNG được ghi mọi cấp độ
 > Sự cố 2026-10-24: file log không có filter → `[NORMALIZE]` debug (nhiều dòng/phím) làm
 > `vi-ime.<ngày>.log` lên 4.3 GB trong một ngày, định dạng chuỗi ngay trên đường gõ phím,

@@ -321,6 +321,14 @@ fn consumer_loop(
             Ok((code, value)) => {
                 queued.fetch_sub(1, Ordering::Relaxed);
                 composer.handle(&mut ui, code, value);
+                // Coalesce: everything that queued up while the typer was
+                // busy goes through the engine first, then ONE flush types
+                // the net difference (see Composer::deferred).
+                while let Ok((code, value)) = rx.try_recv() {
+                    queued.fetch_sub(1, Ordering::Relaxed);
+                    composer.handle(&mut ui, code, value);
+                }
+                composer.flush();
             }
             Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => break 'outer,
