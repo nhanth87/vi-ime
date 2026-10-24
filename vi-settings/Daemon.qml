@@ -64,8 +64,14 @@ Item {
             if (_keyToProp[k] !== undefined) d[_keyToProp[k]] = u[k]
         send(Object.assign({ cmd: "set_config" }, u), function (r) { _ack(r, refresh) })
     }
-    function setApp(id, method, mode, on) {
-        send({ cmd: "add_app", app_id: id, method: method, ime_mode: mode, enabled: on },
+    // Whole-row write. `t` = { typing, bs, accent } in ms; null/absent field
+    // = use the app's built-in default (the daemon clears the override).
+    function setApp(id, method, mode, on, t) {
+        t = t || {}
+        send({ cmd: "add_app", app_id: id, method: method, ime_mode: mode, enabled: on,
+               typing_delay_ms: t.typing != null ? t.typing : null,
+               bs_settle_ms: t.bs != null ? t.bs : null,
+               accent_settle_ms: t.accent != null ? t.accent : null },
              function (r) { _ack(r, refreshApps) })
     }
     function removeApp(id) {

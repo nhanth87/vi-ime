@@ -114,6 +114,12 @@ pub struct AppConfig {
     /// that still drops letters when you type fast; lower it for speed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub typing_delay_ms: Option<u64>,
+    /// Wait between BackSpace and the first new glyph (ms). None = built-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bs_settle_ms: Option<u64>,
+    /// Wait after an accented glyph before the next key (ms). None = built-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent_settle_ms: Option<u64>,
 }
 
 /// Main configuration structure matching `setting.conf`.

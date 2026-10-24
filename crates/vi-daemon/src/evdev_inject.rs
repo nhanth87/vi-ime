@@ -66,8 +66,12 @@ impl Typer {
             && hyprland_focus_is_xwayland().unwrap_or(true);
         if profile.needs_injector || hyprland_x11 {
             let display = resolve_x11_display();
-            let pre_glyph = if profile.batch_safe { 0 } else { profile.pre_first_glyph_delay_ms };
-            if let Some(x) = XTestTyper::new(display.as_deref(), profile.xtest_delay_ms, pre_glyph) {
+            if let Some(x) = XTestTyper::new(
+                display.as_deref(),
+                profile.xtest_delay_ms,
+                profile.xtest_pre_glyph_ms,
+                profile.accent_settle_ms,
+            ) {
                 info!("evdev fallback: Unicode qua XTEST (bảng phím tĩnh) [{}]", profile.label);
                 return Some(Typer::X(x));
             }

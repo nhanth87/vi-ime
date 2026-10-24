@@ -418,6 +418,26 @@
 >   → Field test chỉ chạy khi user thật sự rời máy; KHÔNG build release ngay trước/trong test;
 >   kết quả test lúc load cao không có giá trị.
 
+### R30. Profile nhịp gõ theo app: MỌI thông số có giá trị mặc định, user ghi đè từng cái
+> `ClientProfile` (client_profile.rs) là bảng mặc định DUY NHẤT. `[app_configs.<key>]` ghi đè
+> từng trường; trống = mặc định. Key khớp app_id chính xác hoặc TIỀN TỐ dài nhất, không phân
+> biệt hoa thường (`Setting::app_config_for`, dùng chung cho EffectiveConfig và ClientProfile):
+> `onlyoffice` khớp `ONLYOFFICE`, `libreoffice` khớp `libreoffice-writer`.
+>
+> | Profile | typing_delay_ms | bs_settle_ms (XTEST) | accent_settle_ms |
+> |---|---|---|---|
+> | LibreOffice (VCL, typer Wayland native) | 4 | 30 | 0 |
+> | OnlyOffice (CEF, XTEST) | 4 | 60 | 150 |
+> | Chrome/Chromium X11 (XTEST) | 1 | 0 | 0 |
+> | Firefox (Wayland) | 1 | 0 | 0 |
+> | Terminal | 0 | 0 | 0 |
+> | Khác (mặc định) | 2 | 0 | 0 |
+>
+> - Cửa sổ cấu hình (trang Ứng dụng) luôn liệt kê `ClientProfile::BUILTIN_APPS` kèm giá trị
+>   mặc định (placeholder) — "Đặt lại" chỉ xoá ghi đè, dòng vẫn còn.
+> - IPC `add_app` ghi CẢ dòng: timing gửi null = về mặc định.
+> - Đổi giá trị mặc định = phải có bằng chứng field (R19/R22); OnlyOffice chỉ được TĂNG.
+
 ---
 
 ## 📁 File Map

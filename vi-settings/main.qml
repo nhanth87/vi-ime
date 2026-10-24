@@ -549,7 +549,7 @@ FloatingWindow {
                                     onClicked: {
                                         var id = newApp.text.trim()
                                         if (id === "") return
-                                        daemon.setApp(id, "", "", true)
+                                        daemon.setApp(id, "", "", true, null)
                                         newApp.text = ""
                                     }
                                 }
@@ -590,73 +590,139 @@ FloatingWindow {
                                 id: appRow
                                 required property var modelData
                                 width: ListView.view.width
-                                height: 52
+                                height: 92
                                 readonly property string methodValue:
                                     modelData.method === "Mặc định" ? "" : modelData.method
                                 readonly property string modeValue:
                                     modelData.ime_mode === "Mặc định" ? "" : modelData.ime_mode
+                                readonly property bool hasOverride:
+                                    methodValue !== "" || modeValue !== "" || modelData.enabled === false
+                                    || modelData.typing_delay_ms != null || modelData.bs_settle_ms != null
+                                    || modelData.accent_settle_ms != null
+                                // Write the whole row; `t` replaces one timing field.
+                                function save(method, mode, on, t) {
+                                    var cur = { typing: modelData.typing_delay_ms, bs: modelData.bs_settle_ms,
+                                                accent: modelData.accent_settle_ms }
+                                    daemon.setApp(modelData.app_id, method, mode, on, Object.assign(cur, t || {}))
+                                }
 
-                                RowLayout {
-                                    anchors.fill: parent
-                                    spacing: 10
-                                    Rectangle {   // initial-letter avatar
-                                        Layout.preferredWidth: 32
-                                        Layout.preferredHeight: 32
-                                        radius: 16
-                                        color: Theme.accentSoft
-                                        Text {
-                                            anchors.centerIn: parent
-                                            text: appRow.modelData.app_id.replace(/^.*\./, "").charAt(0).toUpperCase()
-                                            color: Theme.accent
-                                            font { pixelSize: Theme.fsLabel; weight: Font.DemiBold }
-                                        }
-                                    }
-                                    Text {
+                                ColumnLayout {
+                                    anchors { fill: parent; topMargin: 8; bottomMargin: 8 }
+                                    spacing: 6
+                                    RowLayout {
                                         Layout.fillWidth: true
-                                        text: appRow.modelData.app_id
-                                        color: Theme.ink
-                                        font.pixelSize: Theme.fsBody
-                                        elide: Text.ElideMiddle
-                                    }
-                                    VCombo {
-                                        Layout.preferredWidth: 118
-                                        model: [{ value: "", label: "Theo chung" }].concat(win.methodModel)
-                                        current: appRow.methodValue
-                                        onPicked: function (v) {
-                                            daemon.setApp(appRow.modelData.app_id, v, appRow.modeValue,
-                                                          appRow.modelData.enabled !== false)
-                                        }
-                                    }
-                                    VCombo {
-                                        Layout.preferredWidth: 118
-                                        model: [{ value: "", label: "Theo chung" },
-                                                { value: "Preedit", label: "Gạch chân" },
-                                                { value: "NonPreedit", label: "Gõ thẳng" }]
-                                        current: appRow.modeValue
-                                        onPicked: function (v) {
-                                            daemon.setApp(appRow.modelData.app_id, appRow.methodValue, v,
-                                                          appRow.modelData.enabled !== false)
-                                        }
-                                    }
-                                    Item {
-                                        Layout.preferredWidth: 64
-                                        implicitHeight: 22
-                                        VSwitch {
-                                            checked: appRow.modelData.enabled !== false
-                                            accessibleName: "Tiếng Việt trong " + appRow.modelData.app_id
-                                            onToggled: function (next) {
-                                                daemon.setApp(appRow.modelData.app_id, appRow.methodValue,
-                                                              appRow.modeValue, next)
+                                        spacing: 10
+                                        Rectangle {   // initial-letter avatar
+                                            Layout.preferredWidth: 32
+                                            Layout.preferredHeight: 32
+                                            radius: 16
+                                            color: Theme.accentSoft
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: appRow.modelData.app_name.replace(/^.*\./, "").charAt(0).toUpperCase()
+                                                color: Theme.accent
+                                                font { pixelSize: Theme.fsLabel; weight: Font.DemiBold }
                                             }
                                         }
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 0
+                                            Text {
+                                                Layout.fillWidth: true
+                                                text: appRow.modelData.app_name
+                                                color: Theme.ink
+                                                font.pixelSize: Theme.fsBody
+                                                elide: Text.ElideMiddle
+                                            }
+                                            Text {
+                                                Layout.fillWidth: true
+                                                text: appRow.modelData.builtin ? "Có sẵn profile — mã " + appRow.modelData.app_id
+                                                                               : appRow.modelData.app_id
+                                                color: Theme.faint
+                                                font.pixelSize: Theme.fsSmall
+                                                elide: Text.ElideRight
+                                            }
+                                        }
+                                        VCombo {
+                                            Layout.preferredWidth: 118
+                                            model: [{ value: "", label: "Theo chung" }].concat(win.methodModel)
+                                            current: appRow.methodValue
+                                            onPicked: function (v) {
+                                                appRow.save(v, appRow.modeValue, appRow.modelData.enabled !== false)
+                                            }
+                                        }
+                                        VCombo {
+                                            Layout.preferredWidth: 118
+                                            model: [{ value: "", label: "Theo chung" },
+                                                    { value: "Preedit", label: "Gạch chân" },
+                                                    { value: "NonPreedit", label: "Gõ thẳng" }]
+                                            current: appRow.modeValue
+                                            onPicked: function (v) {
+                                                appRow.save(appRow.methodValue, v, appRow.modelData.enabled !== false)
+                                            }
+                                        }
+                                        Item {
+                                            Layout.preferredWidth: 64
+                                            implicitHeight: 22
+                                            VSwitch {
+                                                checked: appRow.modelData.enabled !== false
+                                                accessibleName: "Tiếng Việt trong " + appRow.modelData.app_name
+                                                onToggled: function (next) {
+                                                    appRow.save(appRow.methodValue, appRow.modeValue, next)
+                                                }
+                                            }
+                                        }
+                                        VButton {
+                                            // Built-in rows stay listed: the button only drops the overrides.
+                                            Layout.preferredWidth: appRow.modelData.builtin ? implicitWidth : 30
+                                            implicitHeight: 30
+                                            kind: "ghost"
+                                            text: appRow.modelData.builtin ? "Đặt lại" : "✕"
+                                            enabled: !appRow.modelData.builtin || appRow.hasOverride
+                                            Accessible.name: (appRow.modelData.builtin ? "Đặt lại " : "Xoá ")
+                                                             + appRow.modelData.app_name
+                                            onClicked: daemon.removeApp(appRow.modelData.app_id)
+                                        }
                                     }
-                                    VButton {
-                                        Layout.preferredWidth: 30
-                                        implicitHeight: 30
-                                        kind: "ghost"
-                                        text: "✕"
-                                        Accessible.name: "Xoá " + appRow.modelData.app_id
-                                        onClicked: daemon.removeApp(appRow.modelData.app_id)
+                                    // Typing rhythm: empty = the built-in default (shown as placeholder).
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Layout.leftMargin: 42
+                                        spacing: 8
+                                        Repeater {
+                                            model: [
+                                                { key: "typing", label: "Trễ mỗi phím",
+                                                  cur: appRow.modelData.typing_delay_ms, def: appRow.modelData.default_typing_delay_ms },
+                                                { key: "bs", label: "Chờ sau BackSpace",
+                                                  cur: appRow.modelData.bs_settle_ms, def: appRow.modelData.default_bs_settle_ms },
+                                                { key: "accent", label: "Chờ sau chữ có dấu",
+                                                  cur: appRow.modelData.accent_settle_ms, def: appRow.modelData.default_accent_settle_ms }
+                                            ]
+                                            delegate: RowLayout {
+                                                id: timing
+                                                required property var modelData
+                                                spacing: 4
+                                                Text { text: timing.modelData.label; color: Theme.muted; font.pixelSize: Theme.fsSmall }
+                                                VField {
+                                                    Layout.preferredWidth: 56
+                                                    implicitHeight: 26
+                                                    font.pixelSize: Theme.fsSmall
+                                                    horizontalAlignment: TextInput.AlignRight
+                                                    validator: IntValidator { bottom: 0; top: 1000 }
+                                                    text: timing.modelData.cur != null ? String(timing.modelData.cur) : ""
+                                                    placeholderText: String(timing.modelData.def)
+                                                    onEditingFinished: {
+                                                        var v = text.trim() === "" ? null : parseInt(text)
+                                                        if (v === timing.modelData.cur || (v === null && timing.modelData.cur == null)) return
+                                                        var t = {}; t[timing.modelData.key] = v
+                                                        appRow.save(appRow.methodValue, appRow.modeValue,
+                                                                    appRow.modelData.enabled !== false, t)
+                                                    }
+                                                }
+                                                Text { text: "ms"; color: Theme.faint; font.pixelSize: Theme.fsSmall; Layout.rightMargin: 8 }
+                                            }
+                                        }
+                                        Item { Layout.fillWidth: true }
                                     }
                                 }
                                 Rectangle {

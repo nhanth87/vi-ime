@@ -33,18 +33,41 @@ pub fn handle_read_command(
             ..IpcResponse::default()
         },
         IpcCommand::ListApps => {
-            let mut apps: Vec<AppEntry> = setting.app_configs.iter()
-                .map(|(id, cfg)| AppEntry {
-                    app_id: id.clone(),
-                    app_name: id.clone(),
+            use crate::client_profile::ClientProfile;
+            let entry = |id: &str, name: &str, builtin: bool| {
+                let cfg = setting.app_configs.get(id).cloned().unwrap_or_default();
+                let d = ClientProfile::detect(id);
+                AppEntry {
+                    app_id: id.to_string(),
+                    app_name: name.to_string(),
                     method: cfg.input_method.map(|m| m.to_string())
                         .unwrap_or_else(|| "Mặc định".into()),
                     ime_mode: cfg.ime_mode.map(|m| m.to_string())
                         .unwrap_or_else(|| "Mặc định".into()),
                     enabled: cfg.enabled != Some(false),
                     icon: app_icon(id),
-                }).collect();
-            apps.sort_by(|a, b| a.app_name.cmp(&b.app_name));
+                    builtin,
+                    profile: d.label.to_string(),
+                    typing_delay_ms: cfg.typing_delay_ms,
+                    bs_settle_ms: cfg.bs_settle_ms,
+                    accent_settle_ms: cfg.accent_settle_ms,
+                    default_typing_delay_ms: d.xtest_delay_ms,
+                    default_bs_settle_ms: d.xtest_pre_glyph_ms,
+                    default_accent_settle_ms: d.accent_settle_ms,
+                }
+            };
+            // Built-in profiles first (always listed, with their defaults),
+            // then every other app the user configured.
+            let mut apps: Vec<AppEntry> = ClientProfile::BUILTIN_APPS
+                .iter()
+                .map(|(id, name)| entry(id, name, true))
+                .collect();
+            let mut user: Vec<AppEntry> = setting.app_configs.keys()
+                .filter(|id| !ClientProfile::BUILTIN_APPS.iter().any(|(b, _)| b == id))
+                .map(|id| entry(id, id, false))
+                .collect();
+            user.sort_by(|a, b| a.app_name.cmp(&b.app_name));
+            apps.extend(user);
             IpcResponse { apps: Some(apps), ..IpcResponse::default() }
         }
         IpcCommand::GetLearned => {
@@ -96,10 +119,15 @@ pub fn handle_write_command(
             if let Some(v) = *emoji { s.emoji = v; }
             info!("IPC: config updated via settings UI");
         }
-        IpcCommand::AddApp { app_id, method, ime_mode, enabled } => {
+        IpcCommand::AddApp {
+            app_id, method, ime_mode, enabled, typing_delay_ms, bs_settle_ms, accent_settle_ms,
+        } => {
             let entry = s.app_configs.entry(app_id.clone()).or_default();
             if let Some(m) = method { entry.input_method = parse_method(m); }
             if let Some(im) = ime_mode { entry.ime_mode = parse_mode(im); }
+            entry.typing_delay_ms = *typing_delay_ms;
+            entry.bs_settle_ms = *bs_settle_ms;
+            entry.accent_settle_ms = *accent_settle_ms;
             // R18: only ever store an override that turns Vietnamese OFF.
             if let Some(en) = *enabled { entry.enabled = (!en).then_some(false); }
             if *entry == crate::config::AppConfig::default() {

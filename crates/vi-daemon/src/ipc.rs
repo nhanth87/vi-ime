@@ -64,6 +64,8 @@ pub enum IpcCommand {
     /// inherit global. `enabled: false` turns Vietnamese off for that app;
     /// `true` clears the override — never stored as `Some(true)`, which would
     /// out-rank a global `enabled = false` (R18).
+    /// Timings (`typing_delay_ms`, `bs_settle_ms`, `accent_settle_ms`) are
+    /// written as sent: a number overrides, null/absent = built-in default.
     #[serde(rename = "add_app")]
     AddApp {
         app_id: String,
@@ -73,6 +75,12 @@ pub enum IpcCommand {
         ime_mode: Option<String>,
         #[serde(default)]
         enabled: Option<bool>,
+        #[serde(default)]
+        typing_delay_ms: Option<u64>,
+        #[serde(default)]
+        bs_settle_ms: Option<u64>,
+        #[serde(default)]
+        accent_settle_ms: Option<u64>,
     },
     #[serde(rename = "remove_app")]
     RemoveApp { app_id: String },
@@ -149,6 +157,17 @@ pub struct AppEntry {
     /// false = Vietnamese turned off for this app.
     pub enabled: bool,
     pub icon: String,
+    /// Has a built-in timing profile (listed even without user overrides).
+    pub builtin: bool,
+    /// Profile name ("OnlyOffice (X11/Qt + CEF, …)").
+    pub profile: String,
+    /// User overrides (None = default) and the built-in defaults, in ms.
+    pub typing_delay_ms: Option<u64>,
+    pub bs_settle_ms: Option<u64>,
+    pub accent_settle_ms: Option<u64>,
+    pub default_typing_delay_ms: u64,
+    pub default_bs_settle_ms: u64,
+    pub default_accent_settle_ms: u64,
 }
 
 #[derive(Debug, Serialize, Clone)]

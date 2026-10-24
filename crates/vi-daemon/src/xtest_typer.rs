@@ -120,15 +120,20 @@ pub(crate) struct XTestTyper {
     /// stopped and stretching one gap at a time: only the gap after BS+"ư"
     /// mattered; 150ms fixed it, BS-only and boundary-only gaps did not.
     last_accent: Option<std::time::Instant>,
+    /// The settle itself — `ClientProfile::accent_settle_ms` (OnlyOffice
+    /// 150, everyone else 0; overridable per app in setting.conf).
+    accent_settle: Duration,
 }
-
-/// See `XTestTyper::last_accent` (only applied when `pre_glyph` > 0).
-const ACCENT_SETTLE: Duration = Duration::from_millis(150);
 
 impl XTestTyper {
     /// Connect and map the Vietnamese glyph set. None when there is no X
     /// server, no XTEST, or too few usable keycodes — the caller falls back.
-    pub(crate) fn new(dpy: Option<&str>, tap_delay_ms: u64, pre_glyph_ms: u64) -> Option<Self> {
+    pub(crate) fn new(
+        dpy: Option<&str>,
+        tap_delay_ms: u64,
+        pre_glyph_ms: u64,
+        accent_settle_ms: u64,
+    ) -> Option<Self> {
         let (conn, screen) = match x11rb::connect(dpy) {
             Ok(c) => c,
             Err(e) => {
@@ -226,6 +231,7 @@ impl XTestTyper {
             tap_delay: Duration::from_millis(tap_delay_ms),
             pre_glyph: Duration::from_millis(pre_glyph_ms),
             last_accent: None,
+            accent_settle: Duration::from_millis(accent_settle_ms),
         };
         if !t.map_all() || !t.mapping_intact() {
             warn!("[XTEST] X server không nhận bảng phím");
@@ -348,11 +354,10 @@ impl XTestTyper {
             }
         }
         let mut ok = true;
-        if !self.pre_glyph.is_zero()
-            && let Some(t) = self.last_accent
-            && t.elapsed() < ACCENT_SETTLE
+        if let Some(t) = self.last_accent
+            && t.elapsed() < self.accent_settle
         {
-            std::thread::sleep(ACCENT_SETTLE - t.elapsed());
+            std::thread::sleep(self.accent_settle - t.elapsed());
         }
         for _ in 0..backspaces {
             ok &= self.tap(Slot { keycode: self.backspace, shift: false });
