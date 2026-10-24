@@ -46,7 +46,7 @@ pub(crate) fn method_label(method: InputMethod) -> &'static str {
 /// Convert ImeMode to display label.
 pub(crate) fn mode_label(mode: ImeMode) -> &'static str {
     match mode {
-        ImeMode::Preedit => "Preedit (gạch chân)",
-        ImeMode::NonPreedit => "NonPreedit (gõ thẳng)",
+        ImeMode::Preedit => "Gạch chân khi gõ (Preedit)",
+        ImeMode::NonPreedit => "Gõ thẳng (NonPreedit)",
     }
 }

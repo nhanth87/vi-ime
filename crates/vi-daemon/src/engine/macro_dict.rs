@@ -121,7 +121,7 @@ pub fn parse_hotkey(spec: &str) -> Option<Hotkey> {
 }
 
 /// Parsed macro tables: keyword → text, hotkey chord → text.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MacroDict {
     keywords: HashMap<String, String>,
     hotkeys: Vec<(Hotkey, String)>,

@@ -330,6 +330,50 @@
 > - **Không được thêm bất kỳ cơ chế buffer key nào vào đường live-echo.**
 >   Kể cả `VecDeque<KeyEvent>`, `delay`, hay `yield_now`.
 
+### R24. XWayland typer = XTEST bảng phím TĨNH (`xtest_typer.rs`) — KHÔNG quay lại xdotool từng ký tự
+> Thay R19 (2026-10-24). Trên Hyprland mọi app XWayland (Chrome X11, OnlyOffice)
+> dùng `XTestTyper`: 1 kết nối X giữ suốt phiên, 67 chữ thường gán CỐ ĐỊNH 2 chữ/phím
+> (level 1/2), chữ HOA + emoji dùng vài phím LRU. Đo: 51 bước live-echo ≈ 0.4s
+> (xdotool ≈ 10s → backlog → "từ kẹt, bấm BackSpace mới hiện").
+> - **Chỉ dùng keycode trong `SAFE_EVDEV`.** Chromium KHÔNG giải mã nhiều phím theo
+>   keysym mà theo evdev code → DOM code → chạy lệnh: Paste (135) dán clipboard,
+>   Cut (137), New (181) mở tab, media/Back/Refresh… Quét thực địa: map [ê,Ê] lên
+>   từng keycode, gõ `a <phím> b` vào textarea Chrome X11. Paste với clipboard rỗng
+>   CŨNG cho "aêb" — nên loại MỌI phím mang lệnh, không chỉ tin kết quả quét.
+> - Keycode 8 bị XKB bỏ qua; `Drop` phải round-trip (flush rồi đóng socket làm mất request).
+> - Xwayland nạp lại keymap khi compositor đổi thiết bị → kiểm tra trước mỗi lần gõ, gán lại.
+> - xdotool chỉ còn là fallback khi không có XTEST.
+
+### R25. Live-echo: Burst mặc định, Paced chỉ cho app nuốt cụm (VCL/CEF)
+> `TypeMode` (viet_typer.rs): terminal Fast; `ClientProfile::batch_safe == false`
+> (LibreOffice, OnlyOffice) Paced (roundtrip mỗi BackSpace, R21); còn lại **Burst**:
+> BS + chữ mới liền một mạch rồi 1 roundtrip → app vẽ 1 khung, HẾT NHÁY. Lỗi Electron
+> 2026-07-10 khi bớt pace là do re-upload keymap mỗi phím — keymap đã tĩnh (R14).
+
+### R26. Thứ tự giữa 2 bàn phím ảo — phím ranh giới KHÔNG được vượt typer
+> Typer chạy thread riêng; phím forward trên vk khác có thể tới app TRƯỚC.
+> Repro (Hyprland lồng + Chrome): commit "tẽt"→"text" = BS BS "ext" trên typer, Space
+> trên forwarder → Space tới trước, bị BS xoá → "tẽext", mất dấu cách (đúng lỗi user báo).
+> - Ký tự ranh giới gõ được (cách, dấu câu) đi CHUNG lệnh typer với diff commit.
+> - Mọi phím forward khác (Enter, mũi tên, Ctrl+…) gọi `viet.wait_idle()` trước.
+
+### R27. Generation chỉ tăng khi config THẬT SỰ đổi
+> `RuntimeConfig::store/store_app_id/store_macros/set_game_mode` so sánh trước khi bump.
+> Daemon store lại ở MỌI focus event, kể cả chỉ đổi tiêu đề cửa sổ (editor thêm "*",
+> tab trình duyệt, app chat) → bump → reconfigure → R8 drop từ đang gõ → mất dấu/nhảy
+> chữ giữa từ ("Vieetj"→"Viêtj"). ĐỪNG bỏ phép so sánh.
+
+### R28. Tự do: từ điển + ngữ cảnh (engine.rs `smart_commit_english_only`)
+> Chỉ quyết định ở RANH GIỚI TỪ, và chỉ thay chữ Việt bằng phím gốc (không bao giờ bóc dấu):
+> 1. `rhyme.rs`: vần/âm tiết không tồn tại ("tẽt", "ảe", "ỏu") → phím gốc (mọi kiểu gõ).
+>    Dấu thanh với -c/-ch/-p/-t chỉ sắc/nặng; "ươ" cuối từ → "uơ" (thuở).
+> 2. Phím gốc là từ tiếng Anh (english_common + hunspell en_US của HỆ THỐNG) mà bản Việt
+>    không có trong hunspell vi_VN → tiếng Anh. Cả hai đều là từ thật ("rest"/"rét",
+>    "conf"/"còn") → **ngữ cảnh** (điểm ngôn ngữ các từ trước, reset khi Deactivate);
+>    không có ngữ cảnh → `english_prefer_vietnamese.txt` quyết định.
+> - KHÔNG nhúng vi_VN.dic vào repo (GPLv2 vs GPL-3.0-only) — `lexicon.rs` đọc lúc chạy.
+> - `viet_syllables.txt` THIẾU (~1.3k/6.6k) — không dùng để bác bỏ chữ Việt.
+
 ---
 
 ## 📁 File Map

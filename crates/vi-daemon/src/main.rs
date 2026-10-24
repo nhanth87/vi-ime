@@ -32,6 +32,7 @@ mod rivals;
 mod sync;
 mod telemetry;
 mod tray;
+mod xtest_typer;
 mod wayland;
 
 use std::path::PathBuf;
@@ -400,7 +401,7 @@ fn main() {
                     let engage_evdev = wants_legacy || wants_xwayland_evdev;
                     let profile = current_app_id
                         .as_deref()
-                        .map(|id| ClientProfile::detect(id))
+                        .map(|id| ClientProfile::for_app(id, config_manager.setting()))
                         .unwrap_or_else(ClientProfile::default);
                     match (engage_evdev, legacy_grab.is_some()) {
                         (true, false) => {
@@ -519,7 +520,7 @@ fn main() {
                             legacy_grab = Some(legacy_grab::LegacyGrab::start(
                                 engine_input_method(config_manager.setting().input_method),
                                 Arc::clone(&runtime),
-                                ClientProfile::detect(app_id),
+                                ClientProfile::for_app(app_id, config_manager.setting()),
                             ));
                         }
                     }
@@ -573,7 +574,7 @@ fn main() {
                     legacy_grab = Some(legacy_grab::LegacyGrab::start(
                         engine_input_method(config_manager.setting().input_method),
                         Arc::clone(&runtime),
-                        ClientProfile::detect(&app_id),
+                        ClientProfile::for_app(&app_id, config_manager.setting()),
                     ));
                 }
             }
@@ -608,6 +609,7 @@ fn main() {
                     &command,
                     config_manager.setting(),
                     adapt.learned_store(),
+                    config_manager.path(),
                 );
                 let _ = reply.send(resp);
             }

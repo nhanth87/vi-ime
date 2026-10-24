@@ -55,6 +55,21 @@ pub fn is_english_word(raw_keys: &[char]) -> bool {
     ENGLISH_COMMON.contains(word.as_str())
 }
 
+/// English words whose Telex rendering is a COMMON Vietnamese word — with no
+/// language context the Vietnamese reading wins ("conf" → còn, "nos" → nó,
+/// "car" → cả, "sex" → sẽ). An English sentence around them still flips
+/// them to English (see `Engine::smart_commit_english_only`).
+static PREFER_VIETNAMESE: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    let data = include_str!("../data/english_prefer_vietnamese.txt");
+    data.lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect()
+});
+
+pub fn prefer_vietnamese(raw: &str) -> bool {
+    PREFER_VIETNAMESE.contains(raw.to_lowercase().as_str())
+}
+
 /// Heuristic: the raw keys look like a URL, file path, or code token —
 /// NOT natural-language text that should be composed as Vietnamese.
 /// Used to suppress Telex/VNI composition on browser address bars,

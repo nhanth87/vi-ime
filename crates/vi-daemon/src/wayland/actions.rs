@@ -14,6 +14,7 @@ use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_v2::Zw
 
 use crate::wayland::feedback::{ImeFeedback, PipelineStage};
 use crate::wayland::state::{FieldSensitivity, ImeAppState};
+use crate::wayland::viet_typer::TypeMode;
 
 /// Modifier keycodes (evdev): LCTRL, LSHIFT, RSHIFT, LALT, CAPSLOCK,
 /// RCTRL, RALT, LMETA, RMETA. Forwarded transparently, never break a word.
@@ -28,13 +29,19 @@ fn vi_engine_stage(us: u32) -> ImeFeedback {
     }
 }
 
-/// Terminal app_ids whose bursts are known safe unpaced (mirrors the
-/// `paced` computation in `sync_shown` — keep the two in sync).
-fn typer_unpaced_for(app_id: Option<&str>) -> bool {
-    app_id.is_some_and(|id| {
-        let id = id.to_lowercase();
-        crate::compositor::KNOWN_TERMINALS.contains(&id.as_str())
-    })
+/// Live-echo pacing for the focused app: terminals Fast, apps known to
+/// swallow BS+char bursts Paced, everything else Burst (no flicker).
+/// app_id None → Paced (the safe side).
+fn type_mode_for(app_id: Option<&str>) -> TypeMode {
+    let Some(id) = app_id else { return TypeMode::Paced };
+    let id = id.to_lowercase();
+    if crate::compositor::KNOWN_TERMINALS.contains(&id.as_str()) {
+        TypeMode::Fast
+    } else if crate::client_profile::ClientProfile::detect(&id).batch_safe {
+        TypeMode::Burst
+    } else {
+        TypeMode::Paced
+    }
 }
 
 impl ImeAppState {
@@ -139,8 +146,8 @@ impl ImeAppState {
                 self.live_echo_pending = self.live_echo_pending.saturating_add(1);
                 self.last_live_echo_at = Some(std::time::Instant::now());
                 if self.live_echo() {
-                    let paced = !typer_unpaced_for(self.current_app_id.as_deref());
-                    self.viet.backspace_then_type(0, &text, paced);
+                    let mode = type_mode_for(self.current_app_id.as_deref());
+                    self.viet.backspace_then_type(0, &text, mode);
                 } else {
                     im.commit_string(text);
                     im.commit(self.serial);
@@ -299,13 +306,23 @@ impl ImeAppState {
             NonPreeditAction::CommitWithBackspace { text, .. } => {
                 crate::godmod::log_commit(!text.is_ascii());
                 info!("[COMMIT] word done: \"{text}\" + replay code={keycode}");
+                // Boundary char the typer can type itself (space, punctuation):
+                // send it in the SAME typer command as the commit diff, so it
+                // can never overtake the BackSpaces (see VietTyper::wait_idle).
+                let boundary = self
+                    .xkb
+                    .keycode_to_char(keycode)
+                    .filter(|&c| live && !capable && c != '\u{8}' && !c.is_control() && self.viet.can_type(c));
                 if capable {
                     // P0: app capable → atomic, no VietTyper needed.
                     self.live_commit(im, &text);
                 } else if live {
                     // Screen already shows the rendered form (live sync) —
-                    // usually a no-op diff, then replay the boundary key.
-                    self.sync_shown(&text);
+                    // usually a no-op diff, then the boundary key.
+                    match boundary {
+                        Some(c) => self.sync_shown(&format!("{text}{c}")),
+                        None => self.sync_shown(&text),
+                    }
                 } else {
                     // commit_string replaces preedit per protocol spec.
                     im.commit_string(text);
@@ -313,7 +330,11 @@ impl ImeAppState {
                 }
                 self.engine.reset();
                 self.reset_word_state();
-                self.vk.tap(keycode);
+                if boundary.is_none() {
+                    // Enter/Tab/…: forwarded — only after the typer is done.
+                    self.viet.wait_idle();
+                    self.vk.tap(keycode);
+                }
             }
             NonPreeditAction::CommitEmoji { text, .. } => {
                 // Emoji/flushed-literal. Always via commit_string (the
@@ -340,6 +361,8 @@ impl ImeAppState {
                 }
             }
             NonPreeditAction::PassThrough => {
+                // Same ordering rule: never overtake queued typer output.
+                self.viet.wait_idle();
                 self.vk.press(keycode);
             }
         }
@@ -391,14 +414,14 @@ impl ImeAppState {
             self.shown_word,
             shown.len() - common
         );
-        // Pacing DEFAULT-ON; only known burst-safe terminals go fast.
-        // Regression 2026-07-10 (repro: uinput rollover 20ms/key vào Electron
-        // live-mode): whitelist "chỉ libreoffice cần pace" làm Electron/
-        // Chromium mất ký tự có keycode MỚI trong keymap vừa upload —
-        // client áp keymap trễ một nhịp, tap giải mã theo keymap CŨ →
-        // "quà"→"q", "kẹ"→"k" (đúng lớp lỗi R16 đã cảnh báo: mọi biến thể
-        // ít-pace-hơn đều fail thực địa). app_id None → paced (phía an toàn).
-        let paced = !typer_unpaced_for(self.current_app_id.as_deref());
+        // Pacing per app (`type_mode_for`): Burst by default so the edit
+        // lands in one frame (no flicker), Paced only for VCL/CEF which
+        // swallow bursts (R19/R21). History: 2026-07-10 Electron/Chromium
+        // lost glyphs with less pacing ("quà"→"q") — that was the per-key
+        // keymap RE-UPLOAD era (client decoded against the old keymap); the
+        // keymap is static now (R14), which removes that failure class.
+        // app_id None → Paced (safe side).
+        let mode = type_mode_for(self.current_app_id.as_deref());
         // Arm the live-echo guard BEFORE the vk call: each `sync_shown`
         // increments the counter; `Done` (end of text-input-v3 batch)
         // decrements it. The increment MUST happen before
@@ -411,7 +434,7 @@ impl ImeAppState {
         self.last_live_echo_at = Some(std::time::Instant::now());
         if !self
             .viet
-            .backspace_then_type(shown.len() - common, &suffix, paced)
+            .backspace_then_type(shown.len() - common, &suffix, mode)
         {
             tracing::warn!(
                 "[VIET-TYPER] không gõ được (bs={}, \"{suffix}\") — giữ nguyên shown_word",

@@ -44,6 +44,12 @@ pub struct Engine {
     free_tone: bool,
     tone_style: ToneStyle,
     output_mode: OutputMode,
+    /// Language of the recent words, for words that are BOTH a common
+    /// English word and a valid Vietnamese syllable ("rest"/"rét",
+    /// "conf"/"còn"). >0 = English context, <0 = Vietnamese, 0 = none.
+    /// Survives `reset` (it spans words); Cell so the &self commit path can
+    /// update it.
+    lang: std::cell::Cell<i8>,
 }
 
 impl Engine {
@@ -58,6 +64,7 @@ impl Engine {
             free_tone: true,
             tone_style: ToneStyle::Classic,
             output_mode: OutputMode::UnicodeDungSan,
+            lang: std::cell::Cell::new(0),
         }
     }
 
@@ -127,64 +134,114 @@ impl Engine {
         }
     }
 
-    /// Conservative Smart-mode commit for the NonPreedit path (all real apps).
-    /// Restores raw keys ONLY when they form a KNOWN English word (test→test,
-    /// user→user). Does NOT use the `is_viet_syllable` fallback that
-    /// `smart_commit_output` applies — that fallback strips ALL marks via
-    /// `base_of` (ấ→a, mất→mat) and restores anything not matching the exact
-    /// single-syllable list, which wrongly mangles valid multi-char Vietnamese
-    /// ("ấ", "mất" → raw "aas"/"maas"; field bug 2026-07-12). Dictionary
-    /// English-restore is the safe, targeted part of R9.
+    /// Word-boundary commit (every NonPreedit path, R9): decides between the
+    /// rendered Vietnamese and the raw keys.
+    /// 1. Composition produced no real Vietnamese syllable ("text" → "tẽt",
+    ///    "are" → "ảe") → raw keys. Structural check (rhyme.rs), any method.
+    /// 2. Telex/Tự do: raw keys are a known English word → English, EXCEPT
+    ///    when the rendering is also a real Vietnamese word ("rest"/"rét",
+    ///    "conf"/"còn", "nos"/"nó"): then the recent words decide (English
+    ///    sentence → English, Vietnamese sentence → Vietnamese), and with no
+    ///    context the common Vietnamese reading wins for `prefer_vietnamese`
+    ///    words. (Before 2026-10-24 the dictionary won outright: Tự do
+    ///    typed "còn" as "conf" and "nó" as "nos".)
+    /// No word-list mangling of valid Vietnamese ("ấ", "mất" — field bug
+    /// 2026-07-12): Vietnamese is only ever replaced by the raw keys.
     pub fn smart_commit_english_only(&self, app_id: Option<&str>) -> String {
+        use super::viet_dict;
+        let raw: String = self.raw_keys.iter().collect();
         // Cheat system: field-reported false positives get forced English
         if let Some(forced) = super::cheat::should_force_english(app_id, &self.raw_keys) {
+            self.note_lang(2);
             return forced;
         }
-        if self.method != InputMethod::Smart || !self.auto_detect {
-            return self.preedit_output();
+        // "thuowr" renders "thưở": ươ never ends a syllable, it is uơ.
+        let display = super::rhyme::fix_open_uo(&self.display).unwrap_or_else(|| self.display.clone());
+        if !self.auto_detect {
+            return self.output_of(&display);
         }
         if !self.last_valid {
-            return self.preedit_output();
+            self.note_lang(2); // not Vietnamese at all ("please"): English context
+            return self.output_of(&display);
         }
-        // Non-text heuristic (URLs, code, terminal commands): suppress
-        // Vietnamese composition on address bars / terminals where the
-        // compositor sends no ContentType signal (evdev fallback).
-        // 2026-07-15: Chrome address bar "https://..." → "https://..."
-        // instead of "http://..." composed with Telex tone keys.
-        if super::viet_dict::looks_like_non_text(&self.raw_keys) {
-            return self.raw_keys.iter().collect();
+        let changed = display != raw;
+        // A plain ASCII word no Vietnamese syllable looks like ("take"):
+        // English context too.
+        if !changed && !super::rhyme::is_complete_word(&display) {
+            self.note_lang(2);
+            return raw;
         }
-        if super::viet_dict::is_english_word(&self.raw_keys) {
-            return self.raw_keys.iter().collect();
+        if changed && !display.is_ascii() && !super::rhyme::is_complete_word(&display) {
+            self.note_lang(2);
+            return raw;
         }
-        self.preedit_output()
+        if self.method == InputMethod::Vni {
+            return self.vietnamese(display);
+        }
+        if self.method == InputMethod::Smart && viet_dict::looks_like_non_text(&self.raw_keys) {
+            return raw;
+        }
+        // A bare initial ("đ") is a Vietnamese prefix, never English (field
+        // bug 2026-07-10: "đ" + space committed "dd").
+        let has_vowel = display.chars().any(|c| super::syllable::is_vowel_char(c.to_lowercase().next().unwrap_or(c)));
+        if has_vowel && super::lexicon::is_english(&raw) {
+            if !changed {
+                self.note_lang(1); // "code", "the": weak English evidence
+                return raw;
+            }
+            // English keys whose rendering is no real Vietnamese word
+            // (system hunspell list, lexicon.rs): English, no doubt.
+            // (Not inside Vietnamese text: names like "Huế" are missing.)
+            if self.lang.get() >= 0 && super::lexicon::is_vietnamese_word(&display) == Some(false) {
+                self.note_lang(2);
+                return raw;
+            }
+            // Both readings are real words: the sentence decides; with no
+            // context, common English (curated list) beats rare Vietnamese
+            // unless the Vietnamese reading is the common one.
+            let lang = self.lang.get();
+            let english = lang > 0
+                || (lang == 0
+                    && viet_dict::is_english_word(&self.raw_keys)
+                    && !viet_dict::prefer_vietnamese(&raw));
+            if english {
+                self.note_lang(2);
+                return raw;
+            }
+        }
+        self.vietnamese(display)
     }
 
-    /// Smart mode commit: if the rendered word looks Vietnamese but the raw
-    /// keys form a known English/programming word, restore raw keys instead.
-    /// This extends R9 to handle false positives like test→tét, user→ủe.
+    fn vietnamese(&self, display: String) -> String {
+        if !display.is_ascii() {
+            self.note_lang(-2);
+        }
+        self.output_of(&display)
+    }
+
+    /// Forget the language context (focus left the text field — the next
+    /// field's text has nothing to do with this one).
+    pub fn reset_context(&mut self) {
+        self.lang.set(0);
+    }
+
+    /// Nudge the language context (clamped to ±3 so it follows the text).
+    fn note_lang(&self, delta: i8) {
+        self.lang.set((self.lang.get() + delta).clamp(-3, 3));
+    }
+
+    fn output_of(&self, s: &str) -> String {
+        match self.output_mode {
+            OutputMode::UnicodeDungSan => s.to_string(),
+            OutputMode::UnicodeToHop => s.nfd().collect(),
+        }
+    }
+
+    /// Engine-boundary commit (Preedit path) — same decision as the
+    /// NonPreedit path. The old body stripped every mark before a lookup in
+    /// the incomplete syllable list and mangled real words (ấ→aas).
     pub fn smart_commit_output(&self) -> String {
-        use super::viet_dict;
-        // Only applies to Smart mode with auto_detect enabled
-        if self.method != InputMethod::Smart || !self.auto_detect {
-            return self.preedit_output();
-        }
-        // If already invalid (raw keys shown), just commit as-is
-        if !self.last_valid {
-            return self.preedit_output();
-        }
-        // Check if raw keys form a known English word — if so, restore raw
-        if viet_dict::is_english_word(&self.raw_keys) {
-            return self.raw_keys.iter().collect();
-        }
-        // Check if rendered base is actually a valid Vietnamese syllable
-        let base = viet_dict::strip_tones(&self.display);
-        if !viet_dict::is_viet_syllable(&base) {
-            // Rendered something that looks Vietnamese to the parser but
-            // isn't in the real dictionary — restore raw keys
-            return self.raw_keys.iter().collect();
-        }
-        self.preedit_output()
+        self.smart_commit_english_only(None)
     }
 
     /// Hybrid-mode trigger: composition is ambiguous when the current word

@@ -210,10 +210,27 @@ pub fn normalize(lower_keys: &[char], method: InputMethod) -> NormResult {
         }
     }
 
+    if !undo {
+        complete_uo_horn(&mut out);
+    }
+
     NormResult {
         chars: out,
         tone,
         undo,
+    }
+}
+
+/// "ưo" followed by a coda is never a Vietnamese rhyme — the only reading is
+/// "ươ" with the second horn forgotten ("dduwocj" → "được", "thuwong" →
+/// "thương", "du7oc5" → "được"), so add it, as Unikey does. Structural
+/// (R14): ư + o + one of the coda letters, no word tables. Bare "ưo" at the
+/// end of the word is left alone — the user may still be about to type `w`.
+fn complete_uo_horn(out: &mut [char]) {
+    for i in 0..out.len().saturating_sub(2) {
+        if out[i] == 'ư' && out[i + 1] == 'o' && matches!(out[i + 2], 'c' | 'm' | 'n' | 'p' | 't' | 'i' | 'u') {
+            out[i + 1] = 'ơ';
+        }
     }
 }
 

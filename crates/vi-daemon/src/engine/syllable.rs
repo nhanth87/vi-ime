@@ -21,13 +21,13 @@ use crate::engine::types::InputMethod;
 /// Vietnamese initial consonants (âm đầu), longest-first for greedy matching
 /// with backtracking — "gi"/"qu" fall back to "g"/"q" when the remainder
 /// leaves no vowel ("gì" = g+i, but "già" = gi+a). Category list, not a map.
-const INITIALS: &[&str] = &[
+pub(crate) const INITIALS: &[&str] = &[
     "ngh", "ng", "gh", "gi", "kh", "nh", "ph", "qu", "th", "tr", "ch", "b", "c", "d", "đ", "g",
     "h", "k", "l", "m", "n", "p", "q", "r", "s", "t", "v", "x",
 ];
 
 /// Vietnamese codas (âm cuối). Category list, not a vowel map.
-const CODAS: &[&str] = &["ng", "nh", "ch", "c", "m", "n", "p", "t"];
+pub(crate) const CODAS: &[&str] = &["ng", "nh", "ch", "c", "m", "n", "p", "t"];
 
 /// Glide+vowel rising diphthongs whose tone placement depends on style
 /// (Classic → glide, Modern → main vowel): hòa/hoà, khỏe/khoẻ, thúy/thuý.

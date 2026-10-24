@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-  <rect x="0" y="0" width="64" height="64" rx="14" ry="14" fill="#E04A4A"/>
-  <text x="32.0" y="44.992" text-anchor="middle"
+  <circle cx="32.0" cy="32.0" r="32.0" fill="#E04A4A"/>
+  <text x="32.0" y="44.096000000000004" text-anchor="middle"
         font-family="DejaVu Sans, Noto Sans, Arial, sans-serif" font-weight="bold"
-        font-size="37" fill="#FFFFFF">E</text>
+        font-size="34" fill="#FFFFFF">E</text>
 </svg>

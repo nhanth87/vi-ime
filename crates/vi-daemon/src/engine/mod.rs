@@ -20,7 +20,9 @@ pub(crate) mod macro_dict;
 // Unicode algebra này thay vì chuỗi literal (tinh thần R14).
 pub(crate) mod glyph;
 pub(crate) mod emoji;
+pub(crate) mod lexicon;
 mod normalize;
+mod rhyme;
 mod style;
 mod syllable;
 pub(crate) mod tone;

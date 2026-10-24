@@ -109,6 +109,11 @@ pub struct AppConfig {
     pub free_tone_placement: Option<bool>,
     /// Auto-detect language. None = use global default.
     pub auto_detect_lang: Option<bool>,
+    /// Pause after each key the evdev-fallback typer sends to this app (ms).
+    /// None = the built-in profile (`ClientProfile`). Raise it for an app
+    /// that still drops letters when you type fast; lower it for speed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typing_delay_ms: Option<u64>,
 }
 
 /// Main configuration structure matching `setting.conf`.

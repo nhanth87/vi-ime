@@ -10,10 +10,13 @@ use tracing::{info, warn};
 
 use crate::client_profile::ClientProfile;
 use crate::evdev_typer::EvdevTyper;
+use crate::xtest_typer::XTestTyper;
 
-/// Unicode output channel: a persistent virtual keyboard when the
-/// compositor supports it (Wayland), else the xdotool fallback (X11).
+/// Unicode output channel: XTEST straight into the X server for X11 apps,
+/// a persistent virtual keyboard when the compositor supports it (Wayland),
+/// else the xdotool/wtype fallback.
 pub(crate) enum Typer {
+    X(XTestTyper),
     Native(EvdevTyper),
     Cmd(Injector),
 }
@@ -49,10 +52,24 @@ impl Typer {
     /// works on niri, so the virtual-keyboard keymap is not reaching the X
     /// client through Hyprland's XWayland. xdotool remaps inside the X
     /// server itself, so it does not depend on that path.
+    ///
+    /// XTEST first (2026-10-24): same X-server-side delivery as xdotool, but
+    /// one persistent connection and a static glyph map — no per-glyph remap,
+    /// so none of xdotool's 200ms settles (see `xtest_typer.rs`). xdotool
+    /// stays as the fallback when XTEST is unavailable.
     pub(crate) fn detect(profile: ClientProfile) -> Option<Self> {
-        let hyprland = crate::engine::fast_engine::CompositorKind::detect()
-            == crate::engine::fast_engine::CompositorKind::Hyprland;
-        if profile.needs_injector || hyprland {
+        // Hyprland's X-side workaround is for X clients only: a native
+        // Wayland window in the evdev fallback (LibreOffice's gtk3 VCL) never
+        // sees X input, so it keeps the Wayland virtual-keyboard typer.
+        let hyprland_x11 = crate::engine::fast_engine::CompositorKind::detect()
+            == crate::engine::fast_engine::CompositorKind::Hyprland
+            && hyprland_focus_is_xwayland().unwrap_or(true);
+        if profile.needs_injector || hyprland_x11 {
+            let display = resolve_x11_display();
+            if let Some(x) = XTestTyper::new(display.as_deref(), profile.xtest_delay_ms) {
+                info!("evdev fallback: Unicode qua XTEST (bảng phím tĩnh) [{}]", profile.label);
+                return Some(Typer::X(x));
+            }
             if let Some(inj) = Injector::detect_xdotool_preferred() {
                 info!(
                     "evdev fallback: Unicode qua {} (app cần xdotool — virtual keyboard mất level Mod3/Mod5)",
@@ -79,6 +96,8 @@ impl Typer {
     pub(crate) fn backspace_then_type(&mut self, backspaces: usize, text: &str, sync: bool) {
         let ok = match self {
             Typer::Native(t) => t.backspace_then_type(backspaces, text, sync),
+            // Every call ends with an X round trip — always synchronous.
+            Typer::X(x) => x.backspace_then_type(backspaces, text),
             // External process always blocks until exit — equivalent to
             // sync=true; that's the best xdotool/wtype can do.
             Typer::Cmd(inj) => inj.backspace_then_type(backspaces, text),
@@ -295,7 +314,7 @@ impl Injector {
 /// XWayland instance the target app actually connects to (multi-seat /
 /// nested-X setups, or a wrapper script's login-env mismatch) — verify the
 /// inherited value first, only scan `/tmp/.X11-unix` if it doesn't resolve.
-fn resolve_x11_display() -> Option<String> {
+pub(crate) fn resolve_x11_display() -> Option<String> {
     if let Some(d) = std::env::var_os("DISPLAY") {
         let d = d.to_string_lossy();
         let num = d.strip_prefix(':').unwrap_or(&d);
@@ -312,6 +331,16 @@ fn resolve_x11_display() -> Option<String> {
         num.parse::<u32>().ok()?;
         Some(format!(":{num}"))
     })
+}
+
+/// Is the focused Hyprland window an XWayland client? None when hyprctl
+/// can't tell (caller assumes X, the previous behavior).
+fn hyprland_focus_is_xwayland() -> Option<bool> {
+    let out = Command::new("hyprctl").args(["activewindow", "-j"]).output().ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let x = v.get("xwayland")?.as_bool()?;
+    info!("evdev fallback: cửa sổ focus {} XWayland", if x { "là" } else { "không phải" });
+    Some(x)
 }
 
 fn which(bin: &str) -> bool {

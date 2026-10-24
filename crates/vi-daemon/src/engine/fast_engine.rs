@@ -50,6 +50,7 @@ pub struct NonPreeditEngine {
 impl NonPreeditEngine {
     /// Create a new engine with the given input method and mode.
     pub fn new(method: InputMethod, mode: ImeMode) -> Self {
+        super::lexicon::warm();
         Self {
             inner: Engine::new(method),
             mode,

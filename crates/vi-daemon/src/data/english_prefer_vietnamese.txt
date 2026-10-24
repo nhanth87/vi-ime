@@ -1,0 +1,39 @@
+# English words (raw Telex keys) whose rendering is a common Vietnamese word.
+# With no language context the Vietnamese reading wins; an English sentence
+# around them still restores English. One lowercase word per line.
+# Picked 2026-10-24 from english_common.txt collisions (natural Telex typing
+# of the Vietnamese word = exactly these keys).
+as
+bits
+buf
+bus
+car
+cast
+char
+conf
+cur
+def
+docs
+host
+its
+last
+list
+lost
+max
+mix
+must
+nest
+nos
+os
+own
+ref
+rest
+rust
+sets
+sex
+six
+tar
+trust
+var
+vast
+beer

@@ -132,6 +132,7 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                 // Instead: drop the buffer. Compositor clears preedit from the
                 // old position automatically when the input method deactivates.
                 state.engine.reset();
+                state.engine.inner_mut().reset_context();
                 crate::godmod::log_deactivate();
                 state.active = false;
                 state.key_buffer.clear();

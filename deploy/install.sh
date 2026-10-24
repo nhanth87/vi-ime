@@ -202,6 +202,11 @@ if [ -f "${SETTINGS_SRC}" ]; then
     cp "${SETTINGS_SRC}" "${SETTINGS_DST}"
     chmod 755 "${SETTINGS_DST}"
     log_ok "${SETTINGS_DST}"
+    # Config window + tray quick menu QML (vi-settings' find_qml looks here).
+    QML_DST="${XDG_DATA_HOME:-$HOME/.local/share}/vi-im/qml"
+    mkdir -p "${QML_DST}"
+    cp "${PROJECT_DIR}"/vi-settings/*.qml "${PROJECT_DIR}/vi-settings/qmldir" "${QML_DST}/"
+    log_ok "${QML_DST}"
 else
     log_warn "vi-settings binary not found — 'Open Settings' will not work"
 fi

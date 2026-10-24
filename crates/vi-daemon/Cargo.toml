@@ -37,3 +37,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
 # journald/stderr write syscall — a background thread drains the queue.
 tracing-appender = "0.2"
 inotify = { version = "0.11.2", default-features = false }
+# evdev fallback typer for X11/XWayland apps (Chrome X11, OnlyOffice): one
+# persistent X connection + XTEST with a static glyph→keycode map, replacing
+# the per-character `xdotool` process. Pure Rust (no libX11): X errors come
+# back as values instead of Xlib's default handler calling exit().
+x11rb = { version = "0.13", default-features = false, features = ["xtest"] }

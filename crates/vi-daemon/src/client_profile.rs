@@ -38,6 +38,9 @@ pub struct ClientProfile {
     pub is_legacy: bool,
     /// Whether this app needs evdev fallback only under XWayland.
     pub xwayland_fallback: bool,
+    /// Pause after each XTEST key tap (ms). The XTEST typer never remaps
+    /// keys mid-word, so apps need little or none (see xtest_typer.rs).
+    pub xtest_delay_ms: u64,
 }
 
 impl ClientProfile {
@@ -59,6 +62,7 @@ impl ClientProfile {
                 needs_injector: false,
                 is_legacy: true,
                 xwayland_fallback: false,
+            xtest_delay_ms: 4,
             };
         }
 
@@ -75,6 +79,7 @@ impl ClientProfile {
                 needs_injector: true,
                 is_legacy: true,
                 xwayland_fallback: false,
+            xtest_delay_ms: 4,
             };
         }
 
@@ -93,6 +98,7 @@ impl ClientProfile {
                 needs_injector: false,
                 is_legacy: false,
                 xwayland_fallback: true,
+            xtest_delay_ms: 1,
             };
         }
 
@@ -111,6 +117,7 @@ impl ClientProfile {
                 needs_injector: false,
                 is_legacy: false,
                 xwayland_fallback: false,
+            xtest_delay_ms: 1,
             };
         }
 
@@ -127,10 +134,31 @@ impl ClientProfile {
                 needs_injector: false,
                 is_legacy: false,
                 xwayland_fallback: false,
+            xtest_delay_ms: 0,
             };
         }
 
         Self::default()
+    }
+
+    /// `detect` plus the user's per-app override (`typing_delay_ms` in
+    /// `[app_configs.<id>]`), which sets every per-key pause at once.
+    pub fn for_app(app_id: &str, setting: &crate::config::Setting) -> Self {
+        let mut p = Self::detect(app_id);
+        let id = app_id.to_lowercase();
+        let delay = setting
+            .app_configs
+            .iter()
+            .find(|(k, _)| k.to_lowercase() == id)
+            .and_then(|(_, c)| c.typing_delay_ms);
+        if let Some(ms) = delay {
+            p.xtest_delay_ms = ms;
+            p.backspace_delay_ms = ms;
+            p.glyph_delay_ms = ms;
+            p.pre_first_glyph_delay_ms = p.pre_first_glyph_delay_ms.min(ms.max(1) * 2);
+            tracing::info!("[PROFILE] {app_id}: typing_delay_ms={ms} (setting.conf)");
+        }
+        p
     }
 
     /// Default profile for unknown apps (conservative).
@@ -146,6 +174,7 @@ impl ClientProfile {
             needs_injector: false,
             is_legacy: false,
             xwayland_fallback: false,
+        xtest_delay_ms: 2,
         }
     }
 }

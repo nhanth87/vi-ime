@@ -47,7 +47,14 @@ mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/vi-im/qml" "$APPDIR/usr/share/icon
 
 cp target/release/vi-ime "$APPDIR/usr/bin/vi-ime"
 [ -f target/release/vi-settings ] && cp target/release/vi-settings "$APPDIR/usr/bin/vi-settings"
-cp vi-settings/main.qml "$APPDIR/usr/share/vi-im/qml/main.qml"
+# Whole QML dir: main.qml (config window), menu.qml (tray quick menu) and
+# the shared components they import via qmldir.
+cp vi-settings/*.qml vi-settings/qmldir "$APPDIR/usr/share/vi-im/qml/"
+# Helper scripts shipped inside: `AppImage install|uninstall|regression`.
+mkdir -p "$APPDIR/usr/share/vi-im/scripts"
+cp scripts/appimage-install.sh scripts/gen-icons.py "$APPDIR/usr/share/vi-im/scripts/"
+cp -r scripts/vi-regression "$APPDIR/usr/share/vi-im/scripts/"
+chmod +x "$APPDIR/usr/share/vi-im/scripts/"*.sh "$APPDIR/usr/share/vi-im/scripts/vi-regression/"*.sh
 cp assets/icons/vi-im.svg "$APPDIR/usr/share/icons/hicolor/scalable/apps/vi-im.svg"
 cp assets/icons/vi-im-off.svg "$APPDIR/usr/share/icons/hicolor/scalable/apps/vi-im-off.svg"
 cp assets/icons/vi-im.svg "$APPDIR/vi-im.svg"
@@ -87,6 +94,38 @@ if [ "${1:-}" = "settings" ]; then
     shift
     exec "$HERE/usr/bin/vi-settings" "$@"
 fi
+
+SCRIPTS="$HERE/usr/share/vi-im/scripts"
+case "${1:-}" in
+    install|uninstall)
+        exec bash "$SCRIPTS/appimage-install.sh" "$@"
+        ;;
+    menu)
+        shift
+        exec "$HERE/usr/bin/vi-settings" --menu "$@"
+        ;;
+    regression)
+        shift
+        exec bash "$SCRIPTS/vi-regression/run.sh" "$@"
+        ;;
+    help|--help|-h)
+        cat <<'HELP'
+vi-im — bộ gõ tiếng Việt cho Wayland
+
+  vi-im-x86_64.AppImage                  chạy bộ gõ (daemon + tray)
+  vi-im-x86_64.AppImage install          cài vào ~/Applications + menu
+  vi-im-x86_64.AppImage install --autostart
+                                         ... và tự chạy khi đăng nhập
+  vi-im-x86_64.AppImage uninstall        gỡ menu + tự khởi động
+  vi-im-x86_64.AppImage settings         cửa sổ cấu hình
+  vi-im-x86_64.AppImage menu             menu nhanh (như chuột giữa tray)
+  vi-im-x86_64.AppImage --doctor         kiểm tra môi trường
+  vi-im-x86_64.AppImage --toggle | --switch | --status
+  vi-im-x86_64.AppImage regression       bộ test thực địa (xem scripts)
+HELP
+        exit 0
+        ;;
+esac
 
 # One-shot commands that never touch the keyboard don't need /dev/input —
 # skip the group dance entirely for them.
@@ -149,7 +188,23 @@ OUT="$ROOT_DIR/vi-im-${ARCH}.AppImage"
 # --appimage-extract-and-run: appimagetool is itself an AppImage that
 # normally needs FUSE to mount; this flag extracts-and-runs instead, so
 # the build works in containers/CI without a FUSE kernel module.
-ARCH="$ARCH" "$APPIMAGETOOL" --appimage-extract-and-run "$APPDIR" "$OUT" 2>&1 | grep -v '^$' || true
+# Remove the previous build first: otherwise a failed run still finds the
+# OLD file below and reports "Built" (happened 2026-10-24).
+rm -f "$OUT"
+ARCH="$ARCH" "$APPIMAGETOOL" --appimage-extract-and-run "$APPDIR" "$OUT" 2>&1 | grep -av '^$' || true
+# AppImageLauncher's binfmt hook breaks --appimage-extract-and-run
+# ("appimagelauncher-binfmt-bypass ... execv failed"): unpack appimagetool's
+# squashfs ourselves and run its AppRun directly.
+if [ ! -f "$OUT" ] && command -v unsquashfs &>/dev/null; then
+    TOOLROOT="$CACHE_DIR/appimagetool-root"
+    if [ ! -x "$TOOLROOT/AppRun" ]; then
+        for off in $(grep -abo hsqs "$APPIMAGETOOL" | cut -d: -f1); do
+            rm -rf "$TOOLROOT"
+            unsquashfs -q -o "$off" -d "$TOOLROOT" "$APPIMAGETOOL" >/dev/null 2>&1 && break
+        done
+    fi
+    [ -x "$TOOLROOT/AppRun" ] && ARCH="$ARCH" "$TOOLROOT/AppRun" "$APPDIR" "$OUT" 2>&1 | grep -av '^$' || true
+fi
 
 if [ -f "$OUT" ]; then
     chmod +x "$OUT"
