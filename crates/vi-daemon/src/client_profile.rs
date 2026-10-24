@@ -72,7 +72,9 @@ impl ClientProfile {
                 label: "OnlyOffice (X11/Qt + CEF, xdotool injector)",
                 backspace_delay_ms: 20,
                 glyph_delay_ms: 20,
-                pre_first_glyph_delay_ms: 30,
+                // 30 still lost the first glyph after BS at 50 keys/s (field
+                // 2026-10-24, XTEST typer: "tướng" → "tớng"); R19: only raise.
+                pre_first_glyph_delay_ms: 60,
                 batch_delay_ms: 0,    // NEVER batch — CEF drops first char of burst
                 batch_safe: false,
                 is_slow: true,

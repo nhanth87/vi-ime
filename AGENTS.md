@@ -343,6 +343,23 @@
 > - Keycode 8 bị XKB bỏ qua; `Drop` phải round-trip (flush rồi đóng socket làm mất request).
 > - Xwayland nạp lại keymap khi compositor đổi thiết bị → kiểm tra trước mỗi lần gõ, gán lại.
 > - xdotool chỉ còn là fallback khi không có XTEST.
+> - **Level 2 (Shift) phải quét riêng**: map [ê,ơ], gõ `a <phím> Shift+<phím> b` = "aêơb".
+>   Đã loại 85 Zenkaku (Shift+nó bị nuốt như phím bật IME → "á" thành "đ"), 202 PROG3,
+>   194 F24 (ChangeKeyboardMapping GIỮ key type tường minh `PC_CONTROL_SUPER_LEVEL2`
+>   của xkeyboard-config → "ỳ" thành "ý"; xem bằng `xkbcomp -xkb :0 -`).
+> - Khi quét/test XTEST phải DỪNG daemon thật: typer của nó map cùng keycode → kết quả nhiễu.
+> - OnlyOffice: `pre_first_glyph_delay_ms` 60 (30 vẫn mất chữ đầu sau BS ở 50 phím/s).
+> - Chỉ dùng XTEST khi cửa sổ focus là XWayland (`hyprctl activewindow -j`); LibreOffice
+>   Wayland gốc trong evdev fallback dùng bàn phím ảo Wayland — XTEST không tới được nó.
+
+### R24b. evdev fallback: grab SONG SONG + hotplug + nhớ phím kẹt
+> - Mỗi bàn phím tự `wait_keys_clear` + grab trên reader thread của nó. Grab tuần tự làm
+>   bàn phím đã grab nằm chờ 3s (phím kẹt `STALE_KEY`) → tràn queue kernel → mất/đảo phím.
+> - `evdev_hotplug.rs`: bàn phím cắm vào khi đang grab cũng được grab.
+> - Phím kẹt lưu ở `$XDG_STATE_HOME/vi-ime/stale-keys` (test KHÔNG ghi file này).
+> - Test thực địa: `field.py` (uinput → daemon thật → app → đọc lại), nhả phím trước khi
+>   nhấn lại CHÍNH nó (kernel bỏ press thứ 2 của phím đang xuống), mở app ở workspace trống
+>   (follow_mouse cướp focus), chờ dòng `[LEGACY-GRAB] engaging` trước khi gõ.
 
 ### R25. Live-echo: Burst mặc định, Paced chỉ cho app nuốt cụm (VCL/CEF)
 > `TypeMode` (viet_typer.rs): terminal Fast; `ClientProfile::batch_safe == false`

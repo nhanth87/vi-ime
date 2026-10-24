@@ -60,10 +60,19 @@ const MIN_DYNAMIC: usize = 4;
 /// minus every key Chromium binds a command to (a Paste with an empty
 /// clipboard also gave "aêb"). GTK/Qt decode by keysym, so this set is safe
 /// for them too. Keyed by evdev code, so it holds for any keyboard layout.
+/// Level 2 (Shift) checked separately (field bug 2026-10-24: "á" typed as
+/// "đ" in Chrome): [ê, ơ] + `a <key> Shift+<key> b` must give "aêơb".
+/// Dropped: 85 Zenkaku/Hankaku (Shift+it is swallowed as an IME toggle —
+/// it carried the pair đ/á) and 202 PROG3 (level 2 decoded as level 1).
+/// Also 194 F24: a core ChangeKeyboardMapping keeps a key's EXPLICIT XKB
+/// type, and xkeyboard-config gives FK24 `PC_CONTROL_SUPER_LEVEL2` (level 2
+/// = Ctrl+Super, not Shift) — "ỳ" typed as "ý" (xkbcomp dump 2026-10-24).
+/// Every other key here has no explicit type, so the server infers
+/// TWO_LEVEL from our two keysyms and Shift selects level 2.
 const SAFE_EVDEV: &[u8] = &[
-    85, 89, 95, 120, 124, 141, 144, 145, 146, 147, 148, 149, 151, 153, 154, 161,
+    89, 95, 120, 124, 141, 144, 145, 146, 147, 148, 149, 151, 153, 154, 161,
     162, 169, 170, 171, 175, 176, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192,
-    194, 202, 203, 204, 211, 212, 213, 214, 215, 216,
+    203, 204, 211, 212, 213, 214, 215, 216,
 ];
 
 /// Where a character lives on the X keyboard.
@@ -98,12 +107,17 @@ pub(crate) struct XTestTyper {
     per: u8,
     /// Pause after each tap; 0 for most apps (per-app `typing_delay_ms`).
     tap_delay: Duration,
+    /// Settle between the BackSpaces and the first new glyph — only for
+    /// apps that drop the first glyph after a BackSpace burst (OnlyOffice
+    /// CEF, R19): field 2026-10-24 rollover 35ms, "tướng" → "tớng" (the ư of
+    /// the BS+"ư" edit vanished). Zero for Chrome (5/5 at 20ms/key).
+    pre_glyph: Duration,
 }
 
 impl XTestTyper {
     /// Connect and map the Vietnamese glyph set. None when there is no X
     /// server, no XTEST, or too few usable keycodes — the caller falls back.
-    pub(crate) fn new(dpy: Option<&str>, tap_delay_ms: u64) -> Option<Self> {
+    pub(crate) fn new(dpy: Option<&str>, tap_delay_ms: u64, pre_glyph_ms: u64) -> Option<Self> {
         let (conn, screen) = match x11rb::connect(dpy) {
             Ok(c) => c,
             Err(e) => {
@@ -199,6 +213,7 @@ impl XTestTyper {
             original,
             per: per as u8,
             tap_delay: Duration::from_millis(tap_delay_ms),
+            pre_glyph: Duration::from_millis(pre_glyph_ms),
         };
         if !t.map_all() || !t.mapping_intact() {
             warn!("[XTEST] X server không nhận bảng phím");
@@ -323,6 +338,10 @@ impl XTestTyper {
         let mut ok = true;
         for _ in 0..backspaces {
             ok &= self.tap(Slot { keycode: self.backspace, shift: false });
+        }
+        if backspaces > 0 && !text.is_empty() && !self.pre_glyph.is_zero() {
+            ok &= self.sync();
+            std::thread::sleep(self.pre_glyph);
         }
         for c in text.chars() {
             match self.slot(c) {
