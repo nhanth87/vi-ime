@@ -18,7 +18,7 @@ use tracing::info;
 use crate::engine::fast_engine::NonPreeditEngine;
 use crate::engine::macro_dict::HotkeyKey;
 use crate::engine::{ImeMode, InputMethod, NonPreeditAction};
-use crate::evdev_inject::{key_to_char, Typer};
+use crate::evdev_inject::{boundary_char, key_to_char, Typer};
 
 /// Live composer: the engine plus what is currently on screen for the
 /// in-progress word. Shared by `run` (--evdev) and `run_scoped` (auto
@@ -39,6 +39,9 @@ pub(crate) struct Composer {
     /// When the last key PRESS went out through the uinput mirror — see
     /// `type_out` (cross-channel ordering barrier).
     last_uinput_press: Option<Instant>,
+    /// Keys whose PRESS went out through the uinput mirror and whose release
+    /// hasn't yet — only these get their release forwarded (see `handle`).
+    down: std::collections::HashSet<u16>,
 }
 
 /// How long a key press forwarded through the uinput mirror needs to reach
@@ -80,6 +83,7 @@ impl Composer {
             sysmods: 0,
             common_bytes: 0,
             last_uinput_press: None,
+            down: std::collections::HashSet::new(),
         }
     }
 
@@ -201,21 +205,34 @@ impl Composer {
 
         let Some(ch) = key_to_char(code, self.shift) else {
             // Non-composing key (space, Enter, arrows…): the rendered word
-            // is ALREADY on screen (live echo) — just stop tracking it,
-            // then forward the key.
+            // is ALREADY on screen (live echo) — just stop tracking it.
             if value != 0 {
                 self.finish_word();
+                // Printable (space, punctuation): type it on the typer's
+                // channel, behind the word — see `boundary_char`. The
+                // release is then dropped (press never went to uinput).
+                if let Some(c) = boundary_char(code, self.shift) {
+                    self.type_out(0, &c.to_string(), false);
+                    return;
+                }
             }
-            self.forward(ui, code, value);
+            if value != 0 || self.down.contains(&code.code()) {
+                self.forward(ui, code, value);
+            }
             return;
         };
 
-        // Letter/digit/tone key: the press is consumed. The RELEASE is
-        // forwarded anyway — a release without a press is a no-op for the
-        // app, and if the press went through (chord released mid-key) the
-        // key must not stay stuck down.
+        // Letter/digit/tone key: the press is consumed, so its release is
+        // too — UNLESS the press went out through the mirror (chord released
+        // mid-key), which must not stay stuck down. A release whose press
+        // was consumed is NOT a no-op for every app: OnlyOffice's editor saw
+        // the stray keyup of "u" (held while "7" turned "tu" into "tư") and
+        // dropped the "ư" — field test 2026-10-24 with human rollover timing;
+        // replaying the typer's X events alone (no stray keyup) was correct.
         if value == 0 {
-            self.forward(ui, code, 0);
+            if self.down.contains(&code.code()) {
+                self.forward(ui, code, 0);
+            }
             return;
         }
         let action = self.engine.push_key(ch);
@@ -268,8 +285,13 @@ impl Composer {
     /// for the `type_out` barrier.
     fn forward(&mut self, ui: &mut VirtualDevice, code: KeyCode, value: i32) {
         emit(ui, code, value);
+        // Releases arm the barrier too: a Shift release still in transit
+        // when the typer writes the next letter would capitalise it.
+        self.last_uinput_press = Some(Instant::now());
         if value != 0 {
-            self.last_uinput_press = Some(Instant::now());
+            self.down.insert(code.code());
+        } else {
+            self.down.remove(&code.code());
         }
     }
 

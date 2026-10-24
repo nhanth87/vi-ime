@@ -130,12 +130,46 @@ pub(crate) fn key_to_char(code: KeyCode, shift: bool) -> Option<char> {
         KeyCode::KEY_0 => '0',
         _ => return None,
     };
-    // Digits are tone/quality keys in VNI — never uppercase them.
     if shift && base.is_ascii_alphabetic() {
         Some(base.to_ascii_uppercase())
+    } else if shift {
+        // Shift+digit is a symbol ("!", "@"…), not a VNI tone key — it used
+        // to reach the engine as the digit ("a!" → "á" in VNI).
+        None
     } else {
         Some(base)
     }
+}
+
+/// Printable non-composing key → its character (US layout, like
+/// `key_to_char`): space, punctuation, shifted digits. The composer types
+/// these through the TYPER instead of forwarding them via uinput, so all
+/// text reaches the app on ONE ordered channel (R26 for the evdev path):
+/// a Space travelling uinput → compositor → Xwayland landed in the middle
+/// of the next word's BS+glyph edit and OnlyOffice dropped the glyph
+/// ("thủ tướng" → "thủ tớng", human-timing field test 2026-10-24).
+pub(crate) fn boundary_char(code: KeyCode, shift: bool) -> Option<char> {
+    let (plain, shifted) = match code {
+        KeyCode::KEY_SPACE => (' ', ' '),
+        KeyCode::KEY_COMMA => (',', '<'),
+        KeyCode::KEY_DOT => ('.', '>'),
+        KeyCode::KEY_SLASH => ('/', '?'),
+        KeyCode::KEY_SEMICOLON => (';', ':'),
+        KeyCode::KEY_APOSTROPHE => ('\'', '"'),
+        KeyCode::KEY_MINUS => ('-', '_'),
+        KeyCode::KEY_EQUAL => ('=', '+'),
+        KeyCode::KEY_LEFTBRACE => ('[', '{'),
+        KeyCode::KEY_RIGHTBRACE => (']', '}'),
+        KeyCode::KEY_BACKSLASH => ('\\', '|'),
+        KeyCode::KEY_GRAVE => ('`', '~'),
+        KeyCode::KEY_1 => ('1', '!'), KeyCode::KEY_2 => ('2', '@'),
+        KeyCode::KEY_3 => ('3', '#'), KeyCode::KEY_4 => ('4', '$'),
+        KeyCode::KEY_5 => ('5', '%'), KeyCode::KEY_6 => ('6', '^'),
+        KeyCode::KEY_7 => ('7', '&'), KeyCode::KEY_8 => ('8', '*'),
+        KeyCode::KEY_9 => ('9', '('), KeyCode::KEY_0 => ('0', ')'),
+        _ => return None,
+    };
+    Some(if shift { shifted } else { plain })
 }
 
 /// External Unicode typer (uinput cannot emit arbitrary Unicode).

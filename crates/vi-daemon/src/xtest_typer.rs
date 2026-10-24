@@ -112,7 +112,18 @@ pub(crate) struct XTestTyper {
     /// CEF, R19): field 2026-10-24 rollover 35ms, "tướng" → "tớng" (the ư of
     /// the BS+"ư" edit vanished). Zero for Chrome (5/5 at 20ms/key).
     pre_glyph: Duration,
+    /// When a command last typed an accented glyph. For the same apps,
+    /// the NEXT command must not start sooner than `ACCENT_SETTLE` after it:
+    /// OnlyOffice takes an accented glyph in late, and a key arriving within
+    /// ~108ms cancels it ("thủ tướng" → "thủ tớng"). Pinned down 2026-10-24
+    /// by replaying the exact typer stream into OnlyOffice with the daemon
+    /// stopped and stretching one gap at a time: only the gap after BS+"ư"
+    /// mattered; 150ms fixed it, BS-only and boundary-only gaps did not.
+    last_accent: Option<std::time::Instant>,
 }
+
+/// See `XTestTyper::last_accent` (only applied when `pre_glyph` > 0).
+const ACCENT_SETTLE: Duration = Duration::from_millis(150);
 
 impl XTestTyper {
     /// Connect and map the Vietnamese glyph set. None when there is no X
@@ -214,6 +225,7 @@ impl XTestTyper {
             per: per as u8,
             tap_delay: Duration::from_millis(tap_delay_ms),
             pre_glyph: Duration::from_millis(pre_glyph_ms),
+            last_accent: None,
         };
         if !t.map_all() || !t.mapping_intact() {
             warn!("[XTEST] X server không nhận bảng phím");
@@ -336,6 +348,12 @@ impl XTestTyper {
             }
         }
         let mut ok = true;
+        if !self.pre_glyph.is_zero()
+            && let Some(t) = self.last_accent
+            && t.elapsed() < ACCENT_SETTLE
+        {
+            std::thread::sleep(ACCENT_SETTLE - t.elapsed());
+        }
         for _ in 0..backspaces {
             ok &= self.tap(Slot { keycode: self.backspace, shift: false });
         }
@@ -351,6 +369,9 @@ impl XTestTyper {
                     ok = false;
                 }
             }
+        }
+        if !text.is_ascii() {
+            self.last_accent = Some(std::time::Instant::now());
         }
         ok && self.sync()
     }

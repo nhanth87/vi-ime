@@ -391,6 +391,26 @@
 > - KHÔNG nhúng vi_VN.dic vào repo (GPLv2 vs GPL-3.0-only) — `lexicon.rs` đọc lúc chạy.
 > - `viet_syllables.txt` THIẾU (~1.3k/6.6k) — không dùng để bác bỏ chữ Việt.
 
+### R29. ĐỪNG khởi động lại daemon / chạy field test trên máy user khi chưa được đồng ý NGAY LÚC ĐÓ
+> **Sự cố 2026-10-24:** agent restart `vi-ime-session.service` nhiều lần để nạp bản build mới
+> và chạy `field.py` (mở app ở workspace khác, grab bàn phím, bơm phím uinput) trong lúc user
+> vẫn đang dùng máy → user báo "hết gõ được tiếng Việt trong Chrome và các app khác".
+> Không phải bug code — log ngay sau đó cho thấy gõ lại bình thường. Hai cơ chế:
+> 1. **Hyprland KHÔNG gửi lại `activate`** cho ô nhập đang focus sẵn khi input-method mới kết
+>    nối (log: `[UNSUPPORTED] app=orca — no Activate since focus`). Sau mỗi lần restart, app
+>    Wayland mất tiếng Việt tới khi user click lại vào ô / đổi cửa sổ. App XWayland thì evdev
+>    fallback tự bật lại sau probe 1.5s.
+> 2. **Field test chiếm máy thật**: evdev grab bàn phím vật lý, focus nhảy sang workspace test,
+>    phím user lọt vào cửa sổ test (và ngược lại).
+>
+> **Quy tắc:**
+> - Restart daemon hoặc chạy field test → HỎI user ngay lúc đó (AskUserQuestion), nói rõ
+>   bao lâu, phải không chạm máy, và sau đó cần click lại vào ô nhập. Đồng ý lần trước KHÔNG
+>   áp dụng cho lần sau.
+> - Gom thay đổi lại, restart MỘT lần; báo user click lại vào ô sau restart.
+> - Test X11/XTEST trực tiếp → phải dừng daemon (typer của nó map cùng keycode) — càng cần hỏi.
+> - User báo "không gõ được" → dừng NGAY mọi test/tiến trình nền của agent trước khi chẩn đoán.
+
 ---
 
 ## 📁 File Map
