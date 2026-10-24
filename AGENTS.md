@@ -410,6 +410,13 @@
 > - Gom thay đổi lại, restart MỘT lần; báo user click lại vào ô sau restart.
 > - Test X11/XTEST trực tiếp → phải dừng daemon (typer của nó map cùng keycode) — càng cần hỏi.
 > - User báo "không gõ được" → dừng NGAY mọi test/tiến trình nền của agent trước khi chẩn đoán.
+> - **Lần 2 cùng ngày (12:5x): user gõ trong lúc field test chạy → "nhảy chữ".** Hai cơ chế:
+>   (a) evdev fallback grab MỌI bàn phím (bàn phím thật + uinput của test) và trộn vào MỘT
+>   Composer → phím user xen vào giữa từ của test (và ngược lại); (b) máy quá tải: load ~10.8
+>   trên 4 nhân (build `--release` + OnlyOffice CEF mở đi mở lại + Chrome) → app xử lý phím
+>   chậm, mọi khoảng nghỉ settle mất tác dụng. daemon chỉ 0.1% CPU — không phải daemon nặng.
+>   → Field test chỉ chạy khi user thật sự rời máy; KHÔNG build release ngay trước/trong test;
+>   kết quả test lúc load cao không có giá trị.
 
 ---
 
