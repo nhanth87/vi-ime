@@ -99,6 +99,14 @@ impl Typer {
         })
     }
 
+    /// Wait out a pending accent settle before a uinput forward — see
+    /// `XTestTyper::wait_settled`; the other typers have none.
+    pub(crate) fn wait_settled(&mut self) {
+        if let Typer::X(x) = self {
+            x.wait_settled();
+        }
+    }
+
     pub(crate) fn backspace_then_type(&mut self, backspaces: usize, text: &str, sync: bool) {
         let ok = match self {
             Typer::Native(t) => t.backspace_then_type(backspaces, text, sync),

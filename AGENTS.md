@@ -437,6 +437,11 @@
 >   mặc định (placeholder) — "Đặt lại" chỉ xoá ghi đè, dòng vẫn còn.
 > - IPC `add_app` ghi CẢ dòng: timing gửi null = về mặc định.
 > - Đổi giá trị mặc định = phải có bằng chứng field (R19/R22); OnlyOffice chỉ được TĂNG.
+> - **Profile gắn vào grab lúc engage.** Focus chuyển app evdev → app evdev (Chrome → OnlyOffice)
+>   PHẢI nhả grab cũ rồi grab lại với profile app mới (`main.rs` Focus, nhánh `(true, had_grab)`).
+>   Bẫy 2026-10-24: nhánh `(true, true) => {}` giữ grab Chrome → OnlyOffice gõ bằng nhịp Chrome
+>   (không accent settle) → "thủ tớng" dù profile OnlyOffice đúng. Kiểm log: dòng
+>   `[LEGACY-GRAB] engaging … [<profile>]` phải là profile của app ĐANG focus.
 
 ### R30b. evdev: GỘP lệnh typer (coalescing) — phím chữ không gõ ngay
 > `Composer::deferred`: phím chữ / BackSpace giữa từ chỉ cập nhật engine + ghi đích; consumer
@@ -444,6 +449,16 @@
 > sau chữ có dấu) giờ tốn một lần chờ mỗi LÔ thay vì mỗi phím (user 2026-10-24: "OnlyOffice gõ
 > rất chậm"). BẤT KỲ đường nào forward uinput / gõ ranh giới / phím tắt phải `flush()` TRƯỚC
 > (giữ thứ tự trên màn hình); commit/clear tính diff từ `shown` nên chỉ cần bỏ `deferred`.
+>
+> **Bẫy đã sập (2026-10-24, ngay sau khi gộp):** accent settle khi đó tính theo LỆNH (chờ đầu
+> mỗi lệnh). Một lô gộp ("ưo", "ướng") đặt phím kế tiếp chỉ 4ms sau chữ có dấu → OnlyOffice
+> nuốt: roll 35ms "tướng"→"tớng", roll 20ms "tướng"→"tư" + mất Enter (log `[EVDEV-SYNC]`
+> `t → tưo` / `t → tướng` trong 1 lệnh). **Bất biến:** `XTestTyper::wait_settled` chạy
+> TRƯỚC MỖI PHÍM (BackSpace, glyph) và trước MỌI uinput forward (`Composer::forward`,
+> `forward_tap`), `last_accent` ghi sau MỖI glyph có dấu. ĐỪNG đưa settle về mức lệnh.
+> Tái hiện không cần đụng máy user: OnlyOffice trên Xwayland rootful `:2` (weston headless),
+> phát lại đúng chuỗi lệnh `[EVDEV-SYNC]` của lần field hỏng, Enter gửi XTEST tức thì (như
+> uinput): typer cũ ra "thủ tớng"/"thủ tư", typer mới sạch.
 
 ### R31. Log file KHÔNG được ghi mọi cấp độ
 > Sự cố 2026-10-24: file log không có filter → `[NORMALIZE]` debug (nhiều dòng/phím) làm

@@ -112,8 +112,8 @@ pub(crate) struct XTestTyper {
     /// CEF, R19): field 2026-10-24 rollover 35ms, "tướng" → "tớng" (the ư of
     /// the BS+"ư" edit vanished). Zero for Chrome (5/5 at 20ms/key).
     pre_glyph: Duration,
-    /// When a command last typed an accented glyph. For the same apps,
-    /// the NEXT command must not start sooner than `ACCENT_SETTLE` after it:
+    /// When the last accented glyph was typed. For the same apps, the NEXT
+    /// key must not reach the app sooner than `accent_settle` after it:
     /// OnlyOffice takes an accented glyph in late, and a key arriving within
     /// ~108ms cancels it ("thủ tướng" → "thủ tớng"). Pinned down 2026-10-24
     /// by replaying the exact typer stream into OnlyOffice with the daemon
@@ -354,12 +354,8 @@ impl XTestTyper {
             }
         }
         let mut ok = true;
-        if let Some(t) = self.last_accent
-            && t.elapsed() < self.accent_settle
-        {
-            std::thread::sleep(self.accent_settle - t.elapsed());
-        }
         for _ in 0..backspaces {
+            ok &= self.wait_settled();
             ok &= self.tap(Slot { keycode: self.backspace, shift: false });
         }
         if backspaces > 0 && !text.is_empty() && !self.pre_glyph.is_zero() {
@@ -367,6 +363,7 @@ impl XTestTyper {
             std::thread::sleep(self.pre_glyph);
         }
         for c in text.chars() {
+            ok &= self.wait_settled();
             match self.slot(c) {
                 Some(s) => ok &= self.tap(s),
                 None => {
@@ -374,11 +371,28 @@ impl XTestTyper {
                     ok = false;
                 }
             }
-        }
-        if !text.is_ascii() {
-            self.last_accent = Some(std::time::Instant::now());
+            if !c.is_ascii() && !self.accent_settle.is_zero() {
+                self.last_accent = Some(std::time::Instant::now());
+            }
         }
         ok && self.sync()
+    }
+
+    /// Hold the next key until the last accented glyph has settled
+    /// (`last_accent`). Per KEY, not per command: one coalesced command
+    /// ("ưo", "ướng") put the next key 4ms after the accent and OnlyOffice
+    /// dropped it — field 2026-10-24 rollover 35ms "tướng" → "tớng", 20ms
+    /// "tướng" → "tư". Also called before uinput forwards (Enter, Shift…),
+    /// which reach the app just as fast. Free when nothing is pending.
+    pub(crate) fn wait_settled(&mut self) -> bool {
+        let Some(t) = self.last_accent.take() else { return true };
+        let left = self.accent_settle.saturating_sub(t.elapsed());
+        if left.is_zero() {
+            return true;
+        }
+        let ok = self.sync();
+        std::thread::sleep(left);
+        ok
     }
 }
 

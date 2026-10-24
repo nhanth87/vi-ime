@@ -296,6 +296,7 @@ impl Composer {
     /// Forward one key event through the uinput mirror, stamping presses
     /// for the `type_out` barrier.
     fn forward(&mut self, ui: &mut VirtualDevice, code: KeyCode, value: i32) {
+        self.typer.wait_settled();
         emit(ui, code, value);
         // Releases arm the barrier too: a Shift release still in transit
         // when the typer writes the next letter would capitalise it.
@@ -309,6 +310,7 @@ impl Composer {
 
     /// `tap` through the uinput mirror, stamped like `forward`.
     fn forward_tap(&mut self, ui: &mut VirtualDevice, code: KeyCode) {
+        self.typer.wait_settled();
         tap(ui, code);
         self.last_uinput_press = Some(Instant::now());
     }

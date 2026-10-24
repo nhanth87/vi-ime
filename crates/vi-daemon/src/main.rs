@@ -411,8 +411,18 @@ fn main() {
                         .as_deref()
                         .map(|id| ClientProfile::for_app(id, config_manager.setting()))
                         .unwrap_or_else(ClientProfile::default);
+                    // R18: IME off = never grab.
+                    let engage_evdev = engage_evdev && config_manager.setting().enabled;
                     match (engage_evdev, legacy_grab.is_some()) {
-                        (true, false) => {
+                        (true, had_grab) => {
+                            // Evdev app → evdev app (Chrome → OnlyOffice): the
+                            // running grab carries the OLD app's profile and
+                            // typer — OnlyOffice got Chrome's timing (no accent
+                            // settle) and lost "ư" (field 2026-10-24). Ungrab
+                            // first, then grab with this app's profile.
+                            if had_grab {
+                                drop(legacy_grab.take()); // ungrab now, before the new grab
+                            }
                             if wants_xwayland_evdev {
                                 info!(
                                     "[XWAYLAND] {:?} running X11 mode (detected via /proc cmdline) — \
