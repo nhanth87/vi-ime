@@ -438,6 +438,15 @@
 > - IPC `add_app` ghi CẢ dòng: timing gửi null = về mặc định.
 > - Đổi giá trị mặc định = phải có bằng chứng field (R19/R22); OnlyOffice chỉ được TĂNG.
 
+### R31. Log file KHÔNG được ghi mọi cấp độ
+> Sự cố 2026-10-24: file log không có filter → `[NORMALIZE]` debug (nhiều dòng/phím) làm
+> `vi-ime.<ngày>.log` lên 4.3 GB trong một ngày, định dạng chuỗi ngay trên đường gõ phím,
+> ghi đĩa liên tục (máy chậm). Giờ file mặc định = `info` + `[LIVE-SYNC]`/`[EVDEV-SYNC]`
+> (1 dòng/phím, bằng chứng R22). Cần full debug → `RUST_LOG=debug` (áp cho cả file).
+> ĐỪNG thêm debug log nhiều dòng/phím vào module được bật debug mặc định
+> (`evdev_compose`, `wayland::actions`); dùng `trace!` cho chi tiết nội bộ engine.
+> Harness/test ĐỪNG đọc lại cả file log liên tục — tail từ offset cuối.
+
 ---
 
 ## 📁 File Map

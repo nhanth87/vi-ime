@@ -73,12 +73,20 @@ fn init_tracing() -> (tracing_appender::non_blocking::WorkerGuard, tracing_appen
     let (file_writer, file_guard) = tracing_appender::non_blocking(file_appender);
     let (stderr_writer, stderr_guard) = tracing_appender::non_blocking(std::io::stderr());
 
-    // Combined layer: file gets everything, stderr respects RUST_LOG
+    // stderr respects RUST_LOG (default info). The file used to take EVERY
+    // level unfiltered: [NORMALIZE] debug lines (several per keystroke) made
+    // the 2026-10-24 log 4.3 GB in a day, formatted on the typing path. Now:
+    // info + the one-line-per-key [LIVE-SYNC]/[EVDEV-SYNC] evidence R22 needs;
+    // RUST_LOG, when set, drives the file too (full debug for diagnosis).
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let file_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new("info,vi_ime::evdev_compose=debug,vi_ime::wayland::actions=debug")
+    });
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(file_writer)
         .with_ansi(false)
-        .with_target(true);
+        .with_target(true)
+        .with_filter(file_filter);
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_writer(stderr_writer);
 
