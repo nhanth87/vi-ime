@@ -29,6 +29,7 @@ Item {
     property bool autoEnglish: true
     property bool perApp: true
     property bool emoji: true
+    property bool predict: true
     property var macros: ({})
     property var macroHotkeys: ({})
     property var apps: []
@@ -43,7 +44,8 @@ Item {
     readonly property var _keyToProp: ({
         input_method: "inputMethod", tone_style: "toneStyle", ime_mode: "imeMode",
         output_mode: "outputMode", enabled: "imeEnabled", free_tone_placement: "freeTone",
-        auto_detect_lang: "autoEnglish", enable_per_app: "perApp", emoji: "emoji"
+        auto_detect_lang: "autoEnglish", enable_per_app: "perApp", emoji: "emoji",
+        predict: "predict"
     })
     property var _pending: []
 
@@ -90,6 +92,9 @@ Item {
     function removeMacroHotkey(key) {
         send({ cmd: "remove_macro_hotkey", key: key }, function (r) { _ack(r, refresh) })
     }
+    function clearPredict() {
+        send({ cmd: "clear_predict" }, function (r) { _ack(r, null) })
+    }
     function quitDaemon() { send({ cmd: "quit" }) }
 
     function refresh() {
@@ -104,6 +109,7 @@ Item {
             if (r.auto_detect_lang !== undefined) d.autoEnglish = r.auto_detect_lang
             if (r.enable_per_app !== undefined) d.perApp = r.enable_per_app
             if (r.emoji !== undefined) d.emoji = r.emoji
+            if (r.predict !== undefined) d.predict = r.predict
             if (r.macros) d.macros = r.macros
             if (r.macro_hotkeys) d.macroHotkeys = r.macro_hotkeys
             if (r.config_path) d.configPath = r.config_path

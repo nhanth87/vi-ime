@@ -16,6 +16,7 @@ use evdev::{EventType, InputEvent, KeyCode};
 use tracing::info;
 
 use crate::engine::fast_engine::NonPreeditEngine;
+use crate::engine::predict;
 use crate::engine::{ImeMode, InputMethod, NonPreeditAction};
 use crate::evdev_inject::{boundary_char, hotkey_key, key_to_char, Typer};
 
@@ -48,6 +49,9 @@ pub(crate) struct Composer {
     /// one wait per BATCH instead of per key — user report 2026-10-24
     /// "gõ trong OnlyOffice rất chậm" with per-key edits queuing up.
     deferred: Option<String>,
+    /// Feed word suggestions (engine/predict.rs) — office apps only: the
+    /// evdev path can't see password fields, so never for browsers.
+    pub(crate) learn: bool,
 }
 
 /// How long a key press forwarded through the uinput mirror needs to reach
@@ -91,6 +95,7 @@ impl Composer {
             last_uinput_press: None,
             down: std::collections::HashSet::new(),
             deferred: None,
+            learn: false,
         }
     }
 
@@ -154,8 +159,12 @@ impl Composer {
         // select all, not feed 'a' to the engine (field bug 2026-07-10).
         if self.sysmods != 0 {
             if value != 0 {
+                if self.accept_suggestion(ui, code) {
+                    return;
+                }
+                self.restore_alt(ui);
                 // R-macro hotkey: chord → expansion, consuming the chord
-                // (releases still forwarded below so nothing sticks). The
+                // (its release is dropped below — the press never went out). The
                 // evdev thread only runs while the IME is enabled
                 // (consumer_loop breaks otherwise) — R18 holds.
                 if let Some(text) = self.match_hotkey(code) {
@@ -165,6 +174,8 @@ impl Composer {
                     return;
                 }
                 self.finish_word();
+            } else if !self.down.contains(&code.code()) {
+                return; // press consumed (suggestion/macro): no stray keyup
             }
             self.forward(ui, code, value);
             return;
@@ -246,10 +257,17 @@ impl Composer {
                 // applies NFC/NFD (R12) — this is real text, not preedit.
                 // sync=false: mid-word, no roundtrip (opt 1).
                 // Deferred: typed by `flush` once the queued keys are in.
-                self.deferred = Some(self.engine.inner().preedit_output());
+                let target = self.engine.inner().preedit_output();
+                if self.learn {
+                    predict::set_prefix(&target);
+                }
+                self.deferred = Some(target);
             }
             NonPreeditAction::CommitWithBackspace { text, .. } => {
                 self.deferred = None; // superseded: diff runs from `shown`
+                if self.learn {
+                    predict::observe(&text);
+                }
                 // Screen already shows the word (usually a no-op diff).
                 // Replay the boundary key that triggered the commit — the
                 // engine never includes it in the committed text.
@@ -274,6 +292,7 @@ impl Composer {
             }
             NonPreeditAction::ClearPreedit => {
                 self.deferred = None;
+                predict::set_prefix("");
                 self.sync_shown("", true);
                 self.common_bytes = 0;
             }
@@ -357,6 +376,7 @@ impl Composer {
     /// word WITHOUT touching the screen (live text stays where it was
     /// typed; a later diff would backspace at the NEW cursor — R8/R17-C).
     pub(crate) fn click_reset(&mut self) {
+        predict::reset_context(); // the cursor moved
         if !self.engine.has_pending() && self.shown.is_empty() {
             return;
         }
@@ -378,6 +398,9 @@ impl Composer {
             // R-macro keyword expansion wins over the heuristic (same order
             // as the Wayland path — `commit_text`).
             let target = self.engine.commit_text(None);
+            if self.learn {
+                predict::observe(&target);
+            }
             // sync=true: word ending → roundtrip (next key is cross-channel).
             self.sync_shown(&target, true);
         }
@@ -464,25 +487,9 @@ fn tap(ui: &mut VirtualDevice, code: KeyCode) {
     let _ = ui.emit(&events);
 }
 
+#[path = "evdev_accept.rs"]
+mod accept;
+
 #[cfg(test)]
-mod barrier_tests {
-    use super::*;
-
-    #[test]
-    fn no_recent_press_no_wait() {
-        assert_eq!(settle_remaining(None, Instant::now()), Duration::ZERO);
-    }
-
-    #[test]
-    fn fresh_press_waits_the_remainder() {
-        let t0 = Instant::now();
-        let left = settle_remaining(Some(t0), t0 + Duration::from_millis(10));
-        assert_eq!(left, UINPUT_SETTLE - Duration::from_millis(10));
-    }
-
-    #[test]
-    fn old_press_no_wait() {
-        let t0 = Instant::now();
-        assert_eq!(settle_remaining(Some(t0), t0 + UINPUT_SETTLE * 2), Duration::ZERO);
-    }
-}
+#[path = "evdev_compose_tests.rs"]
+mod barrier_tests;

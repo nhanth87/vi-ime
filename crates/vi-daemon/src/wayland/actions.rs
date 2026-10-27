@@ -13,6 +13,7 @@ use wayland_client::Connection;
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_v2::ZwpInputMethodV2;
 
 use crate::wayland::feedback::{ImeFeedback, PipelineStage};
+use crate::engine::predict;
 use crate::wayland::state::{FieldSensitivity, ImeAppState};
 use crate::wayland::viet_typer::TypeMode;
 
@@ -127,7 +128,17 @@ impl ImeAppState {
         // Shortcut (Ctrl/Alt/Super held): finalize the word and let the raw
         // key through so the app's keybinding fires.
         if self.xkb.is_system_modifier_active() {
+            // Alt+1..3 while the suggestion bar shows (R18: IME on; never in
+            // terminals or gated fields — `learns`).
+            if let Some(i) = self.suggestion_slot(keycode)
+                && self.ime_enabled
+                && self.learns()
+                && self.accept_suggestion(&im, i)
+            {
+                return;
+            }
             self.finalize_word(&im);
+            predict::reset_context(); // shortcut: the sentence is interrupted
             // R-macro hotkey: chord → expansion instead of passthrough.
             // R18: only when the IME is on. R11b: never in Secure/Url fields
             // (composition never reaches the engine there either).
@@ -201,6 +212,7 @@ impl ImeAppState {
         let Some(ch) = self.xkb.keycode_to_char(keycode) else {
             // Non-text key (arrows, F-keys, Home/End…): finalize + passthrough.
             self.finalize_word(&im);
+            predict::reset_context(); // the cursor may have moved
             self.vk.press(keycode);
             return;
         };
@@ -289,6 +301,9 @@ impl ImeAppState {
         match action {
             NonPreeditAction::Buffer | NonPreeditAction::UpdatePreedit(_) => {
                 let target = self.engine.inner().preedit_output();
+                if self.learns() {
+                    predict::set_prefix(&target);
+                }
                 if capable {
                     // P0: app capable → atomic commit, no sleep-dance.
                     self.live_commit(im, &target);
@@ -306,6 +321,9 @@ impl ImeAppState {
             NonPreeditAction::CommitWithBackspace { text, .. } => {
                 crate::godmod::log_commit(!text.is_ascii());
                 info!("[COMMIT] word done: \"{text}\" + replay code={keycode}");
+                if self.learns() {
+                    predict::observe(&text);
+                }
                 // Boundary char the typer can type itself (space, punctuation):
                 // send it in the SAME typer command as the commit diff, so it
                 // can never overtake the BackSpaces (see VietTyper::wait_idle).
@@ -349,6 +367,7 @@ impl ImeAppState {
                 im.commit(self.serial);
             }
             NonPreeditAction::ClearPreedit => {
+                predict::set_prefix("");
                 if capable {
                     // P0: word deleted → atomic clear.
                     self.live_commit(im, "");
@@ -379,6 +398,7 @@ impl ImeAppState {
             // Sync the counter so the per-key guard doesn't double-fire.
             self.last_clicks = rt.clicks();
         }
+        predict::reset_context(); // the cursor moved
         if !self.engine.has_pending() {
             return;
         }
@@ -400,7 +420,7 @@ impl ImeAppState {
     /// (VCL/gtk3 swallows BS+char bursts whole, probe-verified 2026-07-10).
     /// The failure modes of commit_string (cross-channel reorder) and
     /// delete_surrounding_text (silently ignored) can't occur here.
-    fn sync_shown(&mut self, target: &str) {
+    pub(crate) fn sync_shown(&mut self, target: &str) {
         let shown: Vec<char> = self.shown_word.chars().collect();
         let tgt: Vec<char> = target.chars().collect();
         let common = shown

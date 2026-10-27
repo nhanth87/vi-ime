@@ -498,6 +498,31 @@ FloatingWindow {
                                 }
                             }
                             SettingRow {
+                                label: "Gợi ý từ"
+                                description: "Học cách bạn gõ để gợi ý từ đang gõ và từ tiếp theo. Nhấn Alt+1, Alt+2, Alt+3 để chọn. Chỉ lưu trên máy này."
+                                VSwitch {
+                                    checked: daemon.predict
+                                    accessibleName: "Gợi ý từ"
+                                    onToggled: function (next) { daemon.setConfig({ predict: next }) }
+                                }
+                            }
+                            SettingRow {
+                                label: "Dữ liệu gợi ý đã học"
+                                description: "Xóa mọi từ vi-ime đã học từ cách bạn gõ. Không hoàn tác được."
+                                VButton {
+                                    id: clearPredictBtn
+                                    property bool armed: false
+                                    kind: "ghost"
+                                    text: armed ? "Bấm lần nữa để xóa" : "Xóa dữ liệu học"
+                                    onClicked: {
+                                        if (!armed) { armed = true; disarm.restart(); return }
+                                        armed = false
+                                        daemon.clearPredict()
+                                    }
+                                    Timer { id: disarm; interval: 3000; onTriggered: clearPredictBtn.armed = false }
+                                }
+                            }
+                            SettingRow {
                                 label: "Bảng mã"
                                 description: "Dựng sẵn hợp với hầu hết ứng dụng. Chỉ chọn tổ hợp khi phần mềm yêu cầu."
                                 last: true

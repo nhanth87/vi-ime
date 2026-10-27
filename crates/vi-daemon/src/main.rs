@@ -326,6 +326,11 @@ fn main() {
         let settings_exe = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(|dir| dir.join("vi-settings")));
+        // Word suggestion bar: idle (hidden, blocked on the socket) until
+        // suggestions arrive; shows nothing while `predict = false`.
+        if let Some(exe) = settings_exe.as_ref().filter(|e| e.exists()) {
+            let _ = std::process::Command::new(exe).arg("--bar").spawn();
+        }
         tray::spawn(config_path.clone(), settings_exe);
     }
 
@@ -384,6 +389,8 @@ fn main() {
                     godmod::set_app(app_id);
                 }
                 if app_changed {
+                    // Save word suggestions learned so far (off the typing thread).
+                    crate::engine::predict::flush();
                     let wants_legacy = current_app_id
                         .as_deref()
                         .is_some_and(legacy_grab::is_legacy_app);
@@ -681,6 +688,7 @@ fn apply_config(
     let resolved =
         setting.effective_config_layered(current_app_id.as_deref(), title, learned.as_ref());
     runtime.store(&resolved_to_snapshot(&resolved));
+    crate::engine::predict::set_enabled(setting.predict);
     // R-macro: publish keyword + hotkey tables (parsed once here, shared as
     // Arc; both IME paths pick them up — Wayland via maybe_reconfigure,
     // evdev via the consumer loop).

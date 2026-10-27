@@ -460,6 +460,25 @@
 > phát lại đúng chuỗi lệnh `[EVDEV-SYNC]` của lần field hỏng, Enter gửi XTEST tức thì (như
 > uinput): typer cũ ra "thủ tớng"/"thủ tư", typer mới sạch.
 
+### R32. Gợi ý từ (engine/predict.rs) — riêng tư + KHÔNG chặn đường gõ
+> Học từ đã commit + cặp từ liền nhau; thanh gợi ý `vi-settings --bar` (bar.qml, daemon tự
+> chạy) nhận qua IPC `predict_subscribe` (Condvar, không poll); Alt+1..3 chọn.
+> - **Riêng tư:** Wayland chỉ học khi `FieldSensitivity::Normal` (`learns()`: không terminal,
+>   không Secure/Url/Numeric). evdev KHÔNG thấy ô mật khẩu → chỉ học ở app office
+>   (`Composer::learn` = `is_legacy_app`), TUYỆT ĐỐI không cho trình duyệt. Dữ liệu chỉ ở
+>   `$XDG_DATA_HOME/vi-ime/predict.tsv`, tắt được (`predict = false`), xóa được (`clear_predict`).
+> - **Không chặn:** mọi lời gọi từ thread gõ dùng `try_lock`; bận (đang save) → từ vào hàng
+>   đợi (≤256) / bỏ qua cập nhật prefix. Probe 2026-10-27: `observe` blocking chờ save tới 28ms
+>   ở ranh giới từ. Tra cứu: BTreeMap range (từ 2 ký tự), next-word theo từ trước — ĐỪNG quét
+>   cả bảng. Save định dạng trên thread riêng.
+> - **Alt+1..3 chỉ khi thanh đang hiện:** gợi ý tự tắt `LIVE` (4s) sau phím cuối (thread
+>   `expire_loop`, ngủ trên Condvar) — Alt+1 phải trả lại app (Chrome: chuyển tab).
+> - **Alt đã tới app:** tap Ctrl trước khi Alt nhả (tránh "Alt trơn" mở menu Firefox/LO/OO);
+>   evdev còn nhả Alt phía app trước khi gõ từ (`evdev_accept.rs`), `restore_alt` nhấn lại cho
+>   tổ hợp khác. Release của phím đã nuốt (gợi ý/macro) KHÔNG forward (keyup lạc, xem R19/OO).
+> - Probe/scratch `#[path]` include predict.rs KHÔNG phải cfg(test) → chạy với
+>   `XDG_DATA_HOME`/`HOME` trỏ scratch, nếu không sẽ ghi đè dữ liệu thật của user.
+
 ### R31. Log file KHÔNG được ghi mọi cấp độ
 > Sự cố 2026-10-24: file log không có filter → `[NORMALIZE]` debug (nhiều dòng/phím) làm
 > `vi-ime.<ngày>.log` lên 4.3 GB trong một ngày, định dạng chuỗi ngay trên đường gõ phím,

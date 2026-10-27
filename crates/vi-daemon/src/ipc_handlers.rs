@@ -27,6 +27,7 @@ pub fn handle_read_command(
             auto_detect_lang: Some(setting.auto_detect_lang),
             enable_per_app: Some(setting.enable_per_app),
             emoji: Some(setting.emoji),
+            predict: Some(setting.predict),
             macros: Some(setting.macros.clone()),
             macro_hotkeys: Some(setting.macro_hotkeys.clone()),
             config_path: Some(config_path.display().to_string()),
@@ -93,7 +94,7 @@ pub fn handle_write_command(
     match cmd {
         IpcCommand::SetConfig {
             input_method, tone_style, enabled, ime_mode, output_mode,
-            free_tone_placement, auto_detect_lang, enable_per_app, emoji,
+            free_tone_placement, auto_detect_lang, enable_per_app, emoji, predict,
         } => {
             if let Some(m) = input_method {
                 s.input_method = parse_method(m).unwrap_or(InputMethod::Telex);
@@ -118,6 +119,7 @@ pub fn handle_write_command(
             if let Some(v) = *auto_detect_lang { s.auto_detect_lang = v; }
             if let Some(v) = *enable_per_app { s.enable_per_app = v; }
             if let Some(v) = *emoji { s.emoji = v; }
+            if let Some(v) = *predict { s.predict = v; }
             info!("IPC: config updated via settings UI");
         }
         IpcCommand::AddApp {

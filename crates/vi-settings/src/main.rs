@@ -38,8 +38,16 @@ enum Compositor {
 
 fn main() {
     let menu_mode = env::args().any(|a| a == "--menu");
+    // Word suggestion bar, started by the daemon (one instance per daemon).
+    let bar_mode = env::args().any(|a| a == "--bar");
     let main_qml = find_qml();
-    let qml = if menu_mode { main_qml.with_file_name("menu.qml") } else { main_qml };
+    let qml = if menu_mode {
+        main_qml.with_file_name("menu.qml")
+    } else if bar_mode {
+        main_qml.with_file_name("bar.qml")
+    } else {
+        main_qml
+    };
     if !qml.exists() {
         eprintln!("vi-settings: QML file {:?} not found", qml);
         std::process::exit(1);
@@ -58,6 +66,11 @@ fn main() {
         if !replaced {
             spawn_quickshell(&qml);
         }
+        return;
+    }
+    if bar_mode {
+        // A restarted daemon replaces the old bar (its socket died anyway).
+        spawn_quickshell(&qml);
         return;
     }
 

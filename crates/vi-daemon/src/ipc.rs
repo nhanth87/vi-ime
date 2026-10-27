@@ -57,6 +57,8 @@ pub enum IpcCommand {
         enable_per_app: Option<bool>,
         #[serde(default)]
         emoji: Option<bool>,
+        #[serde(default)]
+        predict: Option<bool>,
     },
     #[serde(rename = "list_apps")]
     ListApps,
@@ -97,6 +99,14 @@ pub enum IpcCommand {
     SetMacroHotkey { key: String, value: String },
     #[serde(rename = "remove_macro_hotkey")]
     RemoveMacroHotkey { key: String },
+    /// Stream word suggestions: one `{"suggestions": [...]}` line now and
+    /// one per change, for as long as the client stays connected (the
+    /// suggestion bar). Blocks on a Condvar — no polling (R15).
+    #[serde(rename = "predict_subscribe")]
+    PredictSubscribe,
+    /// Forget every learned word (Settings → "Xóa dữ liệu học").
+    #[serde(rename = "clear_predict")]
+    ClearPredict,
     /// Exit the daemon — same as the tray's "Thoát vi-im".
     #[serde(rename = "quit")]
     Quit,
@@ -125,6 +135,10 @@ pub struct IpcResponse {
     pub enable_per_app: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub emoji: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub predict: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestions: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub macros: Option<HashMap<String, String>>,
     /// Hotkey macros (`[macro_hotkeys]`): chord → text.
@@ -292,6 +306,22 @@ fn handle_client(mut stream: UnixStream, tx: &Sender<DaemonEvent>) {
             {
                 let msg = format!("Tổ hợp {key:?} không hợp lệ — cần ctrl/alt/super + một phím (ví dụ ctrl+alt+m) và nội dung");
                 let _ = writeln!(stream, "{}", IpcResponse::error(msg).to_line());
+            }
+            IpcCommand::PredictSubscribe => {
+                let (mut seen, mut words) = crate::engine::predict::current();
+                loop {
+                    let line = IpcResponse { suggestions: Some(words), ..IpcResponse::default() };
+                    if writeln!(stream, "{}", line.to_line()).is_err() {
+                        break; // bar closed
+                    }
+                    (seen, words) = crate::engine::predict::wait_change(seen);
+                }
+                break;
+            }
+            IpcCommand::ClearPredict => {
+                crate::engine::predict::clear();
+                info!("IPC: learned word suggestions cleared");
+                let _ = writeln!(stream, "{}", IpcResponse::reload().to_line());
             }
             IpcCommand::Quit => {
                 info!("IPC: quit requested");

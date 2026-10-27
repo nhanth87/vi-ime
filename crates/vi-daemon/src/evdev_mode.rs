@@ -276,10 +276,10 @@ fn consumer_loop(
     runtime: Option<Arc<RuntimeConfig>>,
 ) {
     let mut composer = Composer::new(method, typer);
-    // Emoji expansion follows the same runtime config as the Wayland path.
-    // NOTE: on the NATIVE virtual-keyboard typer emoji glyphs can't be
-    // injected (keymap is ASCII+Vietnamese) — only the wtype/xdotool injector
-    // path renders them; see evdev_compose::apply CommitEmoji.
+    // Emoji/macros follow the Wayland path's runtime config; suggestions learn in office apps only.
+    composer.learn = runtime.as_ref().and_then(|rt| rt.app_id()).is_some_and(|id| crate::legacy_grab::is_legacy_app(&id));
+    // NOTE: the NATIVE typer's keymap is ASCII+Vietnamese — emoji glyphs only render through
+    // the wtype/xdotool injector; see evdev_compose::apply CommitEmoji.
     if let Some(rt) = &runtime {
         composer.set_emoji_enabled(rt.snapshot().emoji);
         composer.set_macros(rt.macros());

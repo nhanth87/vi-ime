@@ -167,6 +167,10 @@ pub struct Setting {
     /// Example: `[macro_hotkeys] "ctrl+alt+m" = "..."`. Needs ctrl/alt/super.
     #[serde(default)]
     pub macro_hotkeys: HashMap<String, String>,
+    /// Word suggestions learned from this user's typing (engine/predict.rs):
+    /// suggestion bar + Alt+1..3. Data stays on this machine.
+    #[serde(default = "default_true")]
+    pub predict: bool,
 }
 
 fn default_ime_mode() -> ImeMode {
@@ -195,6 +199,7 @@ impl Default for Setting {
             site_configs: HashMap::new(),
             macros: HashMap::new(),
             macro_hotkeys: HashMap::new(),
+            predict: true,
         }
     }
 }
