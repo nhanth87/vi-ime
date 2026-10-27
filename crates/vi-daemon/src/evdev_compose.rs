@@ -49,6 +49,9 @@ pub(crate) struct Composer {
     /// one wait per BATCH instead of per key — user report 2026-10-24
     /// "gõ trong OnlyOffice rất chậm" with per-key edits queuing up.
     deferred: Option<String>,
+    /// Last key press/release seen (code, value, when): evidence for keys
+    /// arriving twice within ~60ms ("chơ" → "cho7", field 2026-10-27).
+    last_key: Option<(u16, i32, Instant)>,
     /// Feed word suggestions (engine/predict.rs) — office apps only: the
     /// evdev path can't see password fields, so never for browsers.
     pub(crate) learn: bool,
@@ -95,6 +98,7 @@ impl Composer {
             last_uinput_press: None,
             down: std::collections::HashSet::new(),
             deferred: None,
+            last_key: None,
             learn: false,
         }
     }
@@ -125,6 +129,17 @@ impl Composer {
     /// One key event from a grabbed keyboard (value: 0=release 1=press 2=repeat).
     pub(crate) fn handle(&mut self, ui: &mut VirtualDevice, code: KeyCode, value: i32) {
         let is_char = key_to_char(code, self.shift).is_some();
+        if value != 2 {
+            if let Some((c, v, t)) = self.last_key
+                && value == 1
+                && c == code.code()
+                && t.elapsed() < Duration::from_millis(100)
+            {
+                // v == 1: two presses, no release between → delivered twice.
+                debug!("[EVDEV-DUP] {code:?} again after {}ms (release between: {})", t.elapsed().as_millis(), v == 0);
+            }
+            self.last_key = Some((code.code(), value, Instant::now()));
+        }
         // Kernel autorepeat (value 2) of a letter/digit is not a keystroke:
         // the grabbed keyboard repeats after 250ms, the desktop after 600ms,
         // so a tone key held a little long came in twice and undid itself —
