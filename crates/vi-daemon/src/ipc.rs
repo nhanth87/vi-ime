@@ -91,6 +91,12 @@ pub enum IpcCommand {
     SetMacro { key: String, value: String },
     #[serde(rename = "remove_macro")]
     RemoveMacro { key: String },
+    /// Upsert one hotkey macro (`"ctrl+alt+m"` → text); the chord must
+    /// include ctrl/alt/super (`macro_dict::parse_hotkey`).
+    #[serde(rename = "set_macro_hotkey")]
+    SetMacroHotkey { key: String, value: String },
+    #[serde(rename = "remove_macro_hotkey")]
+    RemoveMacroHotkey { key: String },
     /// Exit the daemon — same as the tray's "Thoát vi-im".
     #[serde(rename = "quit")]
     Quit,
@@ -121,6 +127,9 @@ pub struct IpcResponse {
     pub emoji: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub macros: Option<HashMap<String, String>>,
+    /// Hotkey macros (`[macro_hotkeys]`): chord → text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub macro_hotkeys: Option<HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -276,6 +285,14 @@ fn handle_client(mut stream: UnixStream, tx: &Sender<DaemonEvent>) {
                     Err(_) => break,
                 }
             }
+            // Writes reply before the main thread applies them, so a bad
+            // chord must be refused here or the client never hears of it.
+            IpcCommand::SetMacroHotkey { key, value }
+                if value.is_empty() || crate::engine::macro_dict::parse_hotkey(key).is_none() =>
+            {
+                let msg = format!("Tổ hợp {key:?} không hợp lệ — cần ctrl/alt/super + một phím (ví dụ ctrl+alt+m) và nội dung");
+                let _ = writeln!(stream, "{}", IpcResponse::error(msg).to_line());
+            }
             IpcCommand::Quit => {
                 info!("IPC: quit requested");
                 let _ = writeln!(stream, "{}", IpcResponse::reload().to_line());
@@ -285,7 +302,9 @@ fn handle_client(mut stream: UnixStream, tx: &Sender<DaemonEvent>) {
             | IpcCommand::AddApp { .. }
             | IpcCommand::RemoveApp { .. }
             | IpcCommand::SetMacro { .. }
-            | IpcCommand::RemoveMacro { .. } => {
+            | IpcCommand::RemoveMacro { .. }
+            | IpcCommand::SetMacroHotkey { .. }
+            | IpcCommand::RemoveMacroHotkey { .. } => {
                 if tx.send(DaemonEvent::IpcWrite { command: cmd }).is_err() {
                     break;
                 }

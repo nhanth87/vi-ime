@@ -33,10 +33,11 @@ FloatingWindow {
 
     property int page: 0
     readonly property var pages: [
-        { title: "Kiểu gõ",    subtitle: "Cách gõ dấu và cách chữ hiện ra khi đang gõ." },
-        { title: "Ứng dụng",   subtitle: "Kiểu gõ riêng cho từng ứng dụng, đè lên thiết lập chung." },
-        { title: "Gõ tắt",     subtitle: "Gõ một từ khoá ngắn để chèn cả cụm từ." },
-        { title: "Giới thiệu", subtitle: "Phiên bản, tệp cấu hình và lệnh điều khiển." }
+        { title: "Kiểu gõ",      subtitle: "Phương thức, dấu thanh, cách hiện chữ." },
+        { title: "Ứng dụng",     subtitle: "Cấu hình riêng cho từng ứng dụng." },
+        { title: "Gõ tắt",       subtitle: "Từ khóa ngắn → cả cụm từ." },
+        { title: "Phím tắt",     subtitle: "Tổ hợp phím → hành động." },
+        { title: "Giới thiệu",   subtitle: "Phiên bản, cấu hình và lệnh." }
     ]
 
     readonly property var methodModel: [
@@ -863,11 +864,138 @@ FloatingWindow {
                             wrapMode: Text.WordWrap
                             color: Theme.faint
                             font.pixelSize: Theme.fsSmall
-                            text: "Gõ tắt theo tổ hợp phím (ví dụ ctrl+alt+m) đặt trong setting.conf, mục [macro_hotkeys]."
+                            text: "Lưu trong setting.conf, mục [macros]. Gõ tắt bằng tổ hợp phím: xem trang Phím tắt."
                         }
                     }
 
-                    // ── 4. Giới thiệu ──────────────────────────────
+                    // ── 4. Phím tắt ────────────────────────────────
+                    ColumnLayout {
+                        spacing: 0
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 32
+                            Layout.rightMargin: 24
+                            spacing: 0
+
+                            Text {
+                                Layout.fillWidth: true
+                                Layout.topMargin: 8
+                                wrapMode: Text.WordWrap
+                                color: Theme.muted
+                                font.pixelSize: Theme.fsBody
+                                text: "Nhấn tổ hợp phím để chèn nội dung ngay tại con trỏ. Tổ hợp cần có ctrl, alt hoặc super và không còn tới ứng dụng."
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Layout.topMargin: 14
+                                spacing: 8
+                                VField {
+                                    id: hotkeyKey
+                                    Layout.preferredWidth: 150
+                                    placeholderText: "Tổ hợp, ví dụ ctrl+alt+m"
+                                    onAccepted: hotkeyValue.forceActiveFocus()
+                                }
+                                VField {
+                                    id: hotkeyValue
+                                    Layout.fillWidth: true
+                                    placeholderText: "Nội dung, ví dụ Trân trọng,"
+                                    onAccepted: addHotkeyBtn.clicked()
+                                }
+                                VButton {
+                                    id: addHotkeyBtn
+                                    kind: "primary"
+                                    text: "Thêm"
+                                    enabled: hotkeyKey.text.trim() !== "" && hotkeyValue.text !== ""
+                                    onClicked: {
+                                        if (!enabled) return
+                                        daemon.setMacroHotkey(hotkeyKey.text.trim().toLowerCase(), hotkeyValue.text)
+                                        hotkeyKey.text = ""; hotkeyValue.text = ""
+                                        hotkeyKey.forceActiveFocus()
+                                    }
+                                }
+                            }
+                        }
+
+                        ListView {
+                            id: hotkeyList
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.leftMargin: 32
+                            Layout.rightMargin: 24
+                            Layout.topMargin: 14
+                            clip: true
+                            boundsBehavior: Flickable.StopAtBounds
+                            ScrollBar.vertical: ScrollBar {}
+                            model: Object.keys(daemon.macroHotkeys).sort()
+
+                            delegate: Item {
+                                id: hotkeyRow
+                                required property string modelData
+                                width: ListView.view.width
+                                height: 46
+                                RowLayout {
+                                    anchors.fill: parent
+                                    spacing: 12
+                                    Row {   // one keycap per key of the chord
+                                        Layout.preferredWidth: 150
+                                        spacing: 4
+                                        Repeater {
+                                            model: hotkeyRow.modelData.split("+")
+                                            delegate: Keycap {
+                                                required property string modelData
+                                                glyph: modelData
+                                            }
+                                        }
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: daemon.macroHotkeys[hotkeyRow.modelData] || ""
+                                        color: Theme.ink
+                                        font.pixelSize: Theme.fsBody
+                                        elide: Text.ElideRight
+                                        maximumLineCount: 1
+                                    }
+                                    VButton {
+                                        Layout.preferredWidth: 30
+                                        implicitHeight: 30
+                                        kind: "ghost"
+                                        text: "✕"
+                                        Accessible.name: "Xoá phím tắt " + hotkeyRow.modelData
+                                        onClicked: daemon.removeMacroHotkey(hotkeyRow.modelData)
+                                    }
+                                }
+                                Rectangle {
+                                    anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+                                    height: 1
+                                    color: Theme.line
+                                }
+                            }
+
+                            Text {
+                                visible: hotkeyList.count === 0
+                                anchors { top: parent.top; topMargin: 28; left: parent.left; right: parent.right }
+                                horizontalAlignment: Text.AlignHCenter
+                                color: Theme.muted
+                                font.pixelSize: Theme.fsBody
+                                text: "Chưa có phím tắt nào. Thử thêm ctrl+alt+m → Trân trọng,"
+                            }
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 32
+                            Layout.rightMargin: 24
+                            Layout.bottomMargin: 16
+                            Layout.topMargin: 8
+                            wrapMode: Text.WordWrap
+                            color: Theme.faint
+                            font.pixelSize: Theme.fsSmall
+                            text: "Lưu trong setting.conf, mục [macro_hotkeys]. Chọn tổ hợp mà ứng dụng của bạn không dùng."
+                        }
+                    }
+
+                    // ── 5. Giới thiệu ──────────────────────────────
                     Flickable {
                         contentHeight: aboutCol.implicitHeight + 32
                         clip: true

@@ -30,6 +30,7 @@ Item {
     property bool perApp: true
     property bool emoji: true
     property var macros: ({})
+    property var macroHotkeys: ({})
     property var apps: []
     property string configPath: ""
     property string version: ""
@@ -83,6 +84,12 @@ Item {
     function removeMacro(key) {
         send({ cmd: "remove_macro", key: key }, function (r) { _ack(r, refresh) })
     }
+    function setMacroHotkey(key, value) {
+        send({ cmd: "set_macro_hotkey", key: key, value: value }, function (r) { _ack(r, refresh) })
+    }
+    function removeMacroHotkey(key) {
+        send({ cmd: "remove_macro_hotkey", key: key }, function (r) { _ack(r, refresh) })
+    }
     function quitDaemon() { send({ cmd: "quit" }) }
 
     function refresh() {
@@ -98,6 +105,7 @@ Item {
             if (r.enable_per_app !== undefined) d.perApp = r.enable_per_app
             if (r.emoji !== undefined) d.emoji = r.emoji
             if (r.macros) d.macros = r.macros
+            if (r.macro_hotkeys) d.macroHotkeys = r.macro_hotkeys
             if (r.config_path) d.configPath = r.config_path
             if (r.version) d.version = r.version
             d.loaded = true

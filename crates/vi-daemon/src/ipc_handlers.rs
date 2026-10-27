@@ -28,6 +28,7 @@ pub fn handle_read_command(
             enable_per_app: Some(setting.enable_per_app),
             emoji: Some(setting.emoji),
             macros: Some(setting.macros.clone()),
+            macro_hotkeys: Some(setting.macro_hotkeys.clone()),
             config_path: Some(config_path.display().to_string()),
             version: Some(env!("CARGO_PKG_VERSION").into()),
             ..IpcResponse::default()
@@ -150,6 +151,25 @@ pub fn handle_write_command(
         IpcCommand::RemoveMacro { key } => {
             s.macros.remove(key);
             info!("IPC: macro removed for {key:?}");
+        }
+        IpcCommand::SetMacroHotkey { key, value } => {
+            // Stored lowercase + trimmed so the same chord can't appear twice
+            // under different spellings ("Ctrl+Alt+M" vs "ctrl+alt+m").
+            let key = key.trim().to_ascii_lowercase();
+            if value.is_empty() {
+                return IpcResponse::error("Phím tắt cần nội dung".into());
+            }
+            if crate::engine::macro_dict::parse_hotkey(&key).is_none() {
+                return IpcResponse::error(format!(
+                    "Tổ hợp {key:?} không hợp lệ — cần ctrl/alt/super + một phím, ví dụ ctrl+alt+m"
+                ));
+            }
+            s.macro_hotkeys.insert(key.clone(), value.clone());
+            info!("IPC: hotkey macro set for {key:?}");
+        }
+        IpcCommand::RemoveMacroHotkey { key } => {
+            s.macro_hotkeys.remove(key);
+            info!("IPC: hotkey macro removed for {key:?}");
         }
         _ => return IpcResponse::error("Unexpected write command".into()),
     }
