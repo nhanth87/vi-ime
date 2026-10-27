@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use evdev::uinput::VirtualDevice;
 use evdev::{EventType, InputEvent, KeyCode};
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::engine::fast_engine::NonPreeditEngine;
 use crate::engine::predict;
@@ -124,6 +124,20 @@ impl Composer {
 
     /// One key event from a grabbed keyboard (value: 0=release 1=press 2=repeat).
     pub(crate) fn handle(&mut self, ui: &mut VirtualDevice, code: KeyCode, value: i32) {
+        let is_char = key_to_char(code, self.shift).is_some();
+        // Kernel autorepeat (value 2) of a letter/digit is not a keystroke:
+        // the grabbed keyboard repeats after 250ms, the desktop after 600ms,
+        // so a tone key held a little long came in twice and undid itself —
+        // field 2026-10-27 "khó" → "kho1" (second '1' 255ms later). The
+        // Wayland path never repeats composing keys either.
+        if value == 2 && is_char {
+            return;
+        }
+        // Evidence for words cut short (R22): which key ended a composition.
+        let modifier = sysmod_bit(code) != 0 || matches!(code, KeyCode::KEY_LEFTSHIFT | KeyCode::KEY_RIGHTSHIFT);
+        if value == 1 && !is_char && !modifier && self.engine.has_pending() && code != KeyCode::KEY_BACKSPACE {
+            debug!("[EVDEV-END] {code:?} ended {:?} (sysmods={})", self.engine.inner().preedit_output(), self.sysmods);
+        }
         // Only plain composing keys (letters/digits, mid-word BackSpace)
         // may join the deferred batch; anything else — modifiers forwarded
         // to the app, boundaries, shortcuts — must see the screen up to date
@@ -344,32 +358,6 @@ impl Composer {
             std::thread::sleep(wait);
         }
         self.typer.backspace_then_type(backspaces, text, sync);
-    }
-
-    /// Emit releases for any modifiers the uinput mirror still holds — on
-    /// disengage (focus left) the user's real release lands AFTER ungrab
-    /// and never reaches the mirror, which would pin Super/Ctrl forever
-    /// (same class as the vk1 stuck-Super bug, virtual_keyboard.rs).
-    pub(crate) fn release_mods(&mut self, ui: &mut VirtualDevice) {
-        if self.shift {
-            self.forward(ui, KeyCode::KEY_LEFTSHIFT, 0);
-            self.forward(ui, KeyCode::KEY_RIGHTSHIFT, 0);
-            self.shift = false;
-        }
-        const MODS: [(u8, KeyCode); 6] = [
-            (1, KeyCode::KEY_LEFTCTRL),
-            (2, KeyCode::KEY_RIGHTCTRL),
-            (4, KeyCode::KEY_LEFTALT),
-            (8, KeyCode::KEY_RIGHTALT),
-            (16, KeyCode::KEY_LEFTMETA),
-            (32, KeyCode::KEY_RIGHTMETA),
-        ];
-        for (bit, code) in MODS {
-            if self.sysmods & bit != 0 {
-                self.forward(ui, code, 0);
-            }
-        }
-        self.sysmods = 0;
     }
 
     /// Physical click while composing: the cursor moved — stop tracking the

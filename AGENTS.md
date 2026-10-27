@@ -390,6 +390,12 @@
 >    không có ngữ cảnh → `english_prefer_vietnamese.txt` quyết định.
 > - KHÔNG nhúng vi_VN.dic vào repo (GPLv2 vs GPL-3.0-only) — `lexicon.rs` đọc lúc chạy.
 > - `viet_syllables.txt` THIẾU (~1.3k/6.6k) — không dùng để bác bỏ chữ Việt.
+> - **Phím gốc có CHỮ SỐ đã thành dấu (VNI, cả Tự do) KHÔNG BAO GIỜ trả về phím gốc.** Từ bị
+>   cắt ngắn / gõ sai ("sẵ", "kiể", "đưồng") giữ nguyên chữ Việt đang hiện. Field 2026-10-27:
+>   "sa84", "kie63", "la62", "d9uo67n2g" — số không bao giờ là tiếng Anh, trả về chỉ in ra phím.
+> - evdev: autorepeat kernel (value 2) của phím chữ/số bị BỎ (`Composer::handle`). Bàn phím grab
+>   lặp sau 250ms, desktop sau 600ms → giữ phím dấu hơi lâu = gõ 2 lần = mất dấu ("khó"→"kho1").
+>   `[EVDEV-END]` (debug) ghi phím nào kết thúc từ đang gõ — đọc nó trước khi đoán (R22).
 
 ### R29. ĐỪNG khởi động lại daemon / chạy field test trên máy user khi chưa được đồng ý NGAY LÚC ĐÓ
 > **Sự cố 2026-10-24:** agent restart `vi-ime-session.service` nhiều lần để nạp bản build mới

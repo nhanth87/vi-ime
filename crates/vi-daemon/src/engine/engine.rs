@@ -165,6 +165,13 @@ impl Engine {
             return self.output_of(&display);
         }
         let changed = display != raw;
+        // Digits that became marks (VNI keys, also in Tự do) never spell an
+        // English word: restoring them only prints the keystrokes. A word cut
+        // short or mistyped ("sẵ", "kiể", "đưồng") stays as typed in
+        // Vietnamese — field 2026-10-27: "sa84", "kie63", "d9uo67n2g".
+        if changed && raw.chars().any(|c| c.is_ascii_digit()) {
+            return self.vietnamese(display);
+        }
         // A plain ASCII word no Vietnamese syllable looks like ("take"):
         // English context too.
         if !changed && !super::rhyme::is_complete_word(&display) {
