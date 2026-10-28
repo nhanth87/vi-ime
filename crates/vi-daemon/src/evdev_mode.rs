@@ -202,21 +202,15 @@ fn build_uinput_mirror() -> Result<VirtualDevice, Box<dyn std::error::Error>> {
         .build()?)
 }
 
-/// Backlog size (events sent but not yet processed) that triggers a one-shot
-/// warning log. Purely informational — the channel itself never drops or
-/// blocks. ~5-10 ký tự/giây là tốc độ gõ tay người nhanh thực tế; backlog
-/// vượt mốc này nghĩa là typer (settle pacing, R19) đang tụt lại phía sau,
-/// đáng để có evidence trail trong log dù không mất chữ.
+/// Backlog (events sent, not yet processed) that logs one warning — purely
+/// informational, the channel never drops or blocks. Above ~5-10 keys/s of
+/// real typing it means the typer (R19 pacing) lags; not a key loss.
 const QUEUE_WARN_THRESHOLD: usize = 10;
 
-/// One physical keyboard's read loop, run on its OWN thread. The ONLY job
-/// here is drain `poll` + `fetch_events` as fast as the kernel delivers and
-/// hand raw `(KeyCode, value)` pairs to `tx`. MUST NEVER do anything that can
-/// block beyond the poll timeout — see module docs: the typer's settle
-/// pacing (R19, 20-120ms per call) used to run on this same loop, and while
-/// blocked on it the kernel's per-device event queue (fixed size) filled up
-/// under fast real typing and silently dropped keys before they ever reached
-/// the engine. That is the bug this split fixes.
+/// One physical keyboard's read loop, on its OWN thread: drain `poll` +
+/// `fetch_events` and hand raw `(KeyCode, value)` pairs to `tx`. MUST NEVER
+/// block beyond the poll timeout (module docs, R20): typer pacing on this
+/// loop once overflowed the kernel's per-device queue and dropped keys.
 fn reader_loop(
     kbd: Grabbed,
     tx: mpsc::Sender<(KeyCode, i32)>,
@@ -229,6 +223,12 @@ fn reader_loop(
     while !stop.load(Ordering::Relaxed) && !dead.load(Ordering::Relaxed) {
         let mut pfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
         let n = unsafe { libc::poll(&mut pfd, 1, 200) };
+        // Unplugged: poll returns at once forever → this thread spun at 95%
+        // CPU (2026-10-28). Only THIS reader ends; other keyboards stay grabbed.
+        if n > 0 && pfd.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+            info!("evdev: {:?} đã rút — dừng reader của nó", kbd.0.name().unwrap_or("?"));
+            return;
+        }
         if n <= 0 || pfd.revents & libc::POLLIN == 0 {
             continue;
         }

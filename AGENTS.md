@@ -355,7 +355,12 @@
 ### R24b. evdev fallback: grab SONG SONG + hotplug + nhớ phím kẹt
 > - Mỗi bàn phím tự `wait_keys_clear` + grab trên reader thread của nó. Grab tuần tự làm
 >   bàn phím đã grab nằm chờ 3s (phím kẹt `STALE_KEY`) → tràn queue kernel → mất/đảo phím.
-> - `evdev_hotplug.rs`: bàn phím cắm vào khi đang grab cũng được grab.
+> - `evdev_hotplug.rs`: bàn phím cắm vào khi đang grab cũng được grab. Node bị xoá phải được
+>   QUÊN (watch DELETE): kernel tái dùng số `eventN`, bàn phím cắm lại đúng node cũ từng bị bỏ
+>   qua → gõ ra phím thô (field 2026-10-28, Chrome "a1 a1" 0/5).
+> - Bàn phím bị rút khi đang grab: `poll` trả POLLHUP/POLLERR ngay lập tức mãi mãi → reader PHẢI
+>   tự thoát (chỉ reader đó, KHÔNG set `dead`). Trước đây `continue` → thread quay 95% CPU tới khi
+>   đổi app (vi phạm R15, đẩy load máy lên → test vô hiệu).
 > - Phím kẹt lưu ở `$XDG_STATE_HOME/vi-ime/stale-keys` (test KHÔNG ghi file này).
 > - Test thực địa: `field.py` (uinput → daemon thật → app → đọc lại), nhả phím trước khi
 >   nhấn lại CHÍNH nó (kernel bỏ press thứ 2 của phím đang xuống), mở app ở workspace trống

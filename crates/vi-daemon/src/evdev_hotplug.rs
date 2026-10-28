@@ -17,10 +17,15 @@ use super::{try_grab, Grabbed};
 /// 2026-10-24 by a field test whose uinput keyboard appeared after the
 /// grab). Watch /dev/input and hand every new keyboard to `spawn`. Blocking
 /// poll with the readers' 200ms cadence — zero CPU while idle (R15).
+///
+/// A removed node is forgotten: the kernel reuses `eventN` numbers, and a
+/// keyboard that reconnected on its old node used to be skipped as "already
+/// seen" — field test 2026-10-28: the second test keyboard reappeared as
+/// event16, was never grabbed, and Chrome got raw "a1 a1" (0/5).
 pub(super) fn watch_hotplug(stop: &AtomicBool, dead: &AtomicBool, spawn: &dyn Fn(Grabbed)) {
-    use inotify::{Inotify, WatchMask};
+    use inotify::{EventMask, Inotify, WatchMask};
     let Ok(mut ino) = Inotify::init() else { return };
-    if ino.watches().add("/dev/input", WatchMask::CREATE | WatchMask::ATTRIB).is_err() {
+    if ino.watches().add("/dev/input", WatchMask::CREATE | WatchMask::ATTRIB | WatchMask::DELETE).is_err() {
         return;
     }
     let fd = ino.as_raw_fd();
@@ -33,12 +38,19 @@ pub(super) fn watch_hotplug(stop: &AtomicBool, dead: &AtomicBool, spawn: &dyn Fn
             continue;
         }
         let Ok(events) = ino.read_events(&mut buf) else { continue };
-        let names: Vec<String> = events
-            .filter_map(|ev| ev.name.map(|n| n.to_string_lossy().into_owned()))
-            .filter(|n| n.starts_with("event"))
+        let names: Vec<(String, bool)> = events
+            .filter_map(|ev| {
+                let gone = ev.mask.contains(EventMask::DELETE);
+                ev.name.map(|n| (n.to_string_lossy().into_owned(), gone))
+            })
+            .filter(|(n, _)| n.starts_with("event"))
             .collect();
-        for name in names {
+        for (name, gone) in names {
             let path = std::path::Path::new("/dev/input").join(&name);
+            if gone {
+                seen.remove(&path);
+                continue;
+            }
             if seen.contains(&path) {
                 continue;
             }
