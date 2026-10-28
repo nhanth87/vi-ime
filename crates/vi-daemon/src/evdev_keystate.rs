@@ -29,7 +29,44 @@ pub(crate) const STALE_KEY: Duration = Duration::from_secs(3);
 /// Keys already confirmed stale per device path, so the NEXT engage on the
 /// same stuck key is instant instead of re-paying `STALE_KEY` on every focus
 /// change into an XWayland app.
-static KNOWN_STALE: Mutex<Vec<(String, KeyCode)>> = Mutex::new(Vec::new());
+/// Persisted (`$XDG_STATE_HOME/vi-ime/stale-keys`, "device\tcode" lines):
+/// a key stuck in the kernel stays stuck across daemon restarts, and without
+/// the file the first engage after every restart paid `STALE_KEY` again
+/// (field 2026-10-24: `KEY_KP0`, 3s of raw English after focusing Chrome).
+static KNOWN_STALE: std::sync::LazyLock<Mutex<Vec<(String, KeyCode)>>> =
+    std::sync::LazyLock::new(|| Mutex::new(load_stale()));
+
+fn stale_file() -> Option<std::path::PathBuf> {
+    // Unit tests exercise remember_stale — never touch the real state dir.
+    if cfg!(test) {
+        return None;
+    }
+    let base = std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state")))?;
+    Some(base.join("vi-ime/stale-keys"))
+}
+
+fn load_stale() -> Vec<(String, KeyCode)> {
+    let Some(text) = stale_file().and_then(|p| std::fs::read_to_string(p).ok()) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|l| {
+            let (dev, code) = l.split_once('\t')?;
+            Some((dev.to_string(), KeyCode::new(code.trim().parse().ok()?)))
+        })
+        .collect()
+}
+
+fn save_stale(v: &[(String, KeyCode)]) {
+    let Some(path) = stale_file() else { return };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let text: String = v.iter().map(|(d, k)| format!("{d}\t{}\n", k.code())).collect();
+    let _ = std::fs::write(path, text);
+}
 
 /// Ctrl/Alt/Super/Shift — keys that must always be waited out.
 pub(crate) fn is_modifier(code: KeyCode) -> bool {
@@ -95,8 +132,12 @@ pub(crate) fn known_stale(device: &str) -> Vec<KeyCode> {
 /// Replace the remembered stale keys for `device`.
 pub(crate) fn remember_stale(device: &str, keys: &[KeyCode]) {
     if let Ok(mut v) = KNOWN_STALE.lock() {
+        let before = v.clone();
         v.retain(|(d, _)| d != device);
         v.extend(keys.iter().map(|&k| (device.to_string(), k)));
+        if *v != before {
+            save_stale(&v);
+        }
     }
 }
 

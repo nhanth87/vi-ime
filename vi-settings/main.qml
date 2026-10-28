@@ -1,397 +1,1106 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
-// main.qml — vi-settings: ONE small, self-contained, centered window.
+// main.qml — vi-settings: the vi-im configuration window (fcitx5-configtool
+// style: category sidebar on the left, form on the right).
 //
-// Self-contained on purpose: a single file, no qrc pages, no separate IPC
-// singleton. Talks to vi-daemon over its unix socket via Quickshell.Io.Socket
-// (the machine has Quickshell.Io, NOT Quickshell.Ipc). The socket lives at
-// $XDG_RUNTIME_DIR/vi-ime/ipc.sock — the exact path the daemon binds (ipc.rs).
+// Every control applies immediately (no Apply button): an IME setting is only
+// meaningful while you type, so the change has to be live. State comes from
+// the daemon over IPC (Daemon.qml); controls are BOUND to it and only send
+// requests, so changes from the tray/CLI show up here too.
 // Title is kept stable ("vi-im Settings") so the Rust launcher can float +
 // center it over compositor IPC.
 
 import Quickshell
-import Quickshell.Io
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 FloatingWindow {
     id: win
     title: "vi-im Settings"
     objectName: "vi-im-settings"
-    implicitWidth: 540
-    implicitHeight: 420
-    minimumSize: Qt.size(480, 420)
-    maximumSize: Qt.size(720, 620)
+    implicitWidth: 820
+    implicitHeight: 580
+    minimumSize: Qt.size(720, 500)
     visible: true
-    color: "#1a1b26"
-    
-    // Thêm bo góc viền nhẹ cho toàn bộ cửa sổ (tùy thuộc vào compositor hỗ trợ)
-    // Nếu dùng compositor có bo góc tự động, bạn có thể bỏ qua.
+    color: Theme.window
 
-    // ── Reactive daemon state ─────────────────────────────────────
-    property string inputMethod: "Telex"
-    property string toneStyle:   "classic"
-    property string imeMode:     "Hybrid"
-    property bool   enabled:     true
-    property var    appList:     []
-    property bool   connected:   false
-
-    // ── Daemon IPC over the unix socket ───────────────────────────
-    property var _pending: []
-
-    function send(obj, cb) {
-        if (!sock.connected) return
-        if (cb) _pending.push(cb)
-        sock.write(JSON.stringify(obj) + "\n")
-    }
-    function setConfig(u)      { send(Object.assign({ cmd: "set_config" }, u),
-                                      function (r) { if (r && r.reload) refreshState() }) }
-    function addApp(id, m)     { send({ cmd: "add_app", app_id: id, method: m || "", ime_mode: "" },
-                                      function (r) { if (r && r.reload) refreshApps() }) }
-    function removeApp(id)     { send({ cmd: "remove_app", app_id: id },
-                                      function (r) { if (r && r.reload) refreshApps() }) }
-    function refreshState()    { send({ cmd: "get_config" }, function (r) {
-        if (!r || r.error) return
-        if (r.input_method) win.inputMethod = r.input_method
-        if (r.tone_style)   win.toneStyle   = r.tone_style
-        if (r.ime_mode)     win.imeMode     = r.ime_mode
-        if (r.enabled !== undefined) win.enabled = r.enabled
-    }) }
-    function refreshApps()     { send({ cmd: "list_apps" }, function (r) {
-        if (r && !r.error) win.appList = r.apps || []
-    }) }
-
-    Socket {
-        id: sock
-        path: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/vi-ime/ipc.sock"
-        connected: true
-        parser: SplitParser {
-            splitMarker: "\n"
-            onRead: function (line) {
-                var resp
-                try { resp = JSON.parse(line) } catch (e) { return }
-                if (win._pending.length > 0) {
-                    var cb = win._pending.shift()
-                    try { cb(resp) } catch (e) {}
-                }
-            }
-        }
-        onConnectedChanged: {
-            win.connected = connected
-            if (connected) { win.refreshState(); win.refreshApps() }
-        }
+    Daemon {
+        id: daemon
+        onSaved: savedNote.flash()
+        onFailed: function (msg) { banner.show(msg) }
     }
 
-    // Đồng bộ định kỳ: đổi config từ TRAY/CLI khi cửa sổ đang mở cũng
-    // nhảy theo trong GUI (2s một lần, chỉ khi còn kết nối).
-    Timer {
-        interval: 2000; repeat: true; running: win.connected
-        onTriggered: win.refreshState()
+    property int page: 0
+    readonly property var pages: [
+        { title: "Kiểu gõ",      subtitle: "Phương thức, dấu thanh, cách hiện chữ." },
+        { title: "Ứng dụng",     subtitle: "Cấu hình riêng cho từng ứng dụng." },
+        { title: "Gõ tắt",       subtitle: "Từ khóa ngắn → cả cụm từ." },
+        { title: "Phím tắt",     subtitle: "Tổ hợp phím → hành động." },
+        { title: "Giới thiệu",   subtitle: "Phiên bản, cấu hình và lệnh." }
+    ]
+
+    readonly property var methodModel: [
+        { value: "Telex", label: "Telex" },
+        { value: "VNI",   label: "VNI" },
+        { value: "Tự do", label: "Tự do" }
+    ]
+
+    // Keystrokes → result for the live preview. "Tự do" deliberately mixes a
+    // Telex word and a VNI word: that is the whole point of the mode.
+    function sample(method, tone) {
+        var hoa = tone === "modern" ? "hoà" : "hòa"
+        if (method === "VNI")
+            return [{ keys: "tie6ng1", word: "tiếng" }, { keys: "vie6t5", word: "việt" },
+                    { keys: "hoa2", word: hoa }]
+        if (method === "Tự do")
+            return [{ keys: "tieengs", word: "tiếng" }, { keys: "vie6t5", word: "việt" },
+                    { keys: "hoaf", word: hoa }]
+        return [{ keys: "tieengs", word: "tiếng" }, { keys: "vieetj", word: "việt" },
+                { keys: "hoaf", word: hoa }]
     }
 
-    // ── Small reusable pill button ────────────────────────────────
-    // LƯU Ý: màu phải là BINDING thuần (không gán trong onEntered/onExited —
-    // gán trực tiếp sẽ cắt đứt binding `active`, dấu chọn không bao giờ
-    // nhảy theo config nữa: chính là bug "bấm mà không đổi màu").
-    component Pill: Rectangle {
+    // ── Page-local building blocks ────────────────────────────────
+
+    // Form row: label + description on the left, control on the right.
+    component SettingRow: Item {
+        id: row
         property string label
-        property bool active
-        property bool showCheck: true
-        signal clicked
-        implicitWidth: t.implicitWidth + 26
-        implicitHeight: 34
-        radius: 8
-        color: ma.containsMouse
-               ? (active ? "#7aa2f755" : "#3b4261")
-               : (active ? "#7aa2f733" : "#292e42")
-        border { color: active ? "#7aa2f7" : "#3b4261"; width: 1 }
+        property string description
+        property bool last: false
+        default property alias control: slot.data
+        Layout.fillWidth: true
+        implicitHeight: Math.max(Theme.rowHeight, texts.implicitHeight + 24)
 
-        Text {
-            id: t; anchors.centerIn: parent
-            text: (parent.active && parent.showCheck ? "✓ " : "") + parent.label
-            color: parent.active ? "#7aa2f7" : "#c0caf5"
-            font { pixelSize: 12; bold: parent.active }
-        }
-        MouseArea {
-            id: ma
-            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-            hoverEnabled: true
-            onClicked: parent.clicked()
-        }
-    }
-    
-    component Heading: Text {
-        color: "#7aa2f7"
-        font { pixelSize: 13; bold: true }
-        Layout.topMargin: 10
-    }
-
-    // ── Header ────────────────────────────────────────────────────
-    Rectangle {
-        id: header
-        anchors { top: parent.top; left: parent.left; right: parent.right }
-        height: 48; color: "#24283b"
-        
-        RowLayout {
-            anchors { fill: parent; leftMargin: 16; rightMargin: 12 }
-            spacing: 12
-            
+        ColumnLayout {
+            id: texts
+            anchors { left: parent.left; right: slot.left; rightMargin: 24
+                      verticalCenter: parent.verticalCenter }
+            spacing: 2
             Text {
-                text: "vi-im"
-                font { pixelSize: 18; bold: true }
-                color: "#7aa2f7"
+                text: row.label
+                color: Theme.ink
+                font.pixelSize: Theme.fsLabel
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
             }
-            
-            Item { Layout.fillWidth: true }
-            
-            Rectangle {
-                radius: 6; color: win.connected ? "#9ece6a22" : "#f7768e22"
-                implicitWidth: dot.implicitWidth + 18; implicitHeight: 26
-                Text { id: dot; anchors.centerIn: parent
-                    text: win.connected ? ("● " + (win.inputMethod === "Smart" ? "Tự do" : win.inputMethod)) : "● offline"
-                    color: win.connected ? "#9ece6a" : "#f7768e"; font.pixelSize: 12 }
+            Text {
+                visible: row.description !== ""
+                text: row.description
+                color: Theme.muted
+                font.pixelSize: Theme.fsSmall
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                lineHeight: 1.15
             }
-            
-            // ── Nút Hide / Đóng cửa sổ (Daemon vẫn chạy) ──
-            Rectangle {
-                Layout.alignment: Qt.AlignVCenter
-                width: 28; height: 28; radius: 6
-                color: closeMouseArea.containsMouse ? "#f7768e33" : "transparent"
-                
-                Text { 
-                    anchors.centerIn: parent; text: "✕"
-                    color: closeMouseArea.containsMouse ? "#f7768e" : "#565f89"
-                    font { pixelSize: 16; bold: true } 
-                }
-                MouseArea {
-                    id: closeMouseArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        // Thoát hẳn process. Chỉ ẩn (visible=false) sẽ để
-                        // quickshell sống mãi giữ single-instance lock —
-                        // lần mở sau bị "already running" và không lên.
-                        Qt.quit();
+        }
+        Item {
+            id: slot
+            anchors { right: parent.right; verticalCenter: parent.verticalCenter }
+            width: childrenRect.width
+            height: childrenRect.height
+        }
+        Rectangle {
+            visible: !row.last
+            anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+            height: 1
+            color: Theme.line
+        }
+    }
+
+    component SectionTitle: Text {
+        color: Theme.ink
+        font { pixelSize: Theme.fsLabel; weight: Font.DemiBold }
+        Layout.topMargin: 22
+        Layout.bottomMargin: 2
+    }
+
+    // A pressed key, as on the keyboard.
+    component Keycap: Rectangle {
+        property string glyph
+        property bool lit: true
+        width: Math.max(22, k.implicitWidth + 12)
+        height: 26
+        radius: 5
+        color: Theme.raised
+        border { width: 1; color: Theme.line }
+        opacity: lit ? 1 : 0.0
+        Behavior on opacity { NumberAnimation { duration: 90 } }
+        Rectangle {   // bottom edge: the key's depth
+            anchors { left: parent.left; right: parent.right; bottom: parent.bottom
+                      leftMargin: 1; rightMargin: 1; bottomMargin: 1 }
+            height: 2; radius: 2
+            color: Theme.line
+        }
+        Text {
+            id: k
+            anchors.centerIn: parent
+            anchors.verticalCenterOffset: -1
+            text: parent.glyph
+            color: Theme.ink
+            font.pixelSize: Theme.fsBody
+        }
+    }
+
+    // ── Layout: sidebar | content ─────────────────────────────────
+    RowLayout {
+        anchors.fill: parent
+        spacing: 0
+
+        // ── Sidebar ───────────────────────────────────────────────
+        Rectangle {
+            Layout.preferredWidth: 220
+            Layout.fillHeight: true
+            color: Theme.sidebar
+
+            ColumnLayout {
+                anchors { fill: parent; margins: 16; topMargin: 20 }
+                spacing: 0
+
+                RowLayout {
+                    spacing: 12
+                    Logo { size: 36; on: daemon.imeEnabled || !daemon.connected }
+                    ColumnLayout {
+                        spacing: 1
+                        Text { text: "vi-im"; color: Theme.ink
+                               font { pixelSize: 16; weight: Font.DemiBold } }
+                        RowLayout {
+                            spacing: 6
+                            Rectangle { width: 7; height: 7; radius: 4
+                                        color: daemon.connected ? Theme.ok : Theme.off }
+                            Text {
+                                text: daemon.connected ? "Bộ gõ đang chạy" : "Không thấy bộ gõ"
+                                color: Theme.muted; font.pixelSize: Theme.fsSmall
+                            }
+                        }
                     }
                 }
-            }
-        }
-    }
 
-    TabBar {
-        id: tabs
-        anchors { top: header.bottom; left: parent.left; right: parent.right }
-        background: Rectangle { color: "#1f2335" }
-        TabButton { text: "Chung";     width: implicitWidth + 24 }
-        TabButton { text: "Ứng dụng";  width: implicitWidth + 24 }
-        TabButton { text: "Phím tắt";  width: implicitWidth + 24 }
-    }
-
-    StackLayout {
-        anchors { top: tabs.bottom; left: parent.left; right: parent.right; bottom: parent.bottom
-                  margins: 20 } // Nới margin một chút cho thanh thoát
-        currentIndex: tabs.currentIndex
-
-        // ── Tab 1: Chung ─────────────────────────────────────────
-        ColumnLayout {
-            spacing: 12
-            Heading { text: "Kiểu gõ" }
-            RowLayout { spacing: 8
-                Repeater { model: [ "Telex", "VNI", "Tự do" ]
-                    Pill { label: modelData; active: win.inputMethod === modelData
-                           onClicked: win.setConfig({ input_method: modelData }) } }
-            }
-            Heading { text: "Kiểu bỏ dấu" }
-            RowLayout { spacing: 8
-                Pill { label: "Kiểu cũ (hòa)";  active: win.toneStyle === "classic"
-                       onClicked: win.setConfig({ tone_style: "classic" }) }
-                Pill { label: "Kiểu mới (hoà)"; active: win.toneStyle === "modern"
-                       onClicked: win.setConfig({ tone_style: "modern" }) }
-            }
-            Heading { text: "Chế độ hiển thị" }
-            RowLayout { spacing: 8
-                Pill { label: "Preedit (gạch chân khi gõ)"
-                       active: win.imeMode === "Preedit"
-                       onClicked: win.setConfig({ ime_mode: "Preedit" }) }
-                Pill { label: "NonPreedit (gõ thẳng, kiểu cổ điển)"
-                       active: win.imeMode === "NonPreedit"
-                       onClicked: win.setConfig({ ime_mode: "NonPreedit" }) }
-            }
-            Heading { text: "Trạng thái" }
-            RowLayout { spacing: 10
-                Switch {
-                    // checked là BINDING thuần theo win.enabled (read-only).
-                    // User gạt -> gửi lệnh setConfig. Trạng thái thực quay về
-                    // qua refreshState() (timer 2s hoặc onConnectedChanged).
-                    // KHÔNG gán lại checked ở đây — sẽ phá vỡ binding!
-                    checked: win.enabled
-                    onToggled: { win.setConfig({ enabled: checked }) }
-                }
-                Text { text: win.enabled ? "🟢 Đang hoạt động" : "🔴 Đã tắt"
-                       color: win.enabled ? "#9ece6a" : "#f7768e"
-                       font { pixelSize: 13; bold: true }
-                       Layout.alignment: Qt.AlignVCenter }
-            }
-            Item { Layout.fillHeight: true }
-        }
-
-        // ── Tab 2: Ứng dụng ──────────────────────────────────────
-        ColumnLayout {
-            spacing: 16 // Tăng khoảng cách để thoáng giao diện
-            
-            Text { 
-                text: "Cấu hình kiểu gõ riêng cho từng ứng dụng. Bỏ trống sẽ dùng thiết lập mặc định."
-                color: "#a9b1d6"; font.pixelSize: 13; Layout.fillWidth: true; wrapMode: Text.WordWrap 
-            }
-            
-            // Hàng nhập liệu: Căn bằng chiều cao và chia layout hợp lý
-            RowLayout { 
-                Layout.fillWidth: true; spacing: 10
-                
-                TextField { 
-                    id: newId
+                // Master switch: the one thing people come here to flip.
+                Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 36 // Chiều cao đồng bộ
-                    placeholderText: "Tên app (vd: firefox)"
-                    placeholderTextColor: "#565f89"
-                    color: "#c0caf5"; font.pixelSize: 13
-                    verticalAlignment: TextInput.AlignVCenter // Chữ căn giữa dọc
-                    background: Rectangle { 
-                        radius: 6; color: "#292e42"
-                        border { color: newId.activeFocus ? "#7aa2f7" : "#3b4261" } 
-                    } 
-                }
-                
-                ComboBox { 
-                    id: newMethod
-                    model: [ "Mặc định", "Telex", "VNI", "Tự do" ]
-                    Layout.preferredWidth: 110
-                    Layout.preferredHeight: 36
-                    contentItem: Text { 
-                        text: newMethod.currentText; color: "#9ece6a"
-                        font.pixelSize: 13; leftPadding: 10; 
-                        verticalAlignment: Text.AlignVCenter 
+                    Layout.topMargin: 18
+                    implicitHeight: 52
+                    radius: Theme.radius + 2
+                    color: Theme.surface
+                    border { width: 1; color: Theme.line }
+                    RowLayout {
+                        anchors { fill: parent; leftMargin: 12; rightMargin: 12 }
+                        ColumnLayout {
+                            spacing: 0
+                            Text { text: "Gõ tiếng Việt"; color: Theme.ink; font.pixelSize: Theme.fsBody }
+                            Text {
+                                text: daemon.imeEnabled ? daemon.inputMethod : "Đang gõ tiếng Anh"
+                                color: daemon.imeEnabled ? Theme.muted : Theme.off
+                                font.pixelSize: Theme.fsSmall
+                            }
+                        }
+                        Item { Layout.fillWidth: true }
+                        VSwitch {
+                            checked: daemon.imeEnabled
+                            enabled: daemon.connected
+                            accessibleName: "Gõ tiếng Việt"
+                            onToggled: function (next) { daemon.setConfig({ enabled: next }) }
+                        }
                     }
-                    background: Rectangle {
-                        radius: 6; color: "#292e42"
-                        border { color: "#3b4261" }
+                }
+
+                // Category navigation.
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 18
+                    spacing: 2
+                    Repeater {
+                        model: win.pages
+                        delegate: Rectangle {
+                            id: nav
+                            required property var modelData
+                            required property int index
+                            readonly property bool current: win.page === index
+                            Layout.fillWidth: true
+                            implicitHeight: 34
+                            radius: Theme.radius
+                            color: current ? Theme.accentSoft : (navMa.containsMouse ? Theme.hover : "transparent")
+                            activeFocusOnTab: true
+                            Accessible.role: Accessible.PageTab
+                            Accessible.name: modelData.title
+                            Keys.onReturnPressed: win.page = index
+                            Keys.onSpacePressed: win.page = index
+                            Keys.onUpPressed: nextItemInFocusChain(false).forceActiveFocus()
+                            Keys.onDownPressed: nextItemInFocusChain(true).forceActiveFocus()
+
+                            Rectangle {   // selection bar
+                                visible: nav.current
+                                anchors { left: parent.left; verticalCenter: parent.verticalCenter }
+                                width: 3; height: 16; radius: 2
+                                color: Theme.accent
+                            }
+                            Text {
+                                anchors { left: parent.left; leftMargin: 14; verticalCenter: parent.verticalCenter }
+                                text: nav.modelData.title
+                                color: nav.current ? Theme.ink : Theme.muted
+                                font { pixelSize: Theme.fsBody; weight: nav.current ? Font.DemiBold : Font.Normal }
+                            }
+                            Rectangle {
+                                anchors { fill: parent; margins: -2 }
+                                radius: Theme.radius + 2
+                                color: "transparent"
+                                border { width: 2; color: Theme.accent }
+                                visible: nav.activeFocus
+                            }
+                            MouseArea {
+                                id: navMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: win.page = nav.index
+                            }
+                        }
                     }
                 }
-                
-                Pill { 
-                    label: "+ Thêm"
-                    active: true
-                    implicitHeight: 36 // Đồng bộ với Textfield và Combobox
-                    onClicked: { 
-                        var id = newId.text.trim(); if (id === "") return
-                        var m = newMethod.currentText; if (m === "Mặc định") m = ""
-                        win.addApp(id, m); newId.text = "" 
-                    } 
+
+                Item { Layout.fillHeight: true }
+
+                Text {
+                    text: daemon.version ? "Phiên bản " + daemon.version : ""
+                    color: Theme.faint
+                    font.pixelSize: Theme.fsSmall
                 }
             }
-            
-            ListView { 
-                id: apps
-                Layout.fillWidth: true; Layout.fillHeight: true
-                clip: true; model: win.appList; spacing: 6
-                
-                delegate: Rectangle {
-                    width: ListView.view.width; height: 54
-                    color: index % 2 ? "#1f2335" : "#1a1b26" // Màu nền xen kẽ mịn hơn
-                    radius: 8
-                    border.color: "#24283b"; border.width: 1
-                    
-                    RowLayout {
-                        anchors { fill: parent; leftMargin: 16; rightMargin: 12 }
-                        spacing: 12
-                        
-                        Text { 
-                            text: modelData.icon || "📱"
-                            font.pixelSize: 18 
-                            Layout.alignment: Qt.AlignVCenter
-                            Layout.preferredWidth: 26 // Cố định chiều rộng để text bên cạnh thẳng hàng
-                            horizontalAlignment: Text.AlignHCenter
-                        }
-                        
-                        ColumnLayout { 
-                            spacing: 2; Layout.fillWidth: true
-                            Layout.alignment: Qt.AlignVCenter
-                            Text { 
-                                text: modelData.app_name || modelData.app_id
-                                color: "#c0caf5"; font.pixelSize: 14; font.bold: true 
-                            }
-                            Text { 
-                                text: modelData.app_id; 
-                                color: "#565f89"; font.pixelSize: 11 
-                            } 
-                        }
-                        
-                        // Badge (Thẻ) hiển thị kiểu gõ cho đẹp
-                        Rectangle {
-                            Layout.alignment: Qt.AlignVCenter
-                            color: "#9ece6a1a" // Nền xanh mờ
-                            border.color: "#9ece6a4d"
-                            border.width: 1
-                            radius: 6
-                            implicitWidth: methodText.implicitWidth + 16
-                            implicitHeight: 26
-                            Text { 
-                                id: methodText
-                                anchors.centerIn: parent
-                                text: modelData.method || "Mặc định"
-                                color: "#9ece6a"; font.pixelSize: 12; font.bold: true
-                            }
-                        }
-                        
-                        // Nút Xóa
-                        Rectangle {
-                            Layout.alignment: Qt.AlignVCenter
-                            width: 28; height: 28; radius: 6; color: "transparent"
-                            Text { anchors.centerIn: parent; text: "✕"; color: "#f7768e"; font.pixelSize: 14 }
-                            MouseArea { 
-                                anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                onEntered: parent.color = "#f7768e22"
-                                onExited: parent.color = "transparent"
-                                onClicked: win.removeApp(modelData.app_id) 
-                            }
-                        }
-                    }
-                }
+            Rectangle {
+                anchors { top: parent.top; bottom: parent.bottom; right: parent.right }
+                width: 1
+                color: Theme.line
             }
         }
 
+        // ── Content ───────────────────────────────────────────────
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            color: Theme.surface
 
-        // ── Tab 3: Phím tắt ──────────────────────────────────────
-        ColumnLayout {
-            spacing: 12
-            Text { text: "Phím tắt điều khiển nhanh cho vi-im."; color: "#a9b1d6"
-                   font.pixelSize: 13; Layout.fillWidth: true }
-            Repeater {
-                model: [
-                    { label: "Bật/Tắt Game Mode", key: "Ctrl+Shift+G", desc: "Passthrough phím thô khi chơi game", live: true },
-                    { label: "Đổi kiểu gõ (Telex ↔ VNI)", key: "vi-daemon --switch", desc: "Hiện chạy qua CLI (chưa gắn hotkey)", live: false },
-                    { label: "Bật/Tắt IME", key: "vi-daemon --toggle", desc: "Hiện chạy qua CLI (chưa gắn hotkey)", live: false }
-                ]
-                delegate: Rectangle {
-                    Layout.fillWidth: true; height: 64; radius: 8
-                    color: "#292e42"; border { color: "#3b4261"; width: 1 }
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: 0
+
+                // Page header.
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 32
+                    Layout.rightMargin: 24
+                    Layout.topMargin: 24
+                    ColumnLayout {
+                        spacing: 4
+                        Text { text: win.pages[win.page].title; color: Theme.ink
+                               font { pixelSize: Theme.fsTitle; weight: Font.DemiBold } }
+                        Text { text: win.pages[win.page].subtitle; color: Theme.muted
+                               font.pixelSize: Theme.fsBody }
+                    }
+                    Item { Layout.fillWidth: true }
+                    Text {
+                        id: savedNote
+                        text: "Đã lưu"
+                        color: Theme.ok
+                        font.pixelSize: Theme.fsSmall
+                        opacity: 0
+                        Layout.alignment: Qt.AlignTop
+                        function flash() { fade.restart() }
+                        SequentialAnimation {
+                            id: fade
+                            NumberAnimation { target: savedNote; property: "opacity"; to: 1; duration: 80 }
+                            PauseAnimation { duration: 1100 }
+                            NumberAnimation { target: savedNote; property: "opacity"; to: 0; duration: 400 }
+                        }
+                    }
+                }
+
+                // Error / offline banner.
+                Rectangle {
+                    id: banner
+                    property string message: ""
+                    function show(m) { message = m; hideTimer.restart() }
+                    readonly property bool offline: !daemon.connected
+                    visible: offline || message !== ""
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 32
+                    Layout.rightMargin: 24
+                    Layout.topMargin: 16
+                    implicitHeight: bannerRow.implicitHeight + 20
+                    radius: Theme.radius
+                    color: Theme.offSoft
+                    Timer { id: hideTimer; interval: 5000; onTriggered: banner.message = "" }
                     RowLayout {
-                        anchors { fill: parent; leftMargin: 16; rightMargin: 16 }
-                        spacing: 12
-                        ColumnLayout { Layout.fillWidth: true; spacing: 4
-                            Text { text: modelData.label; color: "#c0caf5"; font { pixelSize: 14; bold: true } }
-                            Text { text: modelData.desc; color: "#565f89"; font.pixelSize: 12 } }
-                        Rectangle { radius: 6; color: "#1a1b26"
-                            implicitWidth: kt.implicitWidth + 24; implicitHeight: 30
-                            Text { id: kt; anchors.centerIn: parent; text: modelData.key
-                                   color: modelData.live ? "#9ece6a" : "#e0af68"
-                                   font { pixelSize: 12; bold: true } } }
+                        id: bannerRow
+                        anchors { fill: parent; leftMargin: 14; rightMargin: 10 }
+                        Text {
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            color: Theme.ink
+                            font.pixelSize: Theme.fsBody
+                            text: banner.offline
+                                  ? "Không kết nối được vi-ime. Hãy chạy vi-ime (hoặc AppImage) rồi bấm Kết nối lại."
+                                  : banner.message
+                        }
+                        VButton {
+                            visible: banner.offline
+                            text: "Kết nối lại"
+                            onClicked: daemon.reconnect()
+                        }
+                    }
+                }
+
+                StackLayout {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.topMargin: 8
+                    currentIndex: win.page
+                    enabled: daemon.loaded
+
+                    // ── 1. Kiểu gõ ─────────────────────────────────
+                    Flickable {
+                        contentHeight: typingCol.implicitHeight + 32
+                        clip: true
+                        boundsBehavior: Flickable.StopAtBounds
+                        ScrollBar.vertical: ScrollBar {}
+
+                        ColumnLayout {
+                            id: typingCol
+                            width: parent.width - 56
+                            x: 32
+                            spacing: 0
+
+                            // Live preview: what your keystrokes become.
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.topMargin: 12
+                                implicitHeight: previewCol.implicitHeight + 28
+                                radius: Theme.radius + 2
+                                color: Theme.field
+                                border { width: 1; color: Theme.line }
+
+                                ColumnLayout {
+                                    id: previewCol
+                                    anchors { fill: parent; margins: 14; leftMargin: 18 }
+                                    spacing: 10
+                                    Repeater {
+                                        id: samples
+                                        model: win.sample(daemon.inputMethod, daemon.toneStyle)
+                                        delegate: RowLayout {
+                                            id: sampleRow
+                                            required property var modelData
+                                            required property int index
+                                            spacing: 4
+                                            // Keys appear one by one after a change,
+                                            // then the composed word lands.
+                                            property int shown: modelData.keys.length
+                                            Component.onCompleted: typeIn.restart()
+                                            NumberAnimation on shown {
+                                                id: typeIn
+                                                running: false
+                                                from: 0; to: sampleRow.modelData.keys.length
+                                                duration: 55 * sampleRow.modelData.keys.length + sampleRow.index * 90
+                                            }
+                                            Repeater {
+                                                model: sampleRow.modelData.keys.split("")
+                                                delegate: Keycap {
+                                                    required property string modelData
+                                                    required property int index
+                                                    glyph: modelData
+                                                    lit: index < sampleRow.shown
+                                                }
+                                            }
+                                            Text {
+                                                text: "→"
+                                                color: Theme.faint
+                                                font.pixelSize: Theme.fsLabel
+                                                Layout.leftMargin: 8
+                                                Layout.rightMargin: 8
+                                            }
+                                            Text {
+                                                text: sampleRow.modelData.word
+                                                color: Theme.ink
+                                                font { pixelSize: 18; weight: Font.DemiBold }
+                                                opacity: sampleRow.shown >= sampleRow.modelData.keys.length ? 1 : 0
+                                                Behavior on opacity { NumberAnimation { duration: 120 } }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            SectionTitle { text: "Bộ gõ" }
+                            SettingRow {
+                                label: "Kiểu gõ"
+                                description: daemon.inputMethod === "VNI"
+                                             ? "Dùng phím số: 6 cho mũ, 7 cho móc, 8 cho trăng, 1–5 cho dấu thanh."
+                                             : daemon.inputMethod === "Tự do"
+                                               ? "Nhận cả phím Telex lẫn phím số VNI, trộn được trong cùng một từ."
+                                               : "Dùng chữ cái: aa → â, ow → ơ, dd → đ; s f r x j cho dấu thanh."
+                                Segmented {
+                                    model: win.methodModel
+                                    current: daemon.inputMethod
+                                    segmentWidth: 72
+                                    onPicked: function (v) { daemon.setConfig({ input_method: v }) }
+                                }
+                            }
+                            SettingRow {
+                                label: "Vị trí dấu"
+                                description: "Kiểu cũ đặt dấu như sách báo quen dùng; kiểu mới đặt trên nguyên âm chính."
+                                Segmented {
+                                    model: [{ value: "classic", label: "hòa, thúy" },
+                                            { value: "modern",  label: "hoà, thuý" }]
+                                    current: daemon.toneStyle
+                                    onPicked: function (v) { daemon.setConfig({ tone_style: v }) }
+                                }
+                            }
+                            SettingRow {
+                                label: "Bỏ dấu tự do"
+                                description: "Gõ dấu thanh ở cuối từ hay ngay sau nguyên âm đều cho cùng kết quả."
+                                last: true
+                                VSwitch {
+                                    checked: daemon.freeTone
+                                    accessibleName: "Bỏ dấu tự do"
+                                    onToggled: function (next) { daemon.setConfig({ free_tone_placement: next }) }
+                                }
+                            }
+
+                            SectionTitle { text: "Hiển thị" }
+                            SettingRow {
+                                label: "Khi đang gõ"
+                                description: "Gạch chân cho thấy chữ đang ghép. Gõ thẳng chèn chữ trực tiếp như bộ gõ cổ điển, hợp với terminal và trình duyệt."
+                                last: true
+                                Segmented {
+                                    model: [{ value: "Preedit",    label: "Gạch chân" },
+                                            { value: "NonPreedit", label: "Gõ thẳng" }]
+                                    current: daemon.imeMode
+                                    onPicked: function (v) { daemon.setConfig({ ime_mode: v }) }
+                                }
+                            }
+
+                            SectionTitle { text: "Thông minh" }
+                            SettingRow {
+                                label: "Tự nhận ra tiếng Anh"
+                                description: "Giữ nguyên các từ như test, class, window thay vì biến thành từ có dấu."
+                                VSwitch {
+                                    checked: daemon.autoEnglish
+                                    accessibleName: "Tự nhận ra tiếng Anh"
+                                    onToggled: function (next) { daemon.setConfig({ auto_detect_lang: next }) }
+                                }
+                            }
+                            SettingRow {
+                                label: "Biểu tượng cảm xúc"
+                                description: "Gõ :) hoặc :smile: rồi dấu cách để ra 🙂."
+                                VSwitch {
+                                    checked: daemon.emoji
+                                    accessibleName: "Biểu tượng cảm xúc"
+                                    onToggled: function (next) { daemon.setConfig({ emoji: next }) }
+                                }
+                            }
+                            SettingRow {
+                                label: "Gợi ý từ"
+                                description: "Học cách bạn gõ để gợi ý từ đang gõ và từ tiếp theo. Nhấn Alt+1, Alt+2, Alt+3 để chọn. Chỉ lưu trên máy này."
+                                VSwitch {
+                                    checked: daemon.predict
+                                    accessibleName: "Gợi ý từ"
+                                    onToggled: function (next) { daemon.setConfig({ predict: next }) }
+                                }
+                            }
+                            SettingRow {
+                                label: "Dữ liệu gợi ý đã học"
+                                description: "Xóa mọi từ vi-ime đã học từ cách bạn gõ. Không hoàn tác được."
+                                VButton {
+                                    id: clearPredictBtn
+                                    property bool armed: false
+                                    kind: "ghost"
+                                    text: armed ? "Bấm lần nữa để xóa" : "Xóa dữ liệu học"
+                                    onClicked: {
+                                        if (!armed) { armed = true; disarm.restart(); return }
+                                        armed = false
+                                        daemon.clearPredict()
+                                    }
+                                    Timer { id: disarm; interval: 3000; onTriggered: clearPredictBtn.armed = false }
+                                }
+                            }
+                            SettingRow {
+                                label: "Bảng mã"
+                                description: "Dựng sẵn hợp với hầu hết ứng dụng. Chỉ chọn tổ hợp khi phần mềm yêu cầu."
+                                last: true
+                                VCombo {
+                                    implicitWidth: 200
+                                    model: [{ value: "unicodedungsan", label: "Unicode dựng sẵn" },
+                                            { value: "unicodetohop",   label: "Unicode tổ hợp" }]
+                                    current: daemon.outputMode
+                                    onPicked: function (v) { daemon.setConfig({ output_mode: v }) }
+                                }
+                            }
+                        }
+                    }
+
+                    // ── 2. Ứng dụng ────────────────────────────────
+                    ColumnLayout {
+                        spacing: 0
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 32
+                            Layout.rightMargin: 24
+                            spacing: 0
+
+                            SettingRow {
+                                label: "Dùng cấu hình riêng"
+                                description: "Tắt để mọi ứng dụng dùng chung thiết lập ở trang Kiểu gõ."
+                                VSwitch {
+                                    checked: daemon.perApp
+                                    accessibleName: "Dùng cấu hình riêng"
+                                    onToggled: function (next) { daemon.setConfig({ enable_per_app: next }) }
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Layout.topMargin: 16
+                                spacing: 8
+                                VField {
+                                    id: newApp
+                                    Layout.fillWidth: true
+                                    placeholderText: "Mã ứng dụng, ví dụ firefox hoặc org.libreoffice.LibreOffice"
+                                    onAccepted: addAppBtn.clicked()
+                                }
+                                VButton {
+                                    id: addAppBtn
+                                    kind: "primary"
+                                    text: "Thêm ứng dụng"
+                                    enabled: newApp.text.trim() !== ""
+                                    onClicked: {
+                                        var id = newApp.text.trim()
+                                        if (id === "") return
+                                        daemon.setApp(id, "", "", true, null)
+                                        newApp.text = ""
+                                    }
+                                }
+                            }
+
+                            // Column header.
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Layout.topMargin: 18
+                                visible: daemon.apps.length > 0
+                                spacing: 10
+                                Text { text: "Ứng dụng"; color: Theme.muted; font.pixelSize: Theme.fsSmall
+                                       Layout.fillWidth: true; Layout.leftMargin: 44 }
+                                Text { text: "Kiểu gõ"; color: Theme.muted; font.pixelSize: Theme.fsSmall
+                                       Layout.preferredWidth: 118 }
+                                Text { text: "Hiển thị"; color: Theme.muted; font.pixelSize: Theme.fsSmall
+                                       Layout.preferredWidth: 118 }
+                                Text { text: "Tiếng Việt"; color: Theme.muted; font.pixelSize: Theme.fsSmall
+                                       Layout.preferredWidth: 64 }
+                                Item { Layout.preferredWidth: 30 }
+                            }
+                        }
+
+                        ListView {
+                            id: appList
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.leftMargin: 32
+                            Layout.rightMargin: 24
+                            Layout.topMargin: 6
+                            clip: true
+                            model: daemon.apps
+                            opacity: daemon.perApp ? 1 : 0.5
+                            boundsBehavior: Flickable.StopAtBounds
+                            ScrollBar.vertical: ScrollBar {}
+
+                            delegate: Item {
+                                id: appRow
+                                required property var modelData
+                                width: ListView.view.width
+                                height: 92
+                                readonly property string methodValue:
+                                    modelData.method === "Mặc định" ? "" : modelData.method
+                                readonly property string modeValue:
+                                    modelData.ime_mode === "Mặc định" ? "" : modelData.ime_mode
+                                readonly property bool hasOverride:
+                                    methodValue !== "" || modeValue !== "" || modelData.enabled === false
+                                    || modelData.typing_delay_ms != null || modelData.bs_settle_ms != null
+                                    || modelData.accent_settle_ms != null
+                                // Write the whole row; `t` replaces one timing field.
+                                function save(method, mode, on, t) {
+                                    var cur = { typing: modelData.typing_delay_ms, bs: modelData.bs_settle_ms,
+                                                accent: modelData.accent_settle_ms }
+                                    daemon.setApp(modelData.app_id, method, mode, on, Object.assign(cur, t || {}))
+                                }
+
+                                ColumnLayout {
+                                    anchors { fill: parent; topMargin: 8; bottomMargin: 8 }
+                                    spacing: 6
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 10
+                                        Rectangle {   // initial-letter avatar
+                                            Layout.preferredWidth: 32
+                                            Layout.preferredHeight: 32
+                                            radius: 16
+                                            color: Theme.accentSoft
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: appRow.modelData.app_name.replace(/^.*\./, "").charAt(0).toUpperCase()
+                                                color: Theme.accent
+                                                font { pixelSize: Theme.fsLabel; weight: Font.DemiBold }
+                                            }
+                                        }
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 0
+                                            Text {
+                                                Layout.fillWidth: true
+                                                text: appRow.modelData.app_name
+                                                color: Theme.ink
+                                                font.pixelSize: Theme.fsBody
+                                                elide: Text.ElideMiddle
+                                            }
+                                            Text {
+                                                Layout.fillWidth: true
+                                                text: appRow.modelData.builtin ? "Có sẵn profile — mã " + appRow.modelData.app_id
+                                                                               : appRow.modelData.app_id
+                                                color: Theme.faint
+                                                font.pixelSize: Theme.fsSmall
+                                                elide: Text.ElideRight
+                                            }
+                                        }
+                                        VCombo {
+                                            Layout.preferredWidth: 118
+                                            model: [{ value: "", label: "Theo chung" }].concat(win.methodModel)
+                                            current: appRow.methodValue
+                                            onPicked: function (v) {
+                                                appRow.save(v, appRow.modeValue, appRow.modelData.enabled !== false)
+                                            }
+                                        }
+                                        VCombo {
+                                            Layout.preferredWidth: 118
+                                            model: [{ value: "", label: "Theo chung" },
+                                                    { value: "Preedit", label: "Gạch chân" },
+                                                    { value: "NonPreedit", label: "Gõ thẳng" }]
+                                            current: appRow.modeValue
+                                            onPicked: function (v) {
+                                                appRow.save(appRow.methodValue, v, appRow.modelData.enabled !== false)
+                                            }
+                                        }
+                                        Item {
+                                            Layout.preferredWidth: 64
+                                            implicitHeight: 22
+                                            VSwitch {
+                                                checked: appRow.modelData.enabled !== false
+                                                accessibleName: "Tiếng Việt trong " + appRow.modelData.app_name
+                                                onToggled: function (next) {
+                                                    appRow.save(appRow.methodValue, appRow.modeValue, next)
+                                                }
+                                            }
+                                        }
+                                        VButton {
+                                            // Built-in rows stay listed: the button only drops the overrides.
+                                            Layout.preferredWidth: appRow.modelData.builtin ? implicitWidth : 30
+                                            implicitHeight: 30
+                                            kind: "ghost"
+                                            text: appRow.modelData.builtin ? "Đặt lại" : "✕"
+                                            enabled: !appRow.modelData.builtin || appRow.hasOverride
+                                            Accessible.name: (appRow.modelData.builtin ? "Đặt lại " : "Xoá ")
+                                                             + appRow.modelData.app_name
+                                            onClicked: daemon.removeApp(appRow.modelData.app_id)
+                                        }
+                                    }
+                                    // Typing rhythm: empty = the built-in default (shown as placeholder).
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Layout.leftMargin: 42
+                                        spacing: 8
+                                        Repeater {
+                                            model: [
+                                                { key: "typing", label: "Trễ mỗi phím",
+                                                  cur: appRow.modelData.typing_delay_ms, def: appRow.modelData.default_typing_delay_ms },
+                                                { key: "bs", label: "Chờ sau BackSpace",
+                                                  cur: appRow.modelData.bs_settle_ms, def: appRow.modelData.default_bs_settle_ms },
+                                                { key: "accent", label: "Chờ sau chữ có dấu",
+                                                  cur: appRow.modelData.accent_settle_ms, def: appRow.modelData.default_accent_settle_ms }
+                                            ]
+                                            delegate: RowLayout {
+                                                id: timing
+                                                required property var modelData
+                                                spacing: 4
+                                                Text { text: timing.modelData.label; color: Theme.muted; font.pixelSize: Theme.fsSmall }
+                                                VField {
+                                                    Layout.preferredWidth: 56
+                                                    implicitHeight: 26
+                                                    font.pixelSize: Theme.fsSmall
+                                                    horizontalAlignment: TextInput.AlignRight
+                                                    validator: IntValidator { bottom: 0; top: 1000 }
+                                                    text: timing.modelData.cur != null ? String(timing.modelData.cur) : ""
+                                                    placeholderText: String(timing.modelData.def)
+                                                    onEditingFinished: {
+                                                        var v = text.trim() === "" ? null : parseInt(text)
+                                                        if (v === timing.modelData.cur || (v === null && timing.modelData.cur == null)) return
+                                                        var t = {}; t[timing.modelData.key] = v
+                                                        appRow.save(appRow.methodValue, appRow.modeValue,
+                                                                    appRow.modelData.enabled !== false, t)
+                                                    }
+                                                }
+                                                Text { text: "ms"; color: Theme.faint; font.pixelSize: Theme.fsSmall; Layout.rightMargin: 8 }
+                                            }
+                                        }
+                                        Item { Layout.fillWidth: true }
+                                    }
+                                }
+                                Rectangle {
+                                    anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+                                    height: 1
+                                    color: Theme.line
+                                }
+                            }
+
+                            Text {
+                                visible: appList.count === 0
+                                anchors { top: parent.top; topMargin: 28; left: parent.left; right: parent.right }
+                                horizontalAlignment: Text.AlignHCenter
+                                wrapMode: Text.WordWrap
+                                color: Theme.muted
+                                font.pixelSize: Theme.fsBody
+                                lineHeight: 1.3
+                                text: "Chưa có ứng dụng nào được cấu hình riêng.\n"
+                                      + "Mã ứng dụng là app_id hoặc class, xem bằng hyprctl clients hoặc niri msg windows."
+                            }
+                        }
+                    }
+
+                    // ── 3. Gõ tắt ──────────────────────────────────
+                    ColumnLayout {
+                        spacing: 0
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 32
+                            Layout.rightMargin: 24
+                            spacing: 0
+
+                            Text {
+                                Layout.fillWidth: true
+                                Layout.topMargin: 8
+                                wrapMode: Text.WordWrap
+                                color: Theme.muted
+                                font.pixelSize: Theme.fsBody
+                                text: "Gõ từ khoá rồi nhấn dấu cách, Enter hoặc dấu câu: từ khoá được thay bằng nội dung."
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Layout.topMargin: 14
+                                spacing: 8
+                                VField {
+                                    id: macroKey
+                                    Layout.preferredWidth: 150
+                                    placeholderText: "Từ khoá, ví dụ vn"
+                                    onAccepted: macroValue.forceActiveFocus()
+                                }
+                                VField {
+                                    id: macroValue
+                                    Layout.fillWidth: true
+                                    placeholderText: "Nội dung, ví dụ Việt Nam"
+                                    onAccepted: addMacroBtn.clicked()
+                                }
+                                VButton {
+                                    id: addMacroBtn
+                                    kind: "primary"
+                                    text: "Thêm"
+                                    enabled: macroKey.text.trim() !== "" && macroValue.text !== ""
+                                    onClicked: {
+                                        if (!enabled) return
+                                        daemon.setMacro(macroKey.text.trim(), macroValue.text)
+                                        macroKey.text = ""; macroValue.text = ""
+                                        macroKey.forceActiveFocus()
+                                    }
+                                }
+                            }
+                        }
+
+                        ListView {
+                            id: macroList
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.leftMargin: 32
+                            Layout.rightMargin: 24
+                            Layout.topMargin: 14
+                            clip: true
+                            boundsBehavior: Flickable.StopAtBounds
+                            ScrollBar.vertical: ScrollBar {}
+                            model: Object.keys(daemon.macros).sort()
+
+                            delegate: Item {
+                                id: macroRow
+                                required property string modelData
+                                width: ListView.view.width
+                                height: 46
+                                RowLayout {
+                                    anchors.fill: parent
+                                    spacing: 12
+                                    Item {
+                                        Layout.preferredWidth: 150
+                                        implicitHeight: 26
+                                        Keycap { glyph: macroRow.modelData; anchors.verticalCenter: parent.verticalCenter }
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: daemon.macros[macroRow.modelData] || ""
+                                        color: Theme.ink
+                                        font.pixelSize: Theme.fsBody
+                                        elide: Text.ElideRight
+                                        maximumLineCount: 1
+                                    }
+                                    VButton {
+                                        Layout.preferredWidth: 30
+                                        implicitHeight: 30
+                                        kind: "ghost"
+                                        text: "✕"
+                                        Accessible.name: "Xoá gõ tắt " + macroRow.modelData
+                                        onClicked: daemon.removeMacro(macroRow.modelData)
+                                    }
+                                }
+                                Rectangle {
+                                    anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+                                    height: 1
+                                    color: Theme.line
+                                }
+                            }
+
+                            Text {
+                                visible: macroList.count === 0
+                                anchors { top: parent.top; topMargin: 28; left: parent.left; right: parent.right }
+                                horizontalAlignment: Text.AlignHCenter
+                                color: Theme.muted
+                                font.pixelSize: Theme.fsBody
+                                text: "Chưa có từ gõ tắt nào. Thử thêm vn → Việt Nam."
+                            }
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 32
+                            Layout.rightMargin: 24
+                            Layout.bottomMargin: 16
+                            Layout.topMargin: 8
+                            wrapMode: Text.WordWrap
+                            color: Theme.faint
+                            font.pixelSize: Theme.fsSmall
+                            text: "Lưu trong setting.conf, mục [macros]. Gõ tắt bằng tổ hợp phím: xem trang Phím tắt."
+                        }
+                    }
+
+                    // ── 4. Phím tắt ────────────────────────────────
+                    ColumnLayout {
+                        spacing: 0
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 32
+                            Layout.rightMargin: 24
+                            spacing: 0
+
+                            Text {
+                                Layout.fillWidth: true
+                                Layout.topMargin: 8
+                                wrapMode: Text.WordWrap
+                                color: Theme.muted
+                                font.pixelSize: Theme.fsBody
+                                text: "Nhấn tổ hợp phím để chèn nội dung ngay tại con trỏ. Tổ hợp cần có ctrl, alt hoặc super và không còn tới ứng dụng."
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Layout.topMargin: 14
+                                spacing: 8
+                                VField {
+                                    id: hotkeyKey
+                                    Layout.preferredWidth: 150
+                                    placeholderText: "Tổ hợp, ví dụ ctrl+alt+m"
+                                    onAccepted: hotkeyValue.forceActiveFocus()
+                                }
+                                VField {
+                                    id: hotkeyValue
+                                    Layout.fillWidth: true
+                                    placeholderText: "Nội dung, ví dụ Trân trọng,"
+                                    onAccepted: addHotkeyBtn.clicked()
+                                }
+                                VButton {
+                                    id: addHotkeyBtn
+                                    kind: "primary"
+                                    text: "Thêm"
+                                    enabled: hotkeyKey.text.trim() !== "" && hotkeyValue.text !== ""
+                                    onClicked: {
+                                        if (!enabled) return
+                                        daemon.setMacroHotkey(hotkeyKey.text.trim().toLowerCase(), hotkeyValue.text)
+                                        hotkeyKey.text = ""; hotkeyValue.text = ""
+                                        hotkeyKey.forceActiveFocus()
+                                    }
+                                }
+                            }
+                        }
+
+                        ListView {
+                            id: hotkeyList
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.leftMargin: 32
+                            Layout.rightMargin: 24
+                            Layout.topMargin: 14
+                            clip: true
+                            boundsBehavior: Flickable.StopAtBounds
+                            ScrollBar.vertical: ScrollBar {}
+                            model: Object.keys(daemon.macroHotkeys).sort()
+
+                            delegate: Item {
+                                id: hotkeyRow
+                                required property string modelData
+                                width: ListView.view.width
+                                height: 46
+                                RowLayout {
+                                    anchors.fill: parent
+                                    spacing: 12
+                                    Row {   // one keycap per key of the chord
+                                        Layout.preferredWidth: 150
+                                        spacing: 4
+                                        Repeater {
+                                            model: hotkeyRow.modelData.split("+")
+                                            delegate: Keycap {
+                                                required property string modelData
+                                                glyph: modelData
+                                            }
+                                        }
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: daemon.macroHotkeys[hotkeyRow.modelData] || ""
+                                        color: Theme.ink
+                                        font.pixelSize: Theme.fsBody
+                                        elide: Text.ElideRight
+                                        maximumLineCount: 1
+                                    }
+                                    VButton {
+                                        Layout.preferredWidth: 30
+                                        implicitHeight: 30
+                                        kind: "ghost"
+                                        text: "✕"
+                                        Accessible.name: "Xoá phím tắt " + hotkeyRow.modelData
+                                        onClicked: daemon.removeMacroHotkey(hotkeyRow.modelData)
+                                    }
+                                }
+                                Rectangle {
+                                    anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+                                    height: 1
+                                    color: Theme.line
+                                }
+                            }
+
+                            Text {
+                                visible: hotkeyList.count === 0
+                                anchors { top: parent.top; topMargin: 28; left: parent.left; right: parent.right }
+                                horizontalAlignment: Text.AlignHCenter
+                                color: Theme.muted
+                                font.pixelSize: Theme.fsBody
+                                text: "Chưa có phím tắt nào. Thử thêm ctrl+alt+m → Trân trọng,"
+                            }
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 32
+                            Layout.rightMargin: 24
+                            Layout.bottomMargin: 16
+                            Layout.topMargin: 8
+                            wrapMode: Text.WordWrap
+                            color: Theme.faint
+                            font.pixelSize: Theme.fsSmall
+                            text: "Lưu trong setting.conf, mục [macro_hotkeys]. Chọn tổ hợp mà ứng dụng của bạn không dùng."
+                        }
+                    }
+
+                    // ── 5. Giới thiệu ──────────────────────────────
+                    Flickable {
+                        contentHeight: aboutCol.implicitHeight + 32
+                        clip: true
+                        boundsBehavior: Flickable.StopAtBounds
+                        ScrollBar.vertical: ScrollBar {}
+
+                        ColumnLayout {
+                            id: aboutCol
+                            width: parent.width - 56
+                            x: 32
+                            spacing: 0
+
+                            RowLayout {
+                                Layout.topMargin: 16
+                                spacing: 16
+                                Logo { size: 56 }
+                                ColumnLayout {
+                                    spacing: 2
+                                    Text { text: "vi-im"; color: Theme.ink
+                                           font { pixelSize: 22; weight: Font.DemiBold } }
+                                    Text { text: "Bộ gõ tiếng Việt cho Wayland"; color: Theme.muted
+                                           font.pixelSize: Theme.fsBody }
+                                    Text { text: daemon.version ? "Phiên bản " + daemon.version + ", giấy phép GPL-3.0"
+                                                                : "Giấy phép GPL-3.0"
+                                           color: Theme.faint; font.pixelSize: Theme.fsSmall }
+                                }
+                            }
+
+                            SectionTitle { text: "Tệp cấu hình" }
+                            SettingRow {
+                                label: daemon.configPath || "Chưa rõ"
+                                description: "Lưu tự động khi bạn đổi thiết lập. Sửa tay tệp này cũng được, bộ gõ đọc lại ngay."
+                                last: true
+                                VButton {
+                                    text: "Mở thư mục"
+                                    enabled: daemon.configPath !== ""
+                                    onClicked: Quickshell.execDetached(
+                                        ["xdg-open", daemon.configPath.replace(/\/[^\/]*$/, "")])
+                                }
+                            }
+
+                            SectionTitle { text: "Phím tắt" }
+                            Repeater {
+                                model: [
+                                    { k: "Ctrl+Shift+G", d: "Bật hoặc tắt chế độ chơi game (gửi phím thô)" },
+                                    { k: "Chuột giữa", d: "Bấm vào biểu tượng vi-im trên thanh tác vụ để mở menu nhanh" }
+                                ]
+                                delegate: SettingRow {
+                                    required property var modelData
+                                    required property int index
+                                    label: modelData.d
+                                    last: index === 1
+                                    Keycap { glyph: modelData.k }
+                                }
+                            }
+
+                            SectionTitle { text: "Dòng lệnh" }
+                            Repeater {
+                                model: [
+                                    { k: "vi-ime --toggle", d: "Bật hoặc tắt tiếng Việt" },
+                                    { k: "vi-ime --switch", d: "Chuyển kiểu gõ Telex ↔ VNI" },
+                                    { k: "vi-ime --status", d: "Xem trạng thái hiện tại" },
+                                    { k: "vi-ime --doctor", d: "Kiểm tra cài đặt và quyền truy cập" }
+                                ]
+                                delegate: SettingRow {
+                                    required property var modelData
+                                    required property int index
+                                    label: modelData.d
+                                    last: index === 3
+                                    Text {
+                                        text: modelData.k
+                                        color: Theme.muted
+                                        font { pixelSize: Theme.fsBody; family: "monospace" }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
-            Item { Layout.fillHeight: true }
         }
     }
 }

@@ -109,6 +109,17 @@ pub struct AppConfig {
     pub free_tone_placement: Option<bool>,
     /// Auto-detect language. None = use global default.
     pub auto_detect_lang: Option<bool>,
+    /// Pause after each key the evdev-fallback typer sends to this app (ms).
+    /// None = the built-in profile (`ClientProfile`). Raise it for an app
+    /// that still drops letters when you type fast; lower it for speed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typing_delay_ms: Option<u64>,
+    /// Wait between BackSpace and the first new glyph (ms). None = built-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bs_settle_ms: Option<u64>,
+    /// Wait after an accented glyph before the next key (ms). None = built-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent_settle_ms: Option<u64>,
 }
 
 /// Main configuration structure matching `setting.conf`.
@@ -156,6 +167,10 @@ pub struct Setting {
     /// Example: `[macro_hotkeys] "ctrl+alt+m" = "..."`. Needs ctrl/alt/super.
     #[serde(default)]
     pub macro_hotkeys: HashMap<String, String>,
+    /// Word suggestions learned from this user's typing (engine/predict.rs):
+    /// suggestion bar + Alt+1..3. Data stays on this machine.
+    #[serde(default = "default_true")]
+    pub predict: bool,
 }
 
 fn default_ime_mode() -> ImeMode {
@@ -184,6 +199,7 @@ impl Default for Setting {
             site_configs: HashMap::new(),
             macros: HashMap::new(),
             macro_hotkeys: HashMap::new(),
+            predict: true,
         }
     }
 }

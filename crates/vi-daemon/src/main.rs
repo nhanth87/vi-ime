@@ -32,6 +32,7 @@ mod rivals;
 mod sync;
 mod telemetry;
 mod tray;
+mod xtest_typer;
 mod wayland;
 
 use std::path::PathBuf;
@@ -72,12 +73,20 @@ fn init_tracing() -> (tracing_appender::non_blocking::WorkerGuard, tracing_appen
     let (file_writer, file_guard) = tracing_appender::non_blocking(file_appender);
     let (stderr_writer, stderr_guard) = tracing_appender::non_blocking(std::io::stderr());
 
-    // Combined layer: file gets everything, stderr respects RUST_LOG
+    // stderr respects RUST_LOG (default info). The file used to take EVERY
+    // level unfiltered: [NORMALIZE] debug lines (several per keystroke) made
+    // the 2026-10-24 log 4.3 GB in a day, formatted on the typing path. Now:
+    // info + the one-line-per-key [LIVE-SYNC]/[EVDEV-SYNC] evidence R22 needs;
+    // RUST_LOG, when set, drives the file too (full debug for diagnosis).
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let file_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new("info,vi_ime::evdev_compose=debug,vi_ime::wayland::actions=debug")
+    });
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(file_writer)
         .with_ansi(false)
-        .with_target(true);
+        .with_target(true)
+        .with_filter(file_filter);
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_writer(stderr_writer);
 
@@ -317,6 +326,11 @@ fn main() {
         let settings_exe = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(|dir| dir.join("vi-settings")));
+        // Word suggestion bar: idle (hidden, blocked on the socket) until
+        // suggestions arrive; shows nothing while `predict = false`.
+        if let Some(exe) = settings_exe.as_ref().filter(|e| e.exists()) {
+            let _ = std::process::Command::new(exe).arg("--bar").spawn();
+        }
         tray::spawn(config_path.clone(), settings_exe);
     }
 
@@ -375,6 +389,8 @@ fn main() {
                     godmod::set_app(app_id);
                 }
                 if app_changed {
+                    // Save word suggestions learned so far (off the typing thread).
+                    crate::engine::predict::flush();
                     let wants_legacy = current_app_id
                         .as_deref()
                         .is_some_and(legacy_grab::is_legacy_app);
@@ -400,10 +416,20 @@ fn main() {
                     let engage_evdev = wants_legacy || wants_xwayland_evdev;
                     let profile = current_app_id
                         .as_deref()
-                        .map(|id| ClientProfile::detect(id))
+                        .map(|id| ClientProfile::for_app(id, config_manager.setting()))
                         .unwrap_or_else(ClientProfile::default);
+                    // R18: IME off = never grab.
+                    let engage_evdev = engage_evdev && config_manager.setting().enabled;
                     match (engage_evdev, legacy_grab.is_some()) {
-                        (true, false) => {
+                        (true, had_grab) => {
+                            // Evdev app → evdev app (Chrome → OnlyOffice): the
+                            // running grab carries the OLD app's profile and
+                            // typer — OnlyOffice got Chrome's timing (no accent
+                            // settle) and lost "ư" (field 2026-10-24). Ungrab
+                            // first, then grab with this app's profile.
+                            if had_grab {
+                                drop(legacy_grab.take()); // ungrab now, before the new grab
+                            }
                             if wants_xwayland_evdev {
                                 info!(
                                     "[XWAYLAND] {:?} running X11 mode (detected via /proc cmdline) — \
@@ -519,7 +545,7 @@ fn main() {
                             legacy_grab = Some(legacy_grab::LegacyGrab::start(
                                 engine_input_method(config_manager.setting().input_method),
                                 Arc::clone(&runtime),
-                                ClientProfile::detect(app_id),
+                                ClientProfile::for_app(app_id, config_manager.setting()),
                             ));
                         }
                     }
@@ -573,7 +599,7 @@ fn main() {
                     legacy_grab = Some(legacy_grab::LegacyGrab::start(
                         engine_input_method(config_manager.setting().input_method),
                         Arc::clone(&runtime),
-                        ClientProfile::detect(&app_id),
+                        ClientProfile::for_app(&app_id, config_manager.setting()),
                     ));
                 }
             }
@@ -608,6 +634,7 @@ fn main() {
                     &command,
                     config_manager.setting(),
                     adapt.learned_store(),
+                    config_manager.path(),
                 );
                 let _ = reply.send(resp);
             }
@@ -661,6 +688,7 @@ fn apply_config(
     let resolved =
         setting.effective_config_layered(current_app_id.as_deref(), title, learned.as_ref());
     runtime.store(&resolved_to_snapshot(&resolved));
+    crate::engine::predict::set_enabled(setting.predict);
     // R-macro: publish keyword + hotkey tables (parsed once here, shared as
     // Arc; both IME paths pick them up — Wayland via maybe_reconfigure,
     // evdev via the consumer loop).

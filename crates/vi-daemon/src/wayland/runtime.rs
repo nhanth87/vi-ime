@@ -192,7 +192,29 @@ impl RuntimeConfig {
     /// Publish a new configuration. Field writes happen-before the
     /// generation bump (Release), so a reader that observes the new
     /// generation (Acquire) also observes every field.
+    ///
+    /// Only a REAL change bumps the generation. The daemon re-stores on every
+    /// focus event, including title-only changes of the same window (an
+    /// editor adding "*", a browser tab or chat app retitling as you type);
+    /// a bump makes the IME thread reconfigure, and reconfigure drops the
+    /// word being composed (R8) — so an unchanged store used to cut words in
+    /// half mid-typing ("Vieetj" → "Viêtj", repro 2026-10-24 in a nested
+    /// Hyprland + Chrome Wayland textarea that retitles on input).
     pub fn store(&self, snap: &RuntimeSnapshot) {
+        let cur = self.snapshot();
+        let same = cur.enabled == snap.enabled
+            && cur.method == snap.method
+            && cur.mode == snap.mode
+            && cur.output == snap.output
+            && cur.free_tone == snap.free_tone
+            && cur.auto_detect == snap.auto_detect
+            && cur.tone_style == snap.tone_style
+            && cur.emoji == snap.emoji
+            && cur.mode_from_user == snap.mode_from_user
+            && cur.game_mode == snap.game_mode;
+        if same {
+            return;
+        }
         self.enabled.store(snap.enabled, Ordering::Relaxed);
         self.method.store(encode_method(snap.method), Ordering::Relaxed);
         self.mode.store(encode_mode(snap.mode), Ordering::Relaxed);
@@ -230,13 +252,20 @@ impl RuntimeConfig {
     /// Set game mode flag and bump generation. Called by the daemon
     /// on focus-change so the IME thread picks it up via maybe_reconfigure.
     pub fn set_game_mode(&self, v: bool) {
-        self.game_mode.store(v, Ordering::Relaxed);
+        if self.game_mode.swap(v, Ordering::Relaxed) == v {
+            return; // unchanged — see `store` for why no bump
+        }
         self.generation.fetch_add(1, Ordering::Release);
     }
     /// Publish the focused window's app_id and bump generation so the IME
     /// thread picks it up in `maybe_reconfigure` (same channel as config).
+    /// No bump when the app is unchanged (title-only focus events — see
+    /// `store`).
     pub fn store_app_id(&self, app_id: Option<String>) {
         if let Ok(mut slot) = self.app_id.lock() {
+            if *slot == app_id {
+                return;
+            }
             *slot = app_id;
         }
         self.generation.fetch_add(1, Ordering::Release);
@@ -249,8 +278,13 @@ impl RuntimeConfig {
     /// Publish fresh R-macro tables and bump generation so both IME paths
     /// pick them up (`maybe_reconfigure`, evdev consumer loop). Called on
     /// config apply only — never per keystroke.
+    /// No bump when the tables are unchanged: `apply_config` rebuilds them on
+    /// every focus event (see `store`).
     pub fn store_macros(&self, macros: Arc<MacroDict>) {
         if let Ok(mut slot) = self.macros.lock() {
+            if **slot == *macros {
+                return;
+            }
             *slot = macros;
         }
         self.generation.fetch_add(1, Ordering::Release);

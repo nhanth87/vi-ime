@@ -9,11 +9,15 @@ use evdev::KeyCode;
 use tracing::{info, warn};
 
 use crate::client_profile::ClientProfile;
+use crate::engine::macro_dict::HotkeyKey;
 use crate::evdev_typer::EvdevTyper;
+use crate::xtest_typer::XTestTyper;
 
-/// Unicode output channel: a persistent virtual keyboard when the
-/// compositor supports it (Wayland), else the xdotool fallback (X11).
+/// Unicode output channel: XTEST straight into the X server for X11 apps,
+/// a persistent virtual keyboard when the compositor supports it (Wayland),
+/// else the xdotool/wtype fallback.
 pub(crate) enum Typer {
+    X(XTestTyper),
     Native(EvdevTyper),
     Cmd(Injector),
 }
@@ -49,10 +53,29 @@ impl Typer {
     /// works on niri, so the virtual-keyboard keymap is not reaching the X
     /// client through Hyprland's XWayland. xdotool remaps inside the X
     /// server itself, so it does not depend on that path.
+    ///
+    /// XTEST first (2026-10-24): same X-server-side delivery as xdotool, but
+    /// one persistent connection and a static glyph map — no per-glyph remap,
+    /// so none of xdotool's 200ms settles (see `xtest_typer.rs`). xdotool
+    /// stays as the fallback when XTEST is unavailable.
     pub(crate) fn detect(profile: ClientProfile) -> Option<Self> {
-        let hyprland = crate::engine::fast_engine::CompositorKind::detect()
-            == crate::engine::fast_engine::CompositorKind::Hyprland;
-        if profile.needs_injector || hyprland {
+        // Hyprland's X-side workaround is for X clients only: a native
+        // Wayland window in the evdev fallback (LibreOffice's gtk3 VCL) never
+        // sees X input, so it keeps the Wayland virtual-keyboard typer.
+        let hyprland_x11 = crate::engine::fast_engine::CompositorKind::detect()
+            == crate::engine::fast_engine::CompositorKind::Hyprland
+            && hyprland_focus_is_xwayland().unwrap_or(true);
+        if profile.needs_injector || hyprland_x11 {
+            let display = resolve_x11_display();
+            if let Some(x) = XTestTyper::new(
+                display.as_deref(),
+                profile.xtest_delay_ms,
+                profile.xtest_pre_glyph_ms,
+                profile.accent_settle_ms,
+            ) {
+                info!("evdev fallback: Unicode qua XTEST (bảng phím tĩnh) [{}]", profile.label);
+                return Some(Typer::X(x));
+            }
             if let Some(inj) = Injector::detect_xdotool_preferred() {
                 info!(
                     "evdev fallback: Unicode qua {} (app cần xdotool — virtual keyboard mất level Mod3/Mod5)",
@@ -76,9 +99,19 @@ impl Typer {
         })
     }
 
+    /// Wait out a pending accent settle before a uinput forward — see
+    /// `XTestTyper::wait_settled`; the other typers have none.
+    pub(crate) fn wait_settled(&mut self) {
+        if let Typer::X(x) = self {
+            x.wait_settled();
+        }
+    }
+
     pub(crate) fn backspace_then_type(&mut self, backspaces: usize, text: &str, sync: bool) {
         let ok = match self {
             Typer::Native(t) => t.backspace_then_type(backspaces, text, sync),
+            // Every call ends with an X round trip — always synchronous.
+            Typer::X(x) => x.backspace_then_type(backspaces, text),
             // External process always blocks until exit — equivalent to
             // sync=true; that's the best xdotool/wtype can do.
             Typer::Cmd(inj) => inj.backspace_then_type(backspaces, text),
@@ -110,12 +143,64 @@ pub(crate) fn key_to_char(code: KeyCode, shift: bool) -> Option<char> {
         KeyCode::KEY_0 => '0',
         _ => return None,
     };
-    // Digits are tone/quality keys in VNI — never uppercase them.
     if shift && base.is_ascii_alphabetic() {
         Some(base.to_ascii_uppercase())
+    } else if shift {
+        // Shift+digit is a symbol ("!", "@"…), not a VNI tone key — it used
+        // to reach the engine as the digit ("a!" → "á" in VNI).
+        None
     } else {
         Some(base)
     }
+}
+
+/// Chord key identity: alphanumerics (lowercased) via the same mapping
+/// as composition; F1–F12 and named keys by evdev code.
+pub(crate) fn hotkey_key(code: KeyCode, shift: bool) -> Option<HotkeyKey> {
+    if let Some(c) = key_to_char(code, shift) {
+        return Some(HotkeyKey::Char(c.to_ascii_lowercase()));
+    }
+    Some(match code.code() {
+        59..=68 => HotkeyKey::F((code.code() - 58) as u8),
+        57 => HotkeyKey::Space,
+        28 => HotkeyKey::Enter,
+        15 => HotkeyKey::Tab,
+        14 => HotkeyKey::Backspace,
+        1 => HotkeyKey::Escape,
+        111 => HotkeyKey::Delete,
+        _ => return None,
+    })
+}
+
+/// Printable non-composing key → its character (US layout, like
+/// `key_to_char`): space, punctuation, shifted digits. The composer types
+/// these through the TYPER instead of forwarding them via uinput, so all
+/// text reaches the app on ONE ordered channel (R26 for the evdev path):
+/// a Space travelling uinput → compositor → Xwayland landed in the middle
+/// of the next word's BS+glyph edit and OnlyOffice dropped the glyph
+/// ("thủ tướng" → "thủ tớng", human-timing field test 2026-10-24).
+pub(crate) fn boundary_char(code: KeyCode, shift: bool) -> Option<char> {
+    let (plain, shifted) = match code {
+        KeyCode::KEY_SPACE => (' ', ' '),
+        KeyCode::KEY_COMMA => (',', '<'),
+        KeyCode::KEY_DOT => ('.', '>'),
+        KeyCode::KEY_SLASH => ('/', '?'),
+        KeyCode::KEY_SEMICOLON => (';', ':'),
+        KeyCode::KEY_APOSTROPHE => ('\'', '"'),
+        KeyCode::KEY_MINUS => ('-', '_'),
+        KeyCode::KEY_EQUAL => ('=', '+'),
+        KeyCode::KEY_LEFTBRACE => ('[', '{'),
+        KeyCode::KEY_RIGHTBRACE => (']', '}'),
+        KeyCode::KEY_BACKSLASH => ('\\', '|'),
+        KeyCode::KEY_GRAVE => ('`', '~'),
+        KeyCode::KEY_1 => ('1', '!'), KeyCode::KEY_2 => ('2', '@'),
+        KeyCode::KEY_3 => ('3', '#'), KeyCode::KEY_4 => ('4', '$'),
+        KeyCode::KEY_5 => ('5', '%'), KeyCode::KEY_6 => ('6', '^'),
+        KeyCode::KEY_7 => ('7', '&'), KeyCode::KEY_8 => ('8', '*'),
+        KeyCode::KEY_9 => ('9', '('), KeyCode::KEY_0 => ('0', ')'),
+        _ => return None,
+    };
+    Some(if shift { shifted } else { plain })
 }
 
 /// External Unicode typer (uinput cannot emit arbitrary Unicode).
@@ -295,7 +380,7 @@ impl Injector {
 /// XWayland instance the target app actually connects to (multi-seat /
 /// nested-X setups, or a wrapper script's login-env mismatch) — verify the
 /// inherited value first, only scan `/tmp/.X11-unix` if it doesn't resolve.
-fn resolve_x11_display() -> Option<String> {
+pub(crate) fn resolve_x11_display() -> Option<String> {
     if let Some(d) = std::env::var_os("DISPLAY") {
         let d = d.to_string_lossy();
         let num = d.strip_prefix(':').unwrap_or(&d);
@@ -312,6 +397,16 @@ fn resolve_x11_display() -> Option<String> {
         num.parse::<u32>().ok()?;
         Some(format!(":{num}"))
     })
+}
+
+/// Is the focused Hyprland window an XWayland client? None when hyprctl
+/// can't tell (caller assumes X, the previous behavior).
+fn hyprland_focus_is_xwayland() -> Option<bool> {
+    let out = Command::new("hyprctl").args(["activewindow", "-j"]).output().ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let x = v.get("xwayland")?.as_bool()?;
+    info!("evdev fallback: cửa sổ focus {} XWayland", if x { "là" } else { "không phải" });
+    Some(x)
 }
 
 fn which(bin: &str) -> bool {

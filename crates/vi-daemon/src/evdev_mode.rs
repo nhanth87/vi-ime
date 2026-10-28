@@ -55,6 +55,10 @@ use crate::evdev_inject::Typer;
 use crate::evdev_keystate::{self, HeldKeys};
 use crate::wayland::{ActivePath, RuntimeConfig};
 
+#[path = "evdev_hotplug.rs"]
+mod evdev_hotplug;
+use evdev_hotplug::watch_hotplug;
+
 /// A grabbed keyboard that ungrabs itself on drop (panic-safe).
 struct Grabbed(Device);
 impl Drop for Grabbed {
@@ -112,58 +116,78 @@ fn wait_keys_clear(dev: &evdev::Device, path: &std::path::Path, stop: &AtomicBoo
 /// compositor — field bug 2026-07-15: some laptop internal keyboards
 /// report as combined devices with `KEY_A` + `BTN_LEFT`, and grabbing
 /// them silences all mouse clicks/scroll for the terminal.
-fn grab_all_keyboards(stop: &AtomicBool) -> Vec<Grabbed> {
-    let mut keyboards: Vec<Grabbed> = Vec::new();
-    for (path, dev) in evdev::enumerate() {
-        let name = dev.name().unwrap_or("").to_lowercase();
-        if IGNORE_DEVICE_MARKERS.iter().any(|m| name.contains(m)) {
-            info!("evdev: skipping injected keyboard {:?} ({name}) — not a physical device", path);
-            continue;
+/// Every real keyboard present now. Grabbing happens later, per device on
+/// its own reader thread (`run_loop`): `wait_keys_clear` can take seconds on
+/// one keyboard (a key stuck in the kernel costs `STALE_KEY`), and grabbing
+/// in sequence made every OTHER already-grabbed keyboard sit unread that
+/// long — its kernel queue overflowed and keys were lost / reordered (field
+/// test 2026-10-24: first words of a sentence vanished, "thi" → "uhi").
+fn keyboard_candidates() -> Vec<(std::path::PathBuf, Device)> {
+    evdev::enumerate().filter(|(path, dev)| is_candidate(path, dev)).collect()
+}
+
+/// Grab `dev` if it is a real keyboard (see `keyboard_candidates`).
+fn try_grab(path: &std::path::Path, dev: Device, stop: &AtomicBool) -> Option<Grabbed> {
+    is_candidate(path, &dev).then(|| grab_now(path, dev, stop)).flatten()
+}
+
+/// Is `dev` a real keyboard we should grab (no injectors, no pointers)?
+fn is_candidate(path: &std::path::Path, dev: &Device) -> bool {
+    let name = dev.name().unwrap_or("").to_lowercase();
+    if IGNORE_DEVICE_MARKERS.iter().any(|m| name.contains(m)) {
+        info!("evdev: skipping injected keyboard {:?} ({name}) — not a physical device", path);
+        return false;
+    }
+    let is_kbd = dev
+        .supported_keys()
+        .is_some_and(|k| k.contains(KeyCode::KEY_A) && k.contains(KeyCode::KEY_Z));
+    if !is_kbd {
+        return false;
+    }
+    // 2026-07-15: do NOT grab devices that also act as pointers.
+    // A combined keyboard+touchpad (common on laptops) advertises both
+    // letter keys AND mouse buttons / relative axes — grabbing it
+    // steals mouse events from the compositor (terminal scroll = history,
+    // clicks ignored). The evdev fallback only needs the keyboard.
+    let has_pointer = {
+        let keys = dev.supported_keys();
+        let rel = dev.supported_relative_axes();
+        let abs = dev.supported_absolute_axes();
+        let has_mouse_btn = keys.is_some_and(|k| {
+            k.contains(KeyCode::BTN_LEFT)
+                || k.contains(KeyCode::BTN_RIGHT)
+                || k.contains(KeyCode::BTN_MIDDLE)
+        });
+        let has_axes = rel.is_some_and(|r| r.iter().next().is_some())
+            || abs.is_some_and(|a| a.iter().next().is_some());
+        has_mouse_btn || has_axes
+    };
+    if has_pointer {
+        info!(
+            "evdev: skipping pointer-capable device {:?} ({name}) — would steal mouse events",
+            path
+        );
+        return false;
+    }
+    true
+}
+
+/// Wait for `dev`'s keys to clear, then grab it.
+fn grab_now(path: &std::path::Path, dev: Device, stop: &AtomicBool) -> Option<Grabbed> {
+    let mut dev = dev;
+    if !wait_keys_clear(&dev, path, stop) {
+        return None;
+    }
+    match dev.grab() {
+        Ok(()) => {
+            info!("evdev: grabbing {:?} ({})", path, dev.name().unwrap_or("?"));
+            Some(Grabbed(dev))
         }
-        let is_kbd = dev
-            .supported_keys()
-            .is_some_and(|k| k.contains(KeyCode::KEY_A) && k.contains(KeyCode::KEY_Z));
-        if !is_kbd {
-            continue;
-        }
-        // 2026-07-15: do NOT grab devices that also act as pointers.
-        // A combined keyboard+touchpad (common on laptops) advertises both
-        // letter keys AND mouse buttons / relative axes — grabbing it
-        // steals mouse events from the compositor (terminal scroll = history,
-        // clicks ignored). The evdev fallback only needs the keyboard.
-        let has_pointer = {
-            let keys = dev.supported_keys();
-            let rel = dev.supported_relative_axes();
-            let abs = dev.supported_absolute_axes();
-            let has_mouse_btn = keys.is_some_and(|k| {
-                k.contains(KeyCode::BTN_LEFT)
-                    || k.contains(KeyCode::BTN_RIGHT)
-                    || k.contains(KeyCode::BTN_MIDDLE)
-            });
-            let has_axes = rel.is_some_and(|r| r.iter().next().is_some())
-                || abs.is_some_and(|a| a.iter().next().is_some());
-            has_mouse_btn || has_axes
-        };
-        if has_pointer {
-            info!(
-                "evdev: skipping pointer-capable device {:?} ({name}) — would steal mouse events",
-                path
-            );
-            continue;
-        }
-        let mut dev = dev;
-        if !wait_keys_clear(&dev, &path, stop) {
-            continue;
-        }
-        match dev.grab() {
-            Ok(()) => {
-                info!("evdev: grabbing {:?} ({})", path, dev.name().unwrap_or("?"));
-                keyboards.push(Grabbed(dev));
-            }
-            Err(e) => warn!("evdev: cannot grab {:?}: {e} (need group `input`?)", path),
+        Err(e) => {
+            warn!("evdev: cannot grab {:?}: {e} (need group `input`?)", path);
+            None
         }
     }
-    keyboards
 }
 
 /// uinput mirror: advertise every standard key so passthrough works.
@@ -178,21 +202,15 @@ fn build_uinput_mirror() -> Result<VirtualDevice, Box<dyn std::error::Error>> {
         .build()?)
 }
 
-/// Backlog size (events sent but not yet processed) that triggers a one-shot
-/// warning log. Purely informational — the channel itself never drops or
-/// blocks. ~5-10 ký tự/giây là tốc độ gõ tay người nhanh thực tế; backlog
-/// vượt mốc này nghĩa là typer (settle pacing, R19) đang tụt lại phía sau,
-/// đáng để có evidence trail trong log dù không mất chữ.
+/// Backlog (events sent, not yet processed) that logs one warning — purely
+/// informational, the channel never drops or blocks. Above ~5-10 keys/s of
+/// real typing it means the typer (R19 pacing) lags; not a key loss.
 const QUEUE_WARN_THRESHOLD: usize = 10;
 
-/// One physical keyboard's read loop, run on its OWN thread. The ONLY job
-/// here is drain `poll` + `fetch_events` as fast as the kernel delivers and
-/// hand raw `(KeyCode, value)` pairs to `tx`. MUST NEVER do anything that can
-/// block beyond the poll timeout — see module docs: the typer's settle
-/// pacing (R19, 20-120ms per call) used to run on this same loop, and while
-/// blocked on it the kernel's per-device event queue (fixed size) filled up
-/// under fast real typing and silently dropped keys before they ever reached
-/// the engine. That is the bug this split fixes.
+/// One physical keyboard's read loop, on its OWN thread: drain `poll` +
+/// `fetch_events` and hand raw `(KeyCode, value)` pairs to `tx`. MUST NEVER
+/// block beyond the poll timeout (module docs, R20): typer pacing on this
+/// loop once overflowed the kernel's per-device queue and dropped keys.
 fn reader_loop(
     kbd: Grabbed,
     tx: mpsc::Sender<(KeyCode, i32)>,
@@ -205,6 +223,12 @@ fn reader_loop(
     while !stop.load(Ordering::Relaxed) && !dead.load(Ordering::Relaxed) {
         let mut pfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
         let n = unsafe { libc::poll(&mut pfd, 1, 200) };
+        // Unplugged: poll returns at once forever → this thread spun at 95%
+        // CPU (2026-10-28). Only THIS reader ends; other keyboards stay grabbed.
+        if n > 0 && pfd.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+            info!("evdev: {:?} đã rút — dừng reader của nó", kbd.0.name().unwrap_or("?"));
+            return;
+        }
         if n <= 0 || pfd.revents & libc::POLLIN == 0 {
             continue;
         }
@@ -252,10 +276,10 @@ fn consumer_loop(
     runtime: Option<Arc<RuntimeConfig>>,
 ) {
     let mut composer = Composer::new(method, typer);
-    // Emoji expansion follows the same runtime config as the Wayland path.
-    // NOTE: on the NATIVE virtual-keyboard typer emoji glyphs can't be
-    // injected (keymap is ASCII+Vietnamese) — only the wtype/xdotool injector
-    // path renders them; see evdev_compose::apply CommitEmoji.
+    // Emoji/macros follow the Wayland path's runtime config; suggestions learn in office apps only.
+    composer.learn = runtime.as_ref().and_then(|rt| rt.app_id()).is_some_and(|id| crate::legacy_grab::is_legacy_app(&id));
+    // NOTE: the NATIVE typer's keymap is ASCII+Vietnamese — emoji glyphs only render through
+    // the wtype/xdotool injector; see evdev_compose::apply CommitEmoji.
     if let Some(rt) = &runtime {
         composer.set_emoji_enabled(rt.snapshot().emoji);
         composer.set_macros(rt.macros());
@@ -297,6 +321,14 @@ fn consumer_loop(
             Ok((code, value)) => {
                 queued.fetch_sub(1, Ordering::Relaxed);
                 composer.handle(&mut ui, code, value);
+                // Coalesce: everything that queued up while the typer was
+                // busy goes through the engine first, then ONE flush types
+                // the net difference (see Composer::deferred).
+                while let Ok((code, value)) = rx.try_recv() {
+                    queued.fetch_sub(1, Ordering::Relaxed);
+                    composer.handle(&mut ui, code, value);
+                }
+                composer.flush();
             }
             Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => break 'outer,
@@ -319,7 +351,7 @@ fn consumer_loop(
 /// every `Grabbed` has ungrabbed) before this returns, so callers can treat
 /// it exactly like the old single-loop `run_loop`.
 fn run_loop(
-    keyboards: Vec<Grabbed>,
+    keyboards: Vec<(std::path::PathBuf, Device)>,
     ui: VirtualDevice,
     typer: Typer,
     method: InputMethod,
@@ -330,10 +362,24 @@ fn run_loop(
     let queued = AtomicUsize::new(0);
     let dead = AtomicBool::new(false);
     std::thread::scope(|scope| {
-        for kbd in keyboards {
+        for (path, dev) in keyboards {
             let tx = tx.clone();
-            scope.spawn(|| reader_loop(kbd, tx, &queued, stop, &dead));
+            let (queued, dead) = (&queued, &dead);
+            scope.spawn(move || {
+                if let Some(kbd) = grab_now(&path, dev, stop) {
+                    reader_loop(kbd, tx, queued, stop, dead);
+                }
+            });
         }
+        // Hot-plugged keyboards get their own reader on the same channel.
+        let hot_tx = tx.clone();
+        let (queued, dead_ref) = (&queued, &dead);
+        scope.spawn(move || {
+            watch_hotplug(stop, dead_ref, &|kbd| {
+                let tx = hot_tx.clone();
+                scope.spawn(move || reader_loop(kbd, tx, queued, stop, dead_ref));
+            })
+        });
         // Drop the original sender: once every reader thread's clone is also
         // dropped (all readers exited), `rx` sees `Disconnected` instead of
         // hanging on an unused handle.
@@ -391,7 +437,7 @@ pub fn run_scoped(
         release_path_to_wayland(&runtime);
         return;
     };
-    let keyboards = grab_all_keyboards(stop);
+    let keyboards = keyboard_candidates();
     if keyboards.is_empty() {
         warn!("evdev fallback: no grabbable keyboard (need group `input`?) — fail-open to Wayland");
         release_path_to_wayland(&runtime);
@@ -415,10 +461,10 @@ pub fn run(method: InputMethod) -> Result<(), Box<dyn std::error::Error>> {
         "no Unicode typer — compositor lacks zwp_virtual_keyboard_v1 and `xdotool` is missing",
     )?;
     static NEVER_STOP: AtomicBool = AtomicBool::new(false);
-    // wait_keys_clear also covers the launch case: `--evdev` is typed in a
-    // terminal, so Enter is still down right now — grabbing before its
-    // release would stick Enter exactly like the Super case.
-    let keyboards = grab_all_keyboards(&NEVER_STOP);
+    // wait_keys_clear (per device, in run_loop) also covers the launch case:
+    // `--evdev` is typed in a terminal, so Enter is still down right now —
+    // grabbing before its release would stick Enter like the Super case.
+    let keyboards = keyboard_candidates();
     if keyboards.is_empty() {
         return Err(
             "no grabbable keyboard found. Add yourself to the `input` group \

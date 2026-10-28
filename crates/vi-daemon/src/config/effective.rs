@@ -80,9 +80,26 @@ impl Setting {
     ///
     /// Precedence: site override > app override > global.
     /// When `enable_per_app` is false, overrides are ignored entirely.
+    /// `[app_configs.<key>]` for `app_id`: the exact key, else the longest
+    /// key that prefixes it case-insensitively — the settings window lists
+    /// built-in apps by prefix ("onlyoffice" for app_id "ONLYOFFICE",
+    /// "libreoffice" for "libreoffice-writer"), same rule as
+    /// `ClientProfile::for_app`.
+    pub fn app_config_for(&self, app_id: &str) -> Option<&super::AppConfig> {
+        if let Some(c) = self.app_configs.get(app_id) {
+            return Some(c);
+        }
+        let id = app_id.to_lowercase();
+        self.app_configs
+            .iter()
+            .filter(|(k, _)| id.starts_with(&k.to_lowercase()))
+            .max_by_key(|(k, _)| k.len())
+            .map(|(_, c)| c)
+    }
+
     pub fn effective_config(&self, app_id: Option<&str>, title: Option<&str>) -> EffectiveConfig {
         let (app_cfg, site_cfg) = if self.enable_per_app {
-            let app_cfg = app_id.and_then(|id| self.app_configs.get(id));
+            let app_cfg = app_id.and_then(|id| self.app_config_for(id));
             let site_cfg = title.and_then(|t| self.site_config_for_title(t));
             (app_cfg, site_cfg)
         } else {
@@ -121,7 +138,7 @@ impl Setting {
             };
         }
         let user_site = title.and_then(|t| self.site_config_for_title(t));
-        let user_app = app_id.and_then(|id| self.app_configs.get(id));
+        let user_app = app_id.and_then(|id| self.app_config_for(id));
         let builtin_site = title.and_then(builtin::builtin_site_profile);
         let builtin_app = app_id.and_then(builtin::builtin_app_profile);
 

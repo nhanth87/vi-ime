@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
-//! Unix socket IPC server — phục vụ vi-settings QuickShell client.
+//! Unix socket IPC server — phục vụ vi-settings (cửa sổ cấu hình) và
+//! vi-menu (popup nhanh từ tray), cả hai là client QuickShell.
 //!
 //! Giao thức: JSON lines qua Unix stream socket. Mỗi request là một dòng JSON,
-//! response là một dòng JSON. Single-connection model.
+//! response là một dòng JSON, theo đúng thứ tự request.
 //!
-//! Tích hợp vào unified event loop (R15): IPC thread blocks trên `UnixListener`,
-//! đẩy commands vào `DaemonEvent::Ipc*` channel. Không polling, không timer.
+//! Multi-client: mỗi kết nối một thread riêng, block trên `read_line` —
+//! cửa sổ cấu hình đang mở KHÔNG được chặn popup tray (model cũ xử lý inline
+//! từng client, client thứ hai treo tới khi client đầu đóng).
+//!
+//! Tích hợp vào unified event loop (R15): mọi thread IPC đều block (accept /
+//! read), đẩy commands vào `DaemonEvent::Ipc*` channel. Không polling, không timer.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -16,17 +22,21 @@ use std::sync::mpsc::Sender;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
-use crate::config::{InputMethod, ImeMode, ToneStyle};
 use crate::events::DaemonEvent;
+
+#[path = "ipc_handlers.rs"]
+mod ipc_handlers;
+pub use ipc_handlers::{handle_read_command, handle_write_command};
 
 // ── JSON Protocol types ─────────────────────────────────────────────────
 
-/// Incoming command from vi-settings QML client.
+/// Incoming command from a QuickShell client.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "cmd")]
 pub enum IpcCommand {
     #[serde(rename = "get_config")]
     GetConfig,
+    /// Every field optional: only the keys the client sends are changed.
     #[serde(rename = "set_config")]
     SetConfig {
         #[serde(default)]
@@ -37,9 +47,27 @@ pub enum IpcCommand {
         enabled: Option<bool>,
         #[serde(default)]
         ime_mode: Option<String>,
+        #[serde(default)]
+        output_mode: Option<String>,
+        #[serde(default)]
+        free_tone_placement: Option<bool>,
+        #[serde(default)]
+        auto_detect_lang: Option<bool>,
+        #[serde(default)]
+        enable_per_app: Option<bool>,
+        #[serde(default)]
+        emoji: Option<bool>,
+        #[serde(default)]
+        predict: Option<bool>,
     },
     #[serde(rename = "list_apps")]
     ListApps,
+    /// Upsert one per-app row. `method`/`ime_mode` "" (or "Mặc định") =
+    /// inherit global. `enabled: false` turns Vietnamese off for that app;
+    /// `true` clears the override — never stored as `Some(true)`, which would
+    /// out-rank a global `enabled = false` (R18).
+    /// Timings (`typing_delay_ms`, `bs_settle_ms`, `accent_settle_ms`) are
+    /// written as sent: a number overrides, null/absent = built-in default.
     #[serde(rename = "add_app")]
     AddApp {
         app_id: String,
@@ -47,15 +75,45 @@ pub enum IpcCommand {
         method: Option<String>,
         #[serde(default)]
         ime_mode: Option<String>,
+        #[serde(default)]
+        enabled: Option<bool>,
+        #[serde(default)]
+        typing_delay_ms: Option<u64>,
+        #[serde(default)]
+        bs_settle_ms: Option<u64>,
+        #[serde(default)]
+        accent_settle_ms: Option<u64>,
     },
     #[serde(rename = "remove_app")]
     RemoveApp { app_id: String },
     #[serde(rename = "get_learned")]
     GetLearned,
+    /// Upsert one keyword macro (gõ tắt).
+    #[serde(rename = "set_macro")]
+    SetMacro { key: String, value: String },
+    #[serde(rename = "remove_macro")]
+    RemoveMacro { key: String },
+    /// Upsert one hotkey macro (`"ctrl+alt+m"` → text); the chord must
+    /// include ctrl/alt/super (`macro_dict::parse_hotkey`).
+    #[serde(rename = "set_macro_hotkey")]
+    SetMacroHotkey { key: String, value: String },
+    #[serde(rename = "remove_macro_hotkey")]
+    RemoveMacroHotkey { key: String },
+    /// Stream word suggestions: one `{"suggestions": [...]}` line now and
+    /// one per change, for as long as the client stays connected (the
+    /// suggestion bar). Blocks on a Condvar — no polling (R15).
+    #[serde(rename = "predict_subscribe")]
+    PredictSubscribe,
+    /// Forget every learned word (Settings → "Xóa dữ liệu học").
+    #[serde(rename = "clear_predict")]
+    ClearPredict,
+    /// Exit the daemon — same as the tray's "Thoát vi-im".
+    #[serde(rename = "quit")]
+    Quit,
 }
 
-/// Response gửi về QML client.
-#[derive(Debug, Serialize, Clone)]
+/// Response gửi về QML client. Unset fields are omitted from the JSON.
+#[derive(Debug, Serialize, Clone, Default)]
 pub struct IpcResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -68,11 +126,49 @@ pub struct IpcResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ime_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub free_tone_placement: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_detect_lang: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_per_app: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emoji: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub predict: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestions: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub macros: Option<HashMap<String, String>>,
+    /// Hotkey macros (`[macro_hotkeys]`): chord → text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub macro_hotkeys: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub apps: Option<Vec<AppEntry>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub learned: Option<Vec<LearnedEntry>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reload: Option<bool>,
+}
+
+impl IpcResponse {
+    fn error(msg: String) -> Self {
+        Self { error: Some(msg), ..Self::default() }
+    }
+
+    fn reload() -> Self {
+        Self { reload: Some(true), ..Self::default() }
+    }
+
+    fn to_line(&self) -> String {
+        serde_json::to_string(self)
+            .unwrap_or_else(|e| format!("{{\"error\":\"Serialize: {e}\"}}"))
+    }
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -81,7 +177,20 @@ pub struct AppEntry {
     pub app_name: String,
     pub method: String,
     pub ime_mode: String,
+    /// false = Vietnamese turned off for this app.
+    pub enabled: bool,
     pub icon: String,
+    /// Has a built-in timing profile (listed even without user overrides).
+    pub builtin: bool,
+    /// Profile name ("OnlyOffice (X11/Qt + CEF, …)").
+    pub profile: String,
+    /// User overrides (None = default) and the built-in defaults, in ms.
+    pub typing_delay_ms: Option<u64>,
+    pub bs_settle_ms: Option<u64>,
+    pub accent_settle_ms: Option<u64>,
+    pub default_typing_delay_ms: u64,
+    pub default_bs_settle_ms: u64,
+    pub default_accent_settle_ms: u64,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -106,7 +215,7 @@ pub fn default_socket_path() -> PathBuf {
 }
 
 /// Spawn the IPC server thread. Blocks on UnixListener::incoming();
-/// each accepted connection is handled inline (single-connection model).
+/// each accepted connection gets its own blocking reader thread.
 /// Incoming commands are forwarded into the daemon's unified event bus.
 pub fn spawn_ipc_server(
     tx: Sender<DaemonEvent>,
@@ -133,7 +242,15 @@ pub fn spawn_ipc_server(
 
             for stream in listener.incoming() {
                 match stream {
-                    Ok(stream) => handle_client(stream, &tx),
+                    Ok(stream) => {
+                        let tx = tx.clone();
+                        let spawned = std::thread::Builder::new()
+                            .name("vi-im-ipc-client".into())
+                            .spawn(move || handle_client(stream, &tx));
+                        if let Err(e) = spawned {
+                            error!("IPC: spawn client thread: {e}");
+                        }
+                    }
                     Err(e) => error!("IPC accept error: {e}"),
                 }
             }
@@ -164,12 +281,7 @@ fn handle_client(mut stream: UnixStream, tx: &Sender<DaemonEvent>) {
         let cmd: IpcCommand = match serde_json::from_str(trimmed) {
             Ok(c) => c,
             Err(e) => {
-                let resp = IpcResponse {
-                    error: Some(format!("Parse: {e}")),
-                    input_method: None, tone_style: None, enabled: None,
-                    ime_mode: None, apps: None, learned: None, reload: None,
-                };
-                let _ = writeln!(stream, "{}", serde_json::to_string(&resp).unwrap());
+                let _ = writeln!(stream, "{}", IpcResponse::error(format!("Parse: {e}")).to_line());
                 continue;
             }
         };
@@ -182,198 +294,52 @@ fn handle_client(mut stream: UnixStream, tx: &Sender<DaemonEvent>) {
                 }
                 match resp_rx.recv() {
                     Ok(resp) => {
-                        let _ = writeln!(stream, "{}", serde_json::to_string(&resp).unwrap());
+                        let _ = writeln!(stream, "{}", resp.to_line());
                     }
                     Err(_) => break,
                 }
             }
-            IpcCommand::SetConfig { .. } | IpcCommand::AddApp { .. } | IpcCommand::RemoveApp { .. } => {
+            // Writes reply before the main thread applies them, so a bad
+            // chord must be refused here or the client never hears of it.
+            IpcCommand::SetMacroHotkey { key, value }
+                if value.is_empty() || crate::engine::macro_dict::parse_hotkey(key).is_none() =>
+            {
+                let msg = format!("Tổ hợp {key:?} không hợp lệ — cần ctrl/alt/super + một phím (ví dụ ctrl+alt+m) và nội dung");
+                let _ = writeln!(stream, "{}", IpcResponse::error(msg).to_line());
+            }
+            IpcCommand::PredictSubscribe => {
+                let (mut seen, mut words) = crate::engine::predict::current();
+                loop {
+                    let line = IpcResponse { suggestions: Some(words), ..IpcResponse::default() };
+                    if writeln!(stream, "{}", line.to_line()).is_err() {
+                        break; // bar closed
+                    }
+                    (seen, words) = crate::engine::predict::wait_change(seen);
+                }
+                break;
+            }
+            IpcCommand::ClearPredict => {
+                crate::engine::predict::clear();
+                info!("IPC: learned word suggestions cleared");
+                let _ = writeln!(stream, "{}", IpcResponse::reload().to_line());
+            }
+            IpcCommand::Quit => {
+                info!("IPC: quit requested");
+                let _ = writeln!(stream, "{}", IpcResponse::reload().to_line());
+                std::process::exit(0);
+            }
+            IpcCommand::SetConfig { .. }
+            | IpcCommand::AddApp { .. }
+            | IpcCommand::RemoveApp { .. }
+            | IpcCommand::SetMacro { .. }
+            | IpcCommand::RemoveMacro { .. }
+            | IpcCommand::SetMacroHotkey { .. }
+            | IpcCommand::RemoveMacroHotkey { .. } => {
                 if tx.send(DaemonEvent::IpcWrite { command: cmd }).is_err() {
                     break;
                 }
-                let resp = IpcResponse {
-                    reload: Some(true),
-                    input_method: None, tone_style: None, enabled: None,
-                    ime_mode: None, apps: None, learned: None, error: None,
-                };
-                let _ = writeln!(stream, "{}", serde_json::to_string(&resp).unwrap());
+                let _ = writeln!(stream, "{}", IpcResponse::reload().to_line());
             }
         }
     }
-}
-
-
-
-
-// ── Daemon-side command handlers (called from main loop) ────────────────
-
-/// Handle a read command — builds response from live state.
-pub fn handle_read_command(
-    cmd: &IpcCommand,
-    setting: &crate::config::Setting,
-    learned_store: &crate::config::LearnedStore,
-) -> IpcResponse {
-    let nil = || IpcResponse {
-        input_method: None, tone_style: None, enabled: None, ime_mode: None,
-        apps: None, learned: None, reload: None, error: None,
-    };
-    match cmd {
-        IpcCommand::GetConfig => {
-            let mut r = nil();
-            r.input_method = Some(setting.input_method.to_string());
-            r.tone_style = Some(match setting.tone_style {
-                ToneStyle::Classic => "classic".into(),
-                ToneStyle::Modern => "modern".into(),
-            });
-            r.enabled = Some(setting.enabled);
-            r.ime_mode = Some(match setting.ime_mode {
-                ImeMode::Preedit => "Preedit".into(),
-                ImeMode::NonPreedit => "NonPreedit".into(),
-            });
-            r
-        }
-        IpcCommand::ListApps => {
-            let mut apps: Vec<AppEntry> = setting.app_configs.iter()
-                .map(|(id, cfg)| AppEntry {
-                    app_id: id.clone(),
-                    app_name: id.clone(),
-                    method: cfg.input_method.map(|m| m.to_string())
-                        .unwrap_or_else(|| "Mặc định".into()),
-                    ime_mode: cfg.ime_mode.map(|m| m.to_string())
-                        .unwrap_or_else(|| "Mặc định".into()),
-                    icon: app_icon(id),
-                }).collect();
-            apps.sort_by(|a, b| a.app_name.cmp(&b.app_name));
-            let mut r = nil();
-            r.apps = Some(apps);
-            r
-        }
-        IpcCommand::GetLearned => {
-            let learned: Vec<LearnedEntry> = learned_store.apps.iter()
-                .map(|(id, p)| LearnedEntry {
-                    app_id: id.clone(),
-                    surrounding_text: p.surrounding_text,
-                    ime_activated: p.ime_activated,
-                }).collect();
-            let mut r = nil();
-            r.learned = Some(learned);
-            r
-        }
-        _ => {
-            let mut r = nil();
-            r.error = Some("Unexpected read command".into());
-            r
-        }
-    }
-}
-
-/// Handle a write command — mutates config and persists.
-pub fn handle_write_command(
-    cmd: &IpcCommand,
-    config_manager: &mut crate::config::ConfigManager,
-) -> IpcResponse {
-    let nil = || IpcResponse {
-        input_method: None, tone_style: None, enabled: None, ime_mode: None,
-        apps: None, learned: None, reload: None, error: None,
-    };
-    match cmd {
-        IpcCommand::SetConfig { input_method, tone_style, enabled, ime_mode } => {
-            let s = config_manager.setting_mut();
-            if let Some(ref m) = *input_method {
-                s.input_method = match m.as_str() {
-                    "VNI" | "Vni" | "vni" => InputMethod::Vni,
-                    // GUI gửi label hiển thị "Tự do" — thiếu nhánh này thì
-                    // chọn Tự do bị lưu thành Telex (dấu chọn "không nhảy").
-                    "Tự do" | "tự do" | "Smart" | "smart" => InputMethod::Smart,
-                    _ => InputMethod::Telex,
-                };
-            }
-            if let Some(ref ts) = *tone_style {
-                s.tone_style = match ts.as_str() {
-                    "modern" => ToneStyle::Modern,
-                    _ => ToneStyle::Classic,
-                };
-            }
-            if let Some(en) = *enabled { s.enabled = en; }
-            if let Some(ref im) = *ime_mode {
-                s.ime_mode = match im.as_str() {
-                    "Preedit" | "preedit" => ImeMode::Preedit,
-                    "NonPreedit" | "nonpreedit" => ImeMode::NonPreedit,
-                    _ => ImeMode::Preedit,
-                };
-            }
-            if let Err(e) = config_manager.save() {
-                let mut r = nil();
-                r.error = Some(format!("Save: {e}"));
-                return r;
-            }
-            info!("IPC: config updated via settings UI");
-            let mut r = nil();
-            r.reload = Some(true);
-            r
-        }
-        IpcCommand::AddApp { app_id, method, ime_mode } => {
-            let s = config_manager.setting_mut();
-            let entry = s.app_configs.entry(app_id.clone()).or_default();
-            if let Some(ref m) = *method {
-                entry.input_method = match m.as_str() {
-                    "Telex" | "telex" => Some(InputMethod::Telex),
-                    "VNI" | "Vni" | "vni" => Some(InputMethod::Vni),
-                    "Tự do" | "tự do" | "Smart" | "smart" => Some(InputMethod::Smart),
-                    _ => None,
-                };
-            }
-            if let Some(ref im) = *ime_mode {
-                entry.ime_mode = match im.as_str() {
-                    "Preedit" | "preedit" => Some(ImeMode::Preedit),
-                    "NonPreedit" | "nonpreedit" => Some(ImeMode::NonPreedit),
-                    _ => None,
-                };
-            }
-            if entry.input_method.is_none() && entry.ime_mode.is_none() && entry.enabled.is_none() {
-                s.app_configs.remove(app_id);
-            }
-            if let Err(e) = config_manager.save() {
-                let mut r = nil();
-                r.error = Some(format!("Save: {e}"));
-                return r;
-            }
-            info!("IPC: app config updated for {app_id}");
-            let mut r = nil();
-            r.reload = Some(true);
-            r
-        }
-        IpcCommand::RemoveApp { app_id } => {
-            config_manager.setting_mut().app_configs.remove(app_id);
-            if let Err(e) = config_manager.save() {
-                let mut r = nil();
-                r.error = Some(format!("Save: {e}"));
-                return r;
-            }
-            info!("IPC: app config removed for {app_id}");
-            let mut r = nil();
-            r.reload = Some(true);
-            r
-        }
-        _ => {
-            let mut r = nil();
-            r.error = Some("Unexpected write command".into());
-            r
-        }
-    }
-}
-
-/// Heuristic icon for well-known app IDs.
-#[allow(clippy::if_same_then_else)]
-fn app_icon(app_id: &str) -> String {
-    let lower = app_id.to_lowercase();
-    if lower.contains("firefox") || lower.contains("zen") { "🦊".into() }
-    else if lower.contains("chrome") || lower.contains("chromium") { "🌐".into() }
-    else if lower.contains("code") || lower.contains("vscode") { "💻".into() }
-    else if lower.contains("terminal") || lower.contains("kitty") { "⬛".into() }
-    else if lower.contains("alacritty") { "⬛".into() }
-    else if lower.contains("steam") { "🎮".into() }
-    else if lower.contains("spotify") { "🎵".into() }
-    else if lower.contains("slack") || lower.contains("discord") { "💬".into() }
-    else { "📱".into() }
 }

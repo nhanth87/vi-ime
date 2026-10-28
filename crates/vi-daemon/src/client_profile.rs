@@ -38,6 +38,16 @@ pub struct ClientProfile {
     pub is_legacy: bool,
     /// Whether this app needs evdev fallback only under XWayland.
     pub xwayland_fallback: bool,
+    /// Pause after each XTEST key tap (ms). The XTEST typer never remaps
+    /// keys mid-word, so apps need little or none (see xtest_typer.rs).
+    pub xtest_delay_ms: u64,
+    /// XTEST: wait between the BackSpaces and the first new glyph (ms).
+    /// Only apps that drop that glyph need it (OnlyOffice CEF, R19).
+    pub xtest_pre_glyph_ms: u64,
+    /// XTEST: the next command waits this long after an accented glyph
+    /// (ms) — OnlyOffice takes accented glyphs in late and a key arriving
+    /// sooner cancels them ("thủ tướng" → "thủ tớng", 2026-10-24).
+    pub accent_settle_ms: u64,
 }
 
 impl ClientProfile {
@@ -59,6 +69,9 @@ impl ClientProfile {
                 needs_injector: false,
                 is_legacy: true,
                 xwayland_fallback: false,
+            xtest_delay_ms: 4,
+            xtest_pre_glyph_ms: 30,
+            accent_settle_ms: 0,
             };
         }
 
@@ -68,13 +81,20 @@ impl ClientProfile {
                 label: "OnlyOffice (X11/Qt + CEF, xdotool injector)",
                 backspace_delay_ms: 20,
                 glyph_delay_ms: 20,
-                pre_first_glyph_delay_ms: 30,
+                // 30 still lost the first glyph after BS at 50 keys/s (field
+                // 2026-10-24, XTEST typer); R19: only raise. (A later human-
+                // timing "tướng"→"tớng" was a stray uinput keyup, not timing —
+                // see evdev_compose.rs; 100ms did not change it.)
+                pre_first_glyph_delay_ms: 60,
                 batch_delay_ms: 0,    // NEVER batch — CEF drops first char of burst
                 batch_safe: false,
                 is_slow: true,
                 needs_injector: true,
                 is_legacy: true,
                 xwayland_fallback: false,
+            xtest_delay_ms: 4,
+            xtest_pre_glyph_ms: 60,
+            accent_settle_ms: 150,
             };
         }
 
@@ -93,6 +113,9 @@ impl ClientProfile {
                 needs_injector: false,
                 is_legacy: false,
                 xwayland_fallback: true,
+            xtest_delay_ms: 1,
+            xtest_pre_glyph_ms: 0,
+            accent_settle_ms: 0,
             };
         }
 
@@ -111,6 +134,9 @@ impl ClientProfile {
                 needs_injector: false,
                 is_legacy: false,
                 xwayland_fallback: false,
+            xtest_delay_ms: 1,
+            xtest_pre_glyph_ms: 0,
+            accent_settle_ms: 0,
             };
         }
 
@@ -127,11 +153,57 @@ impl ClientProfile {
                 needs_injector: false,
                 is_legacy: false,
                 xwayland_fallback: false,
+            xtest_delay_ms: 0,
+            xtest_pre_glyph_ms: 0,
+            accent_settle_ms: 0,
             };
         }
 
         Self::default()
     }
+
+    /// `detect` plus the user's per-app overrides from `[app_configs.<id>]`
+    /// — every timing has a built-in default (the profile above) and any
+    /// field the user sets replaces just that one. A key matches the app_id
+    /// itself or a prefix of it ("libreoffice" covers "libreoffice-writer",
+    /// "onlyoffice" covers "ONLYOFFICE"); the longest key wins.
+    pub fn for_app(app_id: &str, setting: &crate::config::Setting) -> Self {
+        let mut p = Self::detect(app_id);
+        let Some(c) = setting.app_config_for(app_id) else {
+            return p;
+        };
+        if let Some(ms) = c.typing_delay_ms {
+            p.xtest_delay_ms = ms;
+            p.backspace_delay_ms = ms;
+            p.glyph_delay_ms = ms;
+        }
+        if let Some(ms) = c.bs_settle_ms {
+            p.xtest_pre_glyph_ms = ms;
+            p.pre_first_glyph_delay_ms = ms;
+        }
+        if let Some(ms) = c.accent_settle_ms {
+            p.accent_settle_ms = ms;
+        }
+        if c.typing_delay_ms.is_some() || c.bs_settle_ms.is_some() || c.accent_settle_ms.is_some() {
+            tracing::info!(
+                "[PROFILE] {app_id}: typing_delay={}ms bs_settle={}ms accent_settle={}ms (setting.conf)",
+                p.xtest_delay_ms, p.xtest_pre_glyph_ms, p.accent_settle_ms
+            );
+        }
+        p
+    }
+
+    /// Apps with a built-in timing profile, as (key, display name) — shown
+    /// in the settings window with their default values so they can be
+    /// tuned without knowing the app_id. Keys are prefixes (see `for_app`).
+    pub const BUILTIN_APPS: &'static [(&'static str, &'static str)] = &[
+        ("google-chrome", "Google Chrome (X11)"),
+        ("chromium", "Chromium (X11)"),
+        ("onlyoffice", "OnlyOffice"),
+        ("libreoffice", "LibreOffice"),
+        ("firefox", "Firefox"),
+        ("kitty", "Terminal (kitty, foot, …)"),
+    ];
 
     /// Default profile for unknown apps (conservative).
     pub fn default() -> Self {
@@ -146,6 +218,9 @@ impl ClientProfile {
             needs_injector: false,
             is_legacy: false,
             xwayland_fallback: false,
+        xtest_delay_ms: 2,
+        xtest_pre_glyph_ms: 0,
+        accent_settle_ms: 0,
         }
     }
 }

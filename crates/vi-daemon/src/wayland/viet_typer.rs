@@ -298,8 +298,26 @@ pub(crate) fn build_static_keymap() -> (String, HashMap<char, (u32, u8)>) {
 /// A single type command from the main event loop to the typer thread.
 #[derive(Debug)]
 enum TypeCmd {
-    Type { backspaces: usize, suffix: String, paced: bool },
+    Type { backspaces: usize, suffix: String, mode: TypeMode },
     Shutdown,
+}
+
+/// How one live-echo edit (BackSpaces + new glyphs) goes out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TypeMode {
+    /// Terminals: one flush, no confirmation.
+    Fast,
+    /// BackSpaces and glyphs back to back, then ONE roundtrip. The app reads
+    /// the whole edit in one go and paints once — no frame where the old
+    /// letter is gone and the new one not there yet (the "flicker" users see
+    /// with Paced, field 2026-10-24: d→đ took a 99ms roundtrip between the
+    /// BackSpace and the đ). Safe since the keymap is static (R14): the
+    /// 2026-07-10 Electron losses came from re-uploading the keymap per key.
+    Burst,
+    /// Apps that swallow BS+char bursts (LibreOffice VCL, OnlyOffice CEF —
+    /// `ClientProfile::batch_safe == false`, R19/R21): roundtrip + delay
+    /// after every BackSpace, settle before the first glyph.
+    Paced,
 }
 
 pub(crate) struct VietTyper {
@@ -387,7 +405,8 @@ impl VietTyper {
 
             for cmd in rx {
                 match cmd {
-                    TypeCmd::Type { backspaces, suffix, paced } => {
+                    TypeCmd::Type { backspaces, suffix, mode } => {
+                        let paced = mode == TypeMode::Paced;
                         let mut t = start.elapsed().as_millis() as u32;
                         for _ in 0..backspaces {
                             let (code, level) = map_shared[&'\u{0008}'];
@@ -422,7 +441,7 @@ impl VietTyper {
                         // per-BACKSPACE roundtrips above stay untouched —
                         // those transitions are field-proven critical
                         // (VCL/CEF swallow BS+char bursts, R19/R21).
-                        if paced && glyphs > 0 {
+                        if (paced && glyphs > 0) || (mode == TypeMode::Burst && glyphs as usize + backspaces > 0) {
                             timed_roundtrip(
                                 &mut queue,
                                 &mut TyperSink,
@@ -476,12 +495,12 @@ impl VietTyper {
     }
 
     pub(crate) fn type_str(&mut self, s: &str) -> bool {
-        self.backspace_then_type(0, s, false)
+        self.backspace_then_type(0, s, TypeMode::Fast)
     }
 
     /// P0b: NON-BLOCKING. Checks coverage, sends command to typer thread,
     /// returns immediately. The thread does all roundtrip/sleep pacing.
-    pub(crate) fn backspace_then_type(&mut self, backspaces: usize, s: &str, paced: bool) -> bool {
+    pub(crate) fn backspace_then_type(&mut self, backspaces: usize, s: &str, mode: TypeMode) -> bool {
         let Some(tx) = &self.tx else { return false };
         if self.map.is_empty() { return false; }
         if backspaces == 0 && s.is_empty() { return true; }
@@ -490,7 +509,7 @@ impl VietTyper {
             return false;
         }
         self.inflight.fetch_add(1, Ordering::Release);
-        if tx.send(TypeCmd::Type { backspaces, suffix: s.to_string(), paced }).is_err() {
+        if tx.send(TypeCmd::Type { backspaces, suffix: s.to_string(), mode }).is_err() {
             self.inflight.fetch_sub(1, Ordering::Release);
             warn!("[VIET-TYPER] thread đã chết — không gửi được lệnh");
             return false;
@@ -500,6 +519,26 @@ impl VietTyper {
 
     pub(crate) fn inflight(&self) -> u64 {
         self.inflight.load(Ordering::Acquire)
+    }
+
+    /// Can the static keymap type `ch`?
+    pub(crate) fn can_type(&self, ch: char) -> bool {
+        self.ready() && self.map.contains_key(&ch)
+    }
+
+    /// Block (bounded) until every queued command has been written and
+    /// confirmed. The typer runs on its own thread: a key forwarded on the
+    /// OTHER virtual keyboard right after a `backspace_then_type` can reach
+    /// the app first — repro 2026-10-24 (nested Hyprland + Chrome): commit
+    /// "tẽt"→"text" = BS BS "ext" on the typer, Space replayed on the
+    /// forwarder; the Space landed before the BackSpaces, which then deleted
+    /// it → "tẽext" with no space. Normally a few ms; capped so a stuck
+    /// compositor can never freeze key handling.
+    pub(crate) fn wait_idle(&self) {
+        let t0 = Instant::now();
+        while self.inflight() > 0 && t0.elapsed() < std::time::Duration::from_millis(300) {
+            std::thread::sleep(std::time::Duration::from_micros(500));
+        }
     }
 }
 

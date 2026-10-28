@@ -330,6 +330,175 @@
 > - **Không được thêm bất kỳ cơ chế buffer key nào vào đường live-echo.**
 >   Kể cả `VecDeque<KeyEvent>`, `delay`, hay `yield_now`.
 
+### R24. XWayland typer = XTEST bảng phím TĨNH (`xtest_typer.rs`) — KHÔNG quay lại xdotool từng ký tự
+> Thay R19 (2026-10-24). Trên Hyprland mọi app XWayland (Chrome X11, OnlyOffice)
+> dùng `XTestTyper`: 1 kết nối X giữ suốt phiên, 67 chữ thường gán CỐ ĐỊNH 2 chữ/phím
+> (level 1/2), chữ HOA + emoji dùng vài phím LRU. Đo: 51 bước live-echo ≈ 0.4s
+> (xdotool ≈ 10s → backlog → "từ kẹt, bấm BackSpace mới hiện").
+> - **Chỉ dùng keycode trong `SAFE_EVDEV`.** Chromium KHÔNG giải mã nhiều phím theo
+>   keysym mà theo evdev code → DOM code → chạy lệnh: Paste (135) dán clipboard,
+>   Cut (137), New (181) mở tab, media/Back/Refresh… Quét thực địa: map [ê,Ê] lên
+>   từng keycode, gõ `a <phím> b` vào textarea Chrome X11. Paste với clipboard rỗng
+>   CŨNG cho "aêb" — nên loại MỌI phím mang lệnh, không chỉ tin kết quả quét.
+> - Keycode 8 bị XKB bỏ qua; `Drop` phải round-trip (flush rồi đóng socket làm mất request).
+> - Xwayland nạp lại keymap khi compositor đổi thiết bị → kiểm tra trước mỗi lần gõ, gán lại.
+> - xdotool chỉ còn là fallback khi không có XTEST.
+> - **Level 2 (Shift) phải quét riêng**: map [ê,ơ], gõ `a <phím> Shift+<phím> b` = "aêơb".
+>   Đã loại 85 Zenkaku (Shift+nó bị nuốt như phím bật IME → "á" thành "đ"), 202 PROG3,
+>   194 F24 (ChangeKeyboardMapping GIỮ key type tường minh `PC_CONTROL_SUPER_LEVEL2`
+>   của xkeyboard-config → "ỳ" thành "ý"; xem bằng `xkbcomp -xkb :0 -`).
+> - Khi quét/test XTEST phải DỪNG daemon thật: typer của nó map cùng keycode → kết quả nhiễu.
+> - OnlyOffice: `pre_first_glyph_delay_ms` 60 (30 vẫn mất chữ đầu sau BS ở 50 phím/s).
+> - Chỉ dùng XTEST khi cửa sổ focus là XWayland (`hyprctl activewindow -j`); LibreOffice
+>   Wayland gốc trong evdev fallback dùng bàn phím ảo Wayland — XTEST không tới được nó.
+
+### R24b. evdev fallback: grab SONG SONG + hotplug + nhớ phím kẹt
+> - Mỗi bàn phím tự `wait_keys_clear` + grab trên reader thread của nó. Grab tuần tự làm
+>   bàn phím đã grab nằm chờ 3s (phím kẹt `STALE_KEY`) → tràn queue kernel → mất/đảo phím.
+> - `evdev_hotplug.rs`: bàn phím cắm vào khi đang grab cũng được grab. Node bị xoá phải được
+>   QUÊN (watch DELETE): kernel tái dùng số `eventN`, bàn phím cắm lại đúng node cũ từng bị bỏ
+>   qua → gõ ra phím thô (field 2026-10-28, Chrome "a1 a1" 0/5).
+> - Bàn phím bị rút khi đang grab: `poll` trả POLLHUP/POLLERR ngay lập tức mãi mãi → reader PHẢI
+>   tự thoát (chỉ reader đó, KHÔNG set `dead`). Trước đây `continue` → thread quay 95% CPU tới khi
+>   đổi app (vi phạm R15, đẩy load máy lên → test vô hiệu).
+> - Phím kẹt lưu ở `$XDG_STATE_HOME/vi-ime/stale-keys` (test KHÔNG ghi file này).
+> - Test thực địa: `field.py` (uinput → daemon thật → app → đọc lại), nhả phím trước khi
+>   nhấn lại CHÍNH nó (kernel bỏ press thứ 2 của phím đang xuống), mở app ở workspace trống
+>   (follow_mouse cướp focus), chờ dòng `[LEGACY-GRAB] engaging` trước khi gõ.
+
+### R25. Live-echo: Burst mặc định, Paced chỉ cho app nuốt cụm (VCL/CEF)
+> `TypeMode` (viet_typer.rs): terminal Fast; `ClientProfile::batch_safe == false`
+> (LibreOffice, OnlyOffice) Paced (roundtrip mỗi BackSpace, R21); còn lại **Burst**:
+> BS + chữ mới liền một mạch rồi 1 roundtrip → app vẽ 1 khung, HẾT NHÁY. Lỗi Electron
+> 2026-07-10 khi bớt pace là do re-upload keymap mỗi phím — keymap đã tĩnh (R14).
+
+### R26. Thứ tự giữa 2 bàn phím ảo — phím ranh giới KHÔNG được vượt typer
+> Typer chạy thread riêng; phím forward trên vk khác có thể tới app TRƯỚC.
+> Repro (Hyprland lồng + Chrome): commit "tẽt"→"text" = BS BS "ext" trên typer, Space
+> trên forwarder → Space tới trước, bị BS xoá → "tẽext", mất dấu cách (đúng lỗi user báo).
+> - Ký tự ranh giới gõ được (cách, dấu câu) đi CHUNG lệnh typer với diff commit.
+> - Mọi phím forward khác (Enter, mũi tên, Ctrl+…) gọi `viet.wait_idle()` trước.
+
+### R27. Generation chỉ tăng khi config THẬT SỰ đổi
+> `RuntimeConfig::store/store_app_id/store_macros/set_game_mode` so sánh trước khi bump.
+> Daemon store lại ở MỌI focus event, kể cả chỉ đổi tiêu đề cửa sổ (editor thêm "*",
+> tab trình duyệt, app chat) → bump → reconfigure → R8 drop từ đang gõ → mất dấu/nhảy
+> chữ giữa từ ("Vieetj"→"Viêtj"). ĐỪNG bỏ phép so sánh.
+
+### R28. Tự do: từ điển + ngữ cảnh (engine.rs `smart_commit_english_only`)
+> Chỉ quyết định ở RANH GIỚI TỪ, và chỉ thay chữ Việt bằng phím gốc (không bao giờ bóc dấu):
+> 1. `rhyme.rs`: vần/âm tiết không tồn tại ("tẽt", "ảe", "ỏu") → phím gốc (mọi kiểu gõ).
+>    Dấu thanh với -c/-ch/-p/-t chỉ sắc/nặng; "ươ" cuối từ → "uơ" (thuở).
+> 2. Phím gốc là từ tiếng Anh (english_common + hunspell en_US của HỆ THỐNG) mà bản Việt
+>    không có trong hunspell vi_VN → tiếng Anh. Cả hai đều là từ thật ("rest"/"rét",
+>    "conf"/"còn") → **ngữ cảnh** (điểm ngôn ngữ các từ trước, reset khi Deactivate);
+>    không có ngữ cảnh → `english_prefer_vietnamese.txt` quyết định.
+> - KHÔNG nhúng vi_VN.dic vào repo (GPLv2 vs GPL-3.0-only) — `lexicon.rs` đọc lúc chạy.
+> - `viet_syllables.txt` THIẾU (~1.3k/6.6k) — không dùng để bác bỏ chữ Việt.
+> - **Phím gốc có CHỮ SỐ đã thành dấu (VNI, cả Tự do) KHÔNG BAO GIỜ trả về phím gốc.** Từ bị
+>   cắt ngắn / gõ sai ("sẵ", "kiể", "đưồng") giữ nguyên chữ Việt đang hiện. Field 2026-10-27:
+>   "sa84", "kie63", "la62", "d9uo67n2g" — số không bao giờ là tiếng Anh, trả về chỉ in ra phím.
+> - evdev: autorepeat kernel (value 2) của phím chữ/số bị BỎ (`Composer::handle`). Bàn phím grab
+>   lặp sau 250ms, desktop sau 600ms → giữ phím dấu hơi lâu = gõ 2 lần = mất dấu ("khó"→"kho1").
+>   `[EVDEV-END]` (debug) ghi phím nào kết thúc từ đang gõ — đọc nó trước khi đoán (R22).
+
+### R29. ĐỪNG khởi động lại daemon / chạy field test trên máy user khi chưa được đồng ý NGAY LÚC ĐÓ
+> **Sự cố 2026-10-24:** agent restart `vi-ime-session.service` nhiều lần để nạp bản build mới
+> và chạy `field.py` (mở app ở workspace khác, grab bàn phím, bơm phím uinput) trong lúc user
+> vẫn đang dùng máy → user báo "hết gõ được tiếng Việt trong Chrome và các app khác".
+> Không phải bug code — log ngay sau đó cho thấy gõ lại bình thường. Hai cơ chế:
+> 1. **Hyprland KHÔNG gửi lại `activate`** cho ô nhập đang focus sẵn khi input-method mới kết
+>    nối (log: `[UNSUPPORTED] app=orca — no Activate since focus`). Sau mỗi lần restart, app
+>    Wayland mất tiếng Việt tới khi user click lại vào ô / đổi cửa sổ. App XWayland thì evdev
+>    fallback tự bật lại sau probe 1.5s.
+> 2. **Field test chiếm máy thật**: evdev grab bàn phím vật lý, focus nhảy sang workspace test,
+>    phím user lọt vào cửa sổ test (và ngược lại).
+>
+> **Quy tắc:**
+> - Restart daemon hoặc chạy field test → HỎI user ngay lúc đó (AskUserQuestion), nói rõ
+>   bao lâu, phải không chạm máy, và sau đó cần click lại vào ô nhập. Đồng ý lần trước KHÔNG
+>   áp dụng cho lần sau.
+> - Gom thay đổi lại, restart MỘT lần; báo user click lại vào ô sau restart.
+> - Test X11/XTEST trực tiếp → phải dừng daemon (typer của nó map cùng keycode) — càng cần hỏi.
+> - User báo "không gõ được" → dừng NGAY mọi test/tiến trình nền của agent trước khi chẩn đoán.
+> - **Lần 2 cùng ngày (12:5x): user gõ trong lúc field test chạy → "nhảy chữ".** Hai cơ chế:
+>   (a) evdev fallback grab MỌI bàn phím (bàn phím thật + uinput của test) và trộn vào MỘT
+>   Composer → phím user xen vào giữa từ của test (và ngược lại); (b) máy quá tải: load ~10.8
+>   trên 4 nhân (build `--release` + OnlyOffice CEF mở đi mở lại + Chrome) → app xử lý phím
+>   chậm, mọi khoảng nghỉ settle mất tác dụng. daemon chỉ 0.1% CPU — không phải daemon nặng.
+>   → Field test chỉ chạy khi user thật sự rời máy; KHÔNG build release ngay trước/trong test;
+>   kết quả test lúc load cao không có giá trị.
+
+### R30. Profile nhịp gõ theo app: MỌI thông số có giá trị mặc định, user ghi đè từng cái
+> `ClientProfile` (client_profile.rs) là bảng mặc định DUY NHẤT. `[app_configs.<key>]` ghi đè
+> từng trường; trống = mặc định. Key khớp app_id chính xác hoặc TIỀN TỐ dài nhất, không phân
+> biệt hoa thường (`Setting::app_config_for`, dùng chung cho EffectiveConfig và ClientProfile):
+> `onlyoffice` khớp `ONLYOFFICE`, `libreoffice` khớp `libreoffice-writer`.
+>
+> | Profile | typing_delay_ms | bs_settle_ms (XTEST) | accent_settle_ms |
+> |---|---|---|---|
+> | LibreOffice (VCL, typer Wayland native) | 4 | 30 | 0 |
+> | OnlyOffice (CEF, XTEST) | 4 | 60 | 150 |
+> | Chrome/Chromium X11 (XTEST) | 1 | 0 | 0 |
+> | Firefox (Wayland) | 1 | 0 | 0 |
+> | Terminal | 0 | 0 | 0 |
+> | Khác (mặc định) | 2 | 0 | 0 |
+>
+> - Cửa sổ cấu hình (trang Ứng dụng) luôn liệt kê `ClientProfile::BUILTIN_APPS` kèm giá trị
+>   mặc định (placeholder) — "Đặt lại" chỉ xoá ghi đè, dòng vẫn còn.
+> - IPC `add_app` ghi CẢ dòng: timing gửi null = về mặc định.
+> - Đổi giá trị mặc định = phải có bằng chứng field (R19/R22); OnlyOffice chỉ được TĂNG.
+> - **Profile gắn vào grab lúc engage.** Focus chuyển app evdev → app evdev (Chrome → OnlyOffice)
+>   PHẢI nhả grab cũ rồi grab lại với profile app mới (`main.rs` Focus, nhánh `(true, had_grab)`).
+>   Bẫy 2026-10-24: nhánh `(true, true) => {}` giữ grab Chrome → OnlyOffice gõ bằng nhịp Chrome
+>   (không accent settle) → "thủ tớng" dù profile OnlyOffice đúng. Kiểm log: dòng
+>   `[LEGACY-GRAB] engaging … [<profile>]` phải là profile của app ĐANG focus.
+
+### R30b. evdev: GỘP lệnh typer (coalescing) — phím chữ không gõ ngay
+> `Composer::deferred`: phím chữ / BackSpace giữa từ chỉ cập nhật engine + ghi đích; consumer
+> rút hết hàng đợi rồi `flush()` gõ MỘT lần phần chênh lệch. Typer chậm (OnlyOffice chờ 150ms
+> sau chữ có dấu) giờ tốn một lần chờ mỗi LÔ thay vì mỗi phím (user 2026-10-24: "OnlyOffice gõ
+> rất chậm"). BẤT KỲ đường nào forward uinput / gõ ranh giới / phím tắt phải `flush()` TRƯỚC
+> (giữ thứ tự trên màn hình); commit/clear tính diff từ `shown` nên chỉ cần bỏ `deferred`.
+>
+> **Bẫy đã sập (2026-10-24, ngay sau khi gộp):** accent settle khi đó tính theo LỆNH (chờ đầu
+> mỗi lệnh). Một lô gộp ("ưo", "ướng") đặt phím kế tiếp chỉ 4ms sau chữ có dấu → OnlyOffice
+> nuốt: roll 35ms "tướng"→"tớng", roll 20ms "tướng"→"tư" + mất Enter (log `[EVDEV-SYNC]`
+> `t → tưo` / `t → tướng` trong 1 lệnh). **Bất biến:** `XTestTyper::wait_settled` chạy
+> TRƯỚC MỖI PHÍM (BackSpace, glyph) và trước MỌI uinput forward (`Composer::forward`,
+> `forward_tap`), `last_accent` ghi sau MỖI glyph có dấu. ĐỪNG đưa settle về mức lệnh.
+> Tái hiện không cần đụng máy user: OnlyOffice trên Xwayland rootful `:2` (weston headless),
+> phát lại đúng chuỗi lệnh `[EVDEV-SYNC]` của lần field hỏng, Enter gửi XTEST tức thì (như
+> uinput): typer cũ ra "thủ tớng"/"thủ tư", typer mới sạch.
+
+### R32. Gợi ý từ (engine/predict.rs) — riêng tư + KHÔNG chặn đường gõ
+> Học từ đã commit + cặp từ liền nhau; thanh gợi ý `vi-settings --bar` (bar.qml, daemon tự
+> chạy) nhận qua IPC `predict_subscribe` (Condvar, không poll); Alt+1..3 chọn.
+> - **Riêng tư:** Wayland chỉ học khi `FieldSensitivity::Normal` (`learns()`: không terminal,
+>   không Secure/Url/Numeric). evdev KHÔNG thấy ô mật khẩu → chỉ học ở app office
+>   (`Composer::learn` = `is_legacy_app`), TUYỆT ĐỐI không cho trình duyệt. Dữ liệu chỉ ở
+>   `$XDG_DATA_HOME/vi-ime/predict.tsv`, tắt được (`predict = false`), xóa được (`clear_predict`).
+> - **Không chặn:** mọi lời gọi từ thread gõ dùng `try_lock`; bận (đang save) → từ vào hàng
+>   đợi (≤256) / bỏ qua cập nhật prefix. Probe 2026-10-27: `observe` blocking chờ save tới 28ms
+>   ở ranh giới từ. Tra cứu: BTreeMap range (từ 2 ký tự), next-word theo từ trước — ĐỪNG quét
+>   cả bảng. Save định dạng trên thread riêng.
+> - **Alt+1..3 chỉ khi thanh đang hiện:** gợi ý tự tắt `LIVE` (4s) sau phím cuối (thread
+>   `expire_loop`, ngủ trên Condvar) — Alt+1 phải trả lại app (Chrome: chuyển tab).
+> - **Alt đã tới app:** tap Ctrl trước khi Alt nhả (tránh "Alt trơn" mở menu Firefox/LO/OO);
+>   evdev còn nhả Alt phía app trước khi gõ từ (`evdev_accept.rs`), `restore_alt` nhấn lại cho
+>   tổ hợp khác. Release của phím đã nuốt (gợi ý/macro) KHÔNG forward (keyup lạc, xem R19/OO).
+> - Probe/scratch `#[path]` include predict.rs KHÔNG phải cfg(test) → chạy với
+>   `XDG_DATA_HOME`/`HOME` trỏ scratch, nếu không sẽ ghi đè dữ liệu thật của user.
+
+### R31. Log file KHÔNG được ghi mọi cấp độ
+> Sự cố 2026-10-24: file log không có filter → `[NORMALIZE]` debug (nhiều dòng/phím) làm
+> `vi-ime.<ngày>.log` lên 4.3 GB trong một ngày, định dạng chuỗi ngay trên đường gõ phím,
+> ghi đĩa liên tục (máy chậm). Giờ file mặc định = `info` + `[LIVE-SYNC]`/`[EVDEV-SYNC]`
+> (1 dòng/phím, bằng chứng R22). Cần full debug → `RUST_LOG=debug` (áp cho cả file).
+> ĐỪNG thêm debug log nhiều dòng/phím vào module được bật debug mặc định
+> (`evdev_compose`, `wayland::actions`); dùng `trace!` cho chi tiết nội bộ engine.
+> Harness/test ĐỪNG đọc lại cả file log liên tục — tail từ offset cuối.
+
 ---
 
 ## 📁 File Map

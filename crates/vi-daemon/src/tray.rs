@@ -3,6 +3,12 @@
 //! System-tray icon (StatusNotifierItem) — ayatana-appindicator (libappindicator3)
 //! Runs GTK main loop in a dedicated thread. Provides better panel compatibility
 //! (warp-taskbar, waybar, etc.) than raw ksni.
+//!
+//! Two menus, one source of truth (`setting.conf`):
+//! - left-click → this native DBusMenu, laid out like fcitx5's tray menu
+//!   (on/off, input methods inline, the rest in submenus, then app actions);
+//! - middle-click ("secondary activate") → the Qt Quick quick-menu popup
+//!   (`vi-settings --menu`, vi-settings/menu.qml) drawn next to the cursor.
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Sender, channel};
@@ -16,7 +22,7 @@ use gtk::prelude::*;
 use gtk::{CheckMenuItem, Menu, MenuItem, RadioMenuItem, SeparatorMenuItem};
 use tracing::{info, warn};
 
-use crate::config::{ConfigManager, ImeMode, InputMethod};
+use crate::config::{ConfigManager, ImeMode, InputMethod, Setting, ToneStyle};
 
 const ICON_ON: &str = "vi-im";
 const ICON_OFF: &str = "vi-im-off";
@@ -43,59 +49,121 @@ impl Default for TrayState {
     }
 }
 
-/// Install the baked SVG icons into a FLAT directory and return that
-/// directory's path.
-///
-/// libappindicator's `set_icon_theme_path` — confirmed against the crate's
-/// own example (`appindicator3-0.3.0/examples/simple_client.rs`) — expects
-/// a plain folder containing `<name>.svg`/`<name>.png` directly, NOT a
-/// freedesktop hicolor hierarchy (`hicolor/scalable/apps/…`). Pointing it
-/// at the hicolor tree renders as a blank/placeholder icon: the lookup
-/// finds nothing at `<path>/vi-im.svg` because the real file sits one
-/// level deeper. Kept out of `~/.local/share/icons` entirely to avoid
-/// mixing conventions.
-
-
 /// Tray update signal type.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UpdateSignal;
 
-/// Persist one config field, log, then rebuild the menu + icon IMMEDIATELY
-/// (synchronously, same GTK thread — no DBus round-trip, no dependency on
-/// a host correctly implementing LayoutUpdated/PropertiesChanged, which is
-/// exactly the class of bug that made the old ksni-based tray's checkmarks
-/// freeze on some panels).
-fn refresh(
-    indicator: &Indicator,
-    state: &Arc<Mutex<TrayState>>,
-    config_path: &PathBuf,
-    settings_exe: &Option<PathBuf>,
-) {
-    let (method, mode, enabled) = read_state(config_path);
-    {
-        let mut guard = state.lock().unwrap();
-        guard.current_method = method;
-        guard.current_mode = mode;
-        guard.current_enabled = enabled;
-    }
-    indicator.set_icon_full(if enabled { ICON_ON } else { ICON_OFF }, "vi-im");
-    let menu = build_menu(
-        indicator,
-        state,
-        config_path,
-        settings_exe,
-        method,
-        mode,
-        enabled,
-    );
-    indicator.set_menu(Some(&menu));
+/// Everything a menu callback needs to persist a change and redraw.
+#[derive(Clone)]
+struct MenuCtx {
+    indicator: Indicator,
+    state: Arc<Mutex<TrayState>>,
+    config_path: PathBuf,
+    settings_exe: Option<PathBuf>,
 }
 
-/// Build the full tray menu for the given state. Every menu item writes
-/// straight to `setting.conf` (the daemon watches it via inotify and
-/// live-reloads — same flow the settings GUI and CLI use) and then calls
-/// [`refresh`] itself, so the widget the user is looking at updates in the
-/// same click, not on the next 2s poll.
+impl MenuCtx {
+    /// Persist one config change, then rebuild the menu + icon IMMEDIATELY
+    /// (synchronously, same GTK thread — no DBus round-trip, no dependency on
+    /// a host correctly implementing LayoutUpdated/PropertiesChanged, which is
+    /// exactly the class of bug that made the old ksni-based tray's checkmarks
+    /// freeze on some panels). The daemon picks the file change up via inotify,
+    /// same flow the settings GUI and CLI use.
+    fn save(&self, edit: impl FnOnce(&mut Setting)) {
+        if let Ok(mut cm) = ConfigManager::new(Some(self.config_path.clone())) {
+            edit(cm.setting_mut());
+            if let Err(e) = cm.save() {
+                warn!("[TRAY] save failed: {e}");
+            }
+        }
+        self.refresh();
+    }
+
+    fn refresh(&self) {
+        let (method, mode, enabled) = read_state(&self.config_path);
+        if let Ok(mut guard) = self.state.lock() {
+            guard.current_method = method;
+            guard.current_mode = mode;
+            guard.current_enabled = enabled;
+        }
+        self.indicator
+            .set_icon_full(if enabled { ICON_ON } else { ICON_OFF }, "vi-im");
+        let menu = build_menu(
+            &self.indicator,
+            &self.state,
+            &self.config_path,
+            &self.settings_exe,
+            method,
+            mode,
+            enabled,
+        );
+        self.indicator.set_menu(Some(&menu));
+    }
+
+    /// Launch vi-settings (optionally with `--menu` for the quick popup).
+    fn launch_settings(&self, args: &[&str]) {
+        match &self.settings_exe {
+            Some(exe) => {
+                if let Err(e) = std::process::Command::new(exe).args(args).spawn() {
+                    warn!("[TRAY] cannot launch settings {exe:?}: {e}");
+                }
+            }
+            None => warn!("[TRAY] vi-settings launcher not found next to binary"),
+        }
+    }
+}
+
+/// Append a radio group to `menu`. GTK radio items emit `activate` for both
+/// the newly selected and the de-selected item, so only the active one acts.
+fn radio_group<T: Copy + PartialEq + 'static>(
+    menu: &Menu,
+    ctx: &MenuCtx,
+    options: &[(T, &str)],
+    current: T,
+    apply: fn(&mut Setting, T),
+) {
+    let mut first: Option<RadioMenuItem> = None;
+    for &(value, label) in options {
+        let item = match &first {
+            None => RadioMenuItem::with_label(label),
+            Some(f) => RadioMenuItem::with_label_from_widget(f, Some(label)),
+        };
+        item.set_active(value == current);
+        let ctx = ctx.clone();
+        let label = label.to_string();
+        item.connect_activate(move |it| {
+            if !it.is_active() {
+                return;
+            }
+            info!("[TRAY] → {label}");
+            ctx.save(|s| apply(s, value));
+            crate::notify::popup("vi-ime", &label);
+        });
+        if first.is_none() {
+            first = Some(item.clone());
+        }
+        menu.append(&item);
+    }
+}
+
+/// A parent item whose submenu holds one radio group (fcitx-style nesting for
+/// options people change rarely, so the top level stays short).
+fn radio_submenu<T: Copy + PartialEq + 'static>(
+    menu: &Menu,
+    ctx: &MenuCtx,
+    title: &str,
+    options: &[(T, &str)],
+    current: T,
+    apply: fn(&mut Setting, T),
+) {
+    let sub = Menu::new();
+    radio_group(&sub, ctx, options, current, apply);
+    let parent = MenuItem::with_label(title);
+    parent.set_submenu(Some(&sub));
+    menu.append(&parent);
+}
+
+/// Build the full tray menu for the given state.
 #[allow(clippy::too_many_arguments)]
 fn build_menu(
     indicator: &Indicator,
@@ -106,197 +174,114 @@ fn build_menu(
     mode: ImeMode,
     enabled: bool,
 ) -> Menu {
+    let ctx = MenuCtx {
+        indicator: indicator.clone(),
+        state: Arc::clone(state),
+        config_path: config_path.clone(),
+        settings_exe: settings_exe.clone(),
+    };
+    let tone = ConfigManager::new(Some(config_path.clone()))
+        .map(|cm| cm.setting().tone_style)
+        .unwrap_or_default();
     let menu = Menu::new();
 
-    // ── Kiểu gõ: Telex / VNI / Tự do (radio group) ──
-    let methods = [InputMethod::Telex, InputMethod::Vni, InputMethod::Smart];
-    let mut first_method_item: Option<RadioMenuItem> = None;
-    for m in methods {
-        let item = match &first_method_item {
-            None => RadioMenuItem::builder()
-                .label(method_label(m))
-                .active(m == method)
-                .build(),
-            Some(first) => {
-                let it = RadioMenuItem::with_label_from_widget(first, Some(method_label(m)));
-                it.set_active(m == method);
-                it
-            }
-        };
-        let indicator = indicator.clone();
-        let state = Arc::clone(state);
-        let config_path = config_path.clone();
-        let settings_exe = settings_exe.clone();
-        item.connect_activate(move |it| {
-            if !it.is_active() {
-                return;
-            }
-            if let Ok(mut cm) = ConfigManager::new(Some(config_path.clone())) {
-                cm.setting_mut().input_method = m;
-                let _ = cm.save();
-                info!("[TRAY] method → {m:?}");
-                crate::notify::popup("vi-ime", &format!("🔤 {}", method_label(m)));
-            }
-            refresh(&indicator, &state, &config_path, &settings_exe);
-        });
-        if first_method_item.is_none() {
-            first_method_item = Some(item.clone());
-        }
-        menu.append(&item);
-    }
-
-    menu.append(&SeparatorMenuItem::new());
-
-    // ── Chế độ hiển thị: Preedit / NonPreedit (radio group) ──
-    let modes = [ImeMode::Preedit, ImeMode::NonPreedit];
-    let mut first_mode_item: Option<RadioMenuItem> = None;
-    for mo in modes {
-        let item = match &first_mode_item {
-            None => RadioMenuItem::builder()
-                .label(mode_label(mo))
-                .active(mo == mode)
-                .build(),
-            Some(first) => {
-                let it = RadioMenuItem::with_label_from_widget(first, Some(mode_label(mo)));
-                it.set_active(mo == mode);
-                it
-            }
-        };
-        let indicator = indicator.clone();
-        let state = Arc::clone(state);
-        let config_path = config_path.clone();
-        let settings_exe = settings_exe.clone();
-        item.connect_activate(move |it| {
-            if !it.is_active() {
-                return;
-            }
-            if let Ok(mut cm) = ConfigManager::new(Some(config_path.clone())) {
-                cm.setting_mut().ime_mode = mo;
-                let _ = cm.save();
-                info!("[TRAY] ime_mode → {mo:?}");
-                crate::notify::popup("vi-ime", &format!("📋 {}", mode_label(mo)));
-            }
-            refresh(&indicator, &state, &config_path, &settings_exe);
-        });
-        if first_mode_item.is_none() {
-            first_mode_item = Some(item.clone());
-        }
-        menu.append(&item);
-    }
-
-    menu.append(&SeparatorMenuItem::new());
-
     // ── Bật / Tắt ──
-    let toggle_item = CheckMenuItem::with_label(if enabled {
-        "🟢 Đang bật"
-    } else {
-        "🔴 Đang tắt"
-    });
+    let toggle_item = CheckMenuItem::with_label("Gõ tiếng Việt");
     toggle_item.set_active(enabled);
     {
-        let indicator = indicator.clone();
-        let state = Arc::clone(state);
-        let config_path = config_path.clone();
-        let settings_exe = settings_exe.clone();
+        let ctx = ctx.clone();
         toggle_item.connect_toggled(move |it| {
-            let now_enabled = it.is_active();
-            if let Ok(mut cm) = ConfigManager::new(Some(config_path.clone())) {
-                cm.setting_mut().enabled = now_enabled;
-                let _ = cm.save();
-                info!(
-                    "[TRAY] IME {}",
-                    if now_enabled { "enabled" } else { "disabled" }
-                );
-                crate::notify::popup(
-                    "vi-ime",
-                    if now_enabled {
-                        "🟢 Bật"
-                    } else {
-                        "🔴 Tắt"
-                    },
-                );
-            }
-            refresh(&indicator, &state, &config_path, &settings_exe);
+            let on = it.is_active();
+            info!("[TRAY] IME {}", if on { "enabled" } else { "disabled" });
+            ctx.save(|s| s.enabled = on);
+            crate::notify::popup("vi-ime", if on { "Đã bật tiếng Việt" } else { "Đã tắt tiếng Việt" });
         });
     }
     menu.append(&toggle_item);
-
-    // AppIndicator's protocol reserves plain LEFT-click for opening the
-    // menu — every host that implements the spec does this, it is not
-    // configurable from our side (unlike the old GtkStatusIcon API, which
-    // did have a separate "activate" signal). The one quick-toggle gesture
-    // the spec DOES define is "secondary activate" (conventionally
-    // middle-click / scroll-click on most panels, Noctalia included) — we
-    // point it at the same toggle_item so it fires the exact same on/off
-    // logic as clicking the menu entry.
-    indicator.set_secondary_activate_target(Some(&toggle_item));
-
     menu.append(&SeparatorMenuItem::new());
 
-    // ── Tính năng: Emoji / Clipboard Convert ──
-    // NOTE: "Tự sửa lỗi chính tả" (autocorrect) toggle removed — nó là no-op
-    // (không consumer nào đọc `autocorrect`; English-restore thực chất do
-    // `auto_detect_lang`/Smart mode lái). Field giữ lại trong config cho
-    // tương thích, chỉ ẩn menu để user không tưởng nó đang chạy (2026-07-12).
-    {
-        let emoji_item = CheckMenuItem::with_label("😀 Emoji (shortcode)");
-        if let Ok(cm) = ConfigManager::new(Some(config_path.clone())) {
-            emoji_item.set_active(cm.setting().emoji);
-        }
-        {
-            let config_path = config_path.clone();
-            emoji_item.connect_toggled(move |it| {
-                if let Ok(mut cm) = ConfigManager::new(Some(config_path.clone())) {
-                    cm.setting_mut().emoji = it.is_active();
-                    let _ = cm.save();
-                    info!("[TRAY] emoji → {}", it.is_active());
-                }
-            });
-        }
-        menu.append(&emoji_item);
-
-        // Clipboard convert is an ACTION, not a persistent mode: clicking it
-        // reads the clipboard, normalizes Vietnamese to precomposed NFC, and
-        // writes it back (meaning-preserving; ASCII/URLs/code untouched).
-        // Runs on the GTK thread where a GDK display/clipboard is available.
-        let clipboard_item = MenuItem::with_label("📋 Chuẩn hoá clipboard (NFC)");
-        clipboard_item.connect_activate(|_| {
-            let clipboard = gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD);
-            clipboard.request_text(|clipboard, text| {
-                let Some(text) = text else {
-                    info!("[TRAY] clipboard trống hoặc không phải text — bỏ qua");
-                    return;
-                };
-                match crate::clipboard_convert::to_nfc(text) {
-                    Some(nfc) => {
-                        clipboard.set_text(&nfc);
-                        info!("[TRAY] clipboard chuẩn hoá NFC ({} ký tự)", nfc.chars().count());
-                    }
-                    None => info!("[TRAY] clipboard đã là NFC — không đổi"),
-                }
-            });
-        });
-        menu.append(&clipboard_item);
-    }
-
+    // ── Kiểu gõ inline, như danh sách input method của fcitx ──
+    radio_group(
+        &menu,
+        &ctx,
+        &[
+            (InputMethod::Telex, method_label(InputMethod::Telex)),
+            (InputMethod::Vni, method_label(InputMethod::Vni)),
+            (InputMethod::Smart, method_label(InputMethod::Smart)),
+        ],
+        method,
+        |s, m| s.input_method = m,
+    );
     menu.append(&SeparatorMenuItem::new());
 
-    // ── Cài đặt / Thoát ──
-    let settings_item = MenuItem::with_label("Cài đặt…");
-    {
-        let settings_exe = settings_exe.clone();
-        settings_item.connect_activate(move |_| match &settings_exe {
-            Some(exe) => {
-                if let Err(e) = std::process::Command::new(exe).spawn() {
-                    warn!("[TRAY] cannot launch settings {exe:?}: {e}");
+    radio_submenu(
+        &menu,
+        &ctx,
+        "Hiển thị khi gõ",
+        &[
+            (ImeMode::Preedit, mode_label(ImeMode::Preedit)),
+            (ImeMode::NonPreedit, mode_label(ImeMode::NonPreedit)),
+        ],
+        mode,
+        |s, m| s.ime_mode = m,
+    );
+    radio_submenu(
+        &menu,
+        &ctx,
+        "Vị trí dấu",
+        &[
+            (ToneStyle::Classic, "Kiểu cũ: hòa, thúy"),
+            (ToneStyle::Modern, "Kiểu mới: hoà, thuý"),
+        ],
+        tone,
+        |s, t| s.tone_style = t,
+    );
+
+    // Clipboard convert is an ACTION, not a persistent mode: clicking it
+    // reads the clipboard, normalizes Vietnamese to precomposed NFC, and
+    // writes it back (meaning-preserving; ASCII/URLs/code untouched).
+    // Runs on the GTK thread where a GDK display/clipboard is available.
+    let clipboard_item = MenuItem::with_label("Chuẩn hoá clipboard (NFC)");
+    clipboard_item.connect_activate(|_| {
+        let clipboard = gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD);
+        clipboard.request_text(|clipboard, text| {
+            let Some(text) = text else {
+                info!("[TRAY] clipboard trống hoặc không phải text — bỏ qua");
+                return;
+            };
+            match crate::clipboard_convert::to_nfc(text) {
+                Some(nfc) => {
+                    clipboard.set_text(&nfc);
+                    info!("[TRAY] clipboard chuẩn hoá NFC ({} ký tự)", nfc.chars().count());
                 }
+                None => info!("[TRAY] clipboard đã là NFC — không đổi"),
             }
-            None => warn!("[TRAY] vi-settings launcher not found next to binary"),
         });
+    });
+    menu.append(&clipboard_item);
+    menu.append(&SeparatorMenuItem::new());
+
+    // AppIndicator's protocol reserves plain LEFT-click for opening this
+    // menu — not configurable from our side. The one extra gesture the spec
+    // defines is "secondary activate" (middle-click on most panels), and it
+    // must target a VISIBLE, sensitive item of this menu — so the Qt Quick
+    // quick menu has a real entry here that middle-click fires.
+    let quick_item = MenuItem::with_label("Menu nhanh (chuột giữa)");
+    {
+        let ctx = ctx.clone();
+        quick_item.connect_activate(move |_| ctx.launch_settings(&["--menu"]));
+    }
+    menu.append(&quick_item);
+    indicator.set_secondary_activate_target(Some(&quick_item));
+
+    let settings_item = MenuItem::with_label("Cấu hình…");
+    {
+        let ctx = ctx.clone();
+        settings_item.connect_activate(move |_| ctx.launch_settings(&[]));
     }
     menu.append(&settings_item);
 
-    let quit_item = MenuItem::with_label("Thoát vi-im");
+    let quit_item = MenuItem::with_label("Thoát");
     quit_item.connect_activate(|_| std::process::exit(0));
     menu.append(&quit_item);
 

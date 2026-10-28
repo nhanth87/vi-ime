@@ -2,6 +2,12 @@
 // Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 //! vi-settings — QML settings window launcher with auto-float.
 //!
+//! Two modes:
+//!   `vi-settings`         → the configuration window (main.qml).
+//!   `vi-settings --menu`  → the tray quick menu (menu.qml), a layer-shell
+//!                           popup the tray opens on middle-click. A second
+//!                           `--menu` while it is open closes it (toggle).
+//!
 //! Architecture:
 //!   1. Finds the single `main.qml` (sibling dir, repo layout, or system share).
 //!   2. Detects the wlroots compositor from env the COMPOSITOR itself sets
@@ -31,7 +37,17 @@ enum Compositor {
 }
 
 fn main() {
-    let qml = find_qml();
+    let menu_mode = env::args().any(|a| a == "--menu");
+    // Word suggestion bar, started by the daemon (one instance per daemon).
+    let bar_mode = env::args().any(|a| a == "--bar");
+    let main_qml = find_qml();
+    let qml = if menu_mode {
+        main_qml.with_file_name("menu.qml")
+    } else if bar_mode {
+        main_qml.with_file_name("bar.qml")
+    } else {
+        main_qml
+    };
     if !qml.exists() {
         eprintln!("vi-settings: QML file {:?} not found", qml);
         std::process::exit(1);
@@ -43,7 +59,20 @@ fn main() {
     // dead. The user asked for a settings window NOW: replace any stale
     // instance of OUR qml (match on the qml path tail, so an unrelated
     // quickshell desktop bar is never touched).
-    kill_stale_instance(&qml);
+    let replaced = kill_stale_instance(&qml);
+
+    if menu_mode {
+        // Middle-click on an open menu = close it, like any popup menu.
+        if !replaced {
+            spawn_quickshell(&qml);
+        }
+        return;
+    }
+    if bar_mode {
+        // A restarted daemon replaces the old bar (its socket died anyway).
+        spawn_quickshell(&qml);
+        return;
+    }
 
     let comp = detect_compositor();
 
@@ -54,31 +83,36 @@ fn main() {
     // Only `quickshell` can run this QML: it imports Quickshell.Io (unix-socket
     // IPC to the daemon), which plain `qml`/`qmlscene` cannot resolve. Modern
     // quickshell selects a QML file via `-p <path>`.
-    let child = match Command::new("quickshell").arg("-p").arg(&qml).spawn() {
-        Ok(c) => c,
-        Err(_) => {
-            eprintln!(
-                "vi-settings: `quickshell` not found. Install it (AUR: quickshell),\n\
-                 or control the daemon via CLI: vi-daemon --switch / --toggle / --status"
-            );
-            std::process::exit(1);
-        }
-    };
+    spawn_quickshell(&qml);
 
     // Action-based compositors (niri) float the window after it maps; this call
     // waits (bounded) for the window to appear, then floats + centers it.
     apply_post_spawn_float(&comp);
+}
 
-    // Detach: dropping the handle does not kill the child on Unix, so the
-    // settings window keeps running independently.
-    drop(child);
+/// Start quickshell on `qml` and detach (dropping the handle does not kill
+/// the child on Unix). The menu's "Cấu hình…" relaunches us, so tell the QML
+/// where this binary is instead of trusting PATH.
+fn spawn_quickshell(qml: &PathBuf) {
+    let mut cmd = Command::new("quickshell");
+    cmd.arg("-p").arg(qml);
+    if let Ok(exe) = env::current_exe() {
+        cmd.env("VI_SETTINGS_EXE", exe);
+    }
+    if cmd.spawn().is_err() {
+        eprintln!(
+            "vi-settings: `quickshell` not found. Install it (AUR: quickshell),\n\
+             or control the daemon via CLI: vi-ime --switch / --toggle / --status"
+        );
+        std::process::exit(1);
+    }
 }
 
 /// Kill a stale quickshell instance running OUR qml (see call site). The
 /// pattern is `quickshell.*<last-two-path-components>` on the canonical
 /// path, e.g. "quickshell.*vi-settings/main.qml" — specific enough to
-/// never match somebody's quickshell bar.
-fn kill_stale_instance(qml: &PathBuf) {
+/// never match somebody's quickshell bar. Returns true if one was killed.
+fn kill_stale_instance(qml: &PathBuf) -> bool {
     let canon = qml.canonicalize().unwrap_or_else(|_| qml.clone());
     let mut parts: Vec<String> = canon
         .iter()
@@ -97,7 +131,9 @@ fn kill_stale_instance(qml: &PathBuf) {
         eprintln!("vi-settings: đã thay instance cũ đang giữ lock");
         // Give the old process a beat to release the single-instance lock.
         thread::sleep(Duration::from_millis(150));
+        return true;
     }
+    false
 }
 
 /// Detect the compositor purely from env the COMPOSITOR sets — never requires
@@ -118,10 +154,25 @@ fn detect_compositor() -> Compositor {
 fn apply_pre_spawn_rules(comp: &Compositor) {
     match comp {
         Compositor::Hyprland => {
-            let title_rule = format!("float,title:^({})$", WIN_TITLE);
-            let center_rule = format!("center,title:^({})$", WIN_TITLE);
-            run_quiet("hyprctl", &["keyword", "windowrulev2", &title_rule]);
-            run_quiet("hyprctl", &["keyword", "windowrulev2", &center_rule]);
+            // Hyprland ≥0.55 is configured in Lua and rejects `keyword`
+            // ("can't work with non-legacy parsers"); older ones only know
+            // `keyword`. Try Lua first, fall back when it isn't understood.
+            let lua = format!(
+                "hl.window_rule({{ name = \"vi-im-settings\", \
+                 match = {{ title = \"^({})$\" }}, float = true, center = true }})",
+                WIN_TITLE
+            );
+            let lua_ok = Command::new("hyprctl")
+                .args(["eval", &lua])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "ok")
+                .unwrap_or(false);
+            if !lua_ok {
+                let title_rule = format!("float,title:^({})$", WIN_TITLE);
+                let center_rule = format!("center,title:^({})$", WIN_TITLE);
+                run_quiet("hyprctl", &["keyword", "windowrulev2", &title_rule]);
+                run_quiet("hyprctl", &["keyword", "windowrulev2", &center_rule]);
+            }
         }
         Compositor::Sway => {
             let rule = format!(
@@ -209,6 +260,14 @@ fn find_qml() -> PathBuf {
             }
         }
 
+    // install.sh puts the QML here (per-user install, no root).
+    if let Some(data) = dirs_data_home() {
+        let p = data.join("vi-im/qml/main.qml");
+        if p.exists() {
+            return p;
+        }
+    }
+
     for path in &[
         "/usr/share/vi-im/qml/main.qml",
         "/usr/local/share/vi-im/qml/main.qml",
@@ -220,4 +279,11 @@ fn find_qml() -> PathBuf {
     }
 
     PathBuf::from("vi-settings/main.qml")
+}
+
+/// $XDG_DATA_HOME, falling back to ~/.local/share.
+fn dirs_data_home() -> Option<PathBuf> {
+    env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
 }

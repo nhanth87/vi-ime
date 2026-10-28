@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
-"""Generate the vi-im tray icons: a sky-blue rounded square with a bold
+"""Generate the vi-im tray icons: a sky-blue circle with a bold
 white glyph — 'V' when Vietnamese input is on, 'E' when it's off (raw
 English passthrough). Pure stdlib (writes SVG XML directly), no
 cairosvg/Pillow dependency — the icons only need to exist as .svg files
@@ -18,11 +18,12 @@ SIZE = 64
 BG_ON = "#2E86DE"      # sky blue — Vietnamese input ON
 BG_OFF = "#E04A4A"     # red — Vietnamese input OFF (raw English passthrough)
 FG = "#FFFFFF"        # white glyph
-CORNER_R = 14          # rounded-square corner radius
+# Full circle (not a rounded square): matches Hyprland/waybar-style bars
+# where every other tray glyph is round, and reads cleanly at 16-22px.
 
 SVG_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 {size} {size}">
-  <rect x="0" y="0" width="{size}" height="{size}" rx="{r}" ry="{r}" fill="{bg}"/>
+  <circle cx="{cx}" cy="{cx}" r="{cx}" fill="{bg}"/>
   <text x="{cx}" y="{cy}" text-anchor="middle"
         font-family="DejaVu Sans, Noto Sans, Arial, sans-serif" font-weight="bold"
         font-size="{fs}" fill="{fg}">{glyph}</text>
@@ -31,10 +32,11 @@ SVG_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 
 
 def render(glyph: str, out_path: Path, bg: str) -> None:
-    fs = SIZE * 0.58
+    # Slightly smaller than the old square's 0.58: a circle has less room
+    # at the corners, so the glyph's serifs would otherwise touch the edge.
+    fs = SIZE * 0.54
     svg = SVG_TEMPLATE.format(
         size=SIZE,
-        r=CORNER_R,
         bg=bg,
         fg=FG,
         cx=SIZE / 2,

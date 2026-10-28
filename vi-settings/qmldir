@@ -1,0 +1,8 @@
+singleton Theme 1.0 Theme.qml
+Daemon 1.0 Daemon.qml
+Logo 1.0 Logo.qml
+VSwitch 1.0 VSwitch.qml
+VButton 1.0 VButton.qml
+VField 1.0 VField.qml
+VCombo 1.0 VCombo.qml
+Segmented 1.0 Segmented.qml

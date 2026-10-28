@@ -13,12 +13,12 @@ use std::time::{Duration, Instant};
 
 use evdev::uinput::VirtualDevice;
 use evdev::{EventType, InputEvent, KeyCode};
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::engine::fast_engine::NonPreeditEngine;
-use crate::engine::macro_dict::HotkeyKey;
+use crate::engine::predict;
 use crate::engine::{ImeMode, InputMethod, NonPreeditAction};
-use crate::evdev_inject::{key_to_char, Typer};
+use crate::evdev_inject::{boundary_char, hotkey_key, key_to_char, Typer};
 
 /// Live composer: the engine plus what is currently on screen for the
 /// in-progress word. Shared by `run` (--evdev) and `run_scoped` (auto
@@ -39,6 +39,22 @@ pub(crate) struct Composer {
     /// When the last key PRESS went out through the uinput mirror — see
     /// `type_out` (cross-channel ordering barrier).
     last_uinput_press: Option<Instant>,
+    /// Keys whose PRESS went out through the uinput mirror and whose release
+    /// hasn't yet — only these get their release forwarded (see `handle`).
+    down: std::collections::HashSet<u16>,
+    /// Coalescing: the latest mid-word target not typed yet. Composing keys
+    /// only update it; `flush` (end of a drained batch, or before anything
+    /// that must stay ordered) types the whole difference in ONE typer
+    /// command. A slow typer (OnlyOffice's 150ms accent settle) then costs
+    /// one wait per BATCH instead of per key — user report 2026-10-24
+    /// "gõ trong OnlyOffice rất chậm" with per-key edits queuing up.
+    deferred: Option<String>,
+    /// Last key press/release seen (code, value, when): evidence for keys
+    /// arriving twice within ~60ms ("chơ" → "cho7", field 2026-10-27).
+    last_key: Option<(u16, i32, Instant)>,
+    /// Feed word suggestions (engine/predict.rs) — office apps only: the
+    /// evdev path can't see password fields, so never for browsers.
+    pub(crate) learn: bool,
 }
 
 /// How long a key press forwarded through the uinput mirror needs to reach
@@ -80,6 +96,10 @@ impl Composer {
             sysmods: 0,
             common_bytes: 0,
             last_uinput_press: None,
+            down: std::collections::HashSet::new(),
+            deferred: None,
+            last_key: None,
+            learn: false,
         }
     }
 
@@ -102,30 +122,47 @@ impl Composer {
         if !(ctrl || alt || sup) {
             return None;
         }
-        let key = Self::hotkey_key(code, self.shift)?;
+        let key = hotkey_key(code, self.shift)?;
         self.engine.match_hotkey(ctrl, alt, sup, self.shift, &key)
-    }
-
-    /// Chord key identity: alphanumerics (lowercased) via the same mapping
-    /// as composition; F1–F12 and named keys by evdev code.
-    fn hotkey_key(code: KeyCode, shift: bool) -> Option<HotkeyKey> {
-        if let Some(c) = key_to_char(code, shift) {
-            return Some(HotkeyKey::Char(c.to_ascii_lowercase()));
-        }
-        Some(match code.code() {
-            59..=68 => HotkeyKey::F((code.code() - 58) as u8),
-            57 => HotkeyKey::Space,
-            28 => HotkeyKey::Enter,
-            15 => HotkeyKey::Tab,
-            14 => HotkeyKey::Backspace,
-            1 => HotkeyKey::Escape,
-            111 => HotkeyKey::Delete,
-            _ => return None,
-        })
     }
 
     /// One key event from a grabbed keyboard (value: 0=release 1=press 2=repeat).
     pub(crate) fn handle(&mut self, ui: &mut VirtualDevice, code: KeyCode, value: i32) {
+        let is_char = key_to_char(code, self.shift).is_some();
+        if value != 2 {
+            if let Some((c, v, t)) = self.last_key
+                && value == 1
+                && c == code.code()
+                && t.elapsed() < Duration::from_millis(100)
+            {
+                // v == 1: two presses, no release between → delivered twice.
+                debug!("[EVDEV-DUP] {code:?} again after {}ms (release between: {})", t.elapsed().as_millis(), v == 0);
+            }
+            self.last_key = Some((code.code(), value, Instant::now()));
+        }
+        // Kernel autorepeat (value 2) of a letter/digit is not a keystroke:
+        // the grabbed keyboard repeats after 250ms, the desktop after 600ms,
+        // so a tone key held a little long came in twice and undid itself —
+        // field 2026-10-27 "khó" → "kho1" (second '1' 255ms later). The
+        // Wayland path never repeats composing keys either.
+        if value == 2 && is_char {
+            return;
+        }
+        // Evidence for words cut short (R22): which key ended a composition.
+        let modifier = sysmod_bit(code) != 0 || matches!(code, KeyCode::KEY_LEFTSHIFT | KeyCode::KEY_RIGHTSHIFT);
+        if value == 1 && !is_char && !modifier && self.engine.has_pending() && code != KeyCode::KEY_BACKSPACE {
+            debug!("[EVDEV-END] {code:?} ended {:?} (sysmods={})", self.engine.inner().preedit_output(), self.sysmods);
+        }
+        // Only plain composing keys (letters/digits, mid-word BackSpace)
+        // may join the deferred batch; anything else — modifiers forwarded
+        // to the app, boundaries, shortcuts — must see the screen up to date
+        // first, or the order on screen would change.
+        let composing = self.sysmods == 0
+            && (key_to_char(code, self.shift).is_some()
+                || (code == KeyCode::KEY_BACKSPACE && self.engine.has_pending()));
+        if !composing {
+            self.flush();
+        }
         // Track shift for ASCII casing; forward it (apps need modifiers).
         if matches!(code, KeyCode::KEY_LEFTSHIFT | KeyCode::KEY_RIGHTSHIFT) {
             self.shift = value != 0;
@@ -151,8 +188,12 @@ impl Composer {
         // select all, not feed 'a' to the engine (field bug 2026-07-10).
         if self.sysmods != 0 {
             if value != 0 {
+                if self.accept_suggestion(ui, code) {
+                    return;
+                }
+                self.restore_alt(ui);
                 // R-macro hotkey: chord → expansion, consuming the chord
-                // (releases still forwarded below so nothing sticks). The
+                // (its release is dropped below — the press never went out). The
                 // evdev thread only runs while the IME is enabled
                 // (consumer_loop breaks otherwise) — R18 holds.
                 if let Some(text) = self.match_hotkey(code) {
@@ -162,6 +203,8 @@ impl Composer {
                     return;
                 }
                 self.finish_word();
+            } else if !self.down.contains(&code.code()) {
+                return; // press consumed (suggestion/macro): no stray keyup
             }
             self.forward(ui, code, value);
             return;
@@ -201,21 +244,34 @@ impl Composer {
 
         let Some(ch) = key_to_char(code, self.shift) else {
             // Non-composing key (space, Enter, arrows…): the rendered word
-            // is ALREADY on screen (live echo) — just stop tracking it,
-            // then forward the key.
+            // is ALREADY on screen (live echo) — just stop tracking it.
             if value != 0 {
                 self.finish_word();
+                // Printable (space, punctuation): type it on the typer's
+                // channel, behind the word — see `boundary_char`. The
+                // release is then dropped (press never went to uinput).
+                if let Some(c) = boundary_char(code, self.shift) {
+                    self.type_out(0, &c.to_string(), false);
+                    return;
+                }
             }
-            self.forward(ui, code, value);
+            if value != 0 || self.down.contains(&code.code()) {
+                self.forward(ui, code, value);
+            }
             return;
         };
 
-        // Letter/digit/tone key: the press is consumed. The RELEASE is
-        // forwarded anyway — a release without a press is a no-op for the
-        // app, and if the press went through (chord released mid-key) the
-        // key must not stay stuck down.
+        // Letter/digit/tone key: the press is consumed, so its release is
+        // too — UNLESS the press went out through the mirror (chord released
+        // mid-key), which must not stay stuck down. A release whose press
+        // was consumed is NOT a no-op for every app: OnlyOffice's editor saw
+        // the stray keyup of "u" (held while "7" turned "tu" into "tư") and
+        // dropped the "ư" — field test 2026-10-24 with human rollover timing;
+        // replaying the typer's X events alone (no stray keyup) was correct.
         if value == 0 {
-            self.forward(ui, code, 0);
+            if self.down.contains(&code.code()) {
+                self.forward(ui, code, 0);
+            }
             return;
         }
         let action = self.engine.push_key(ch);
@@ -229,10 +285,18 @@ impl Composer {
                 // key ("tie" + 'e' → "tiê" instantly). preedit_output
                 // applies NFC/NFD (R12) — this is real text, not preedit.
                 // sync=false: mid-word, no roundtrip (opt 1).
+                // Deferred: typed by `flush` once the queued keys are in.
                 let target = self.engine.inner().preedit_output();
-                self.sync_shown(&target, false);
+                if self.learn {
+                    predict::set_prefix(&target);
+                }
+                self.deferred = Some(target);
             }
             NonPreeditAction::CommitWithBackspace { text, .. } => {
+                self.deferred = None; // superseded: diff runs from `shown`
+                if self.learn {
+                    predict::observe(&text);
+                }
                 // Screen already shows the word (usually a no-op diff).
                 // Replay the boundary key that triggered the commit — the
                 // engine never includes it in the committed text.
@@ -243,6 +307,7 @@ impl Composer {
                 self.forward_tap(ui, code);
             }
             NonPreeditAction::CommitEmoji { text, .. } => {
+                self.flush();
                 // Emoji/flushed-literal on the evdev path. Capture was silent
                 // (nothing on screen) and fires only when no VN word is pending
                 // → no diff, just type `text`. Do NOT replay `code` (trigger is
@@ -255,26 +320,45 @@ impl Composer {
                 self.common_bytes = 0;
             }
             NonPreeditAction::ClearPreedit => {
+                self.deferred = None;
+                predict::set_prefix("");
                 self.sync_shown("", true);
                 self.common_bytes = 0;
             }
             // Digit at word start (VNI) or digit boundary (Telex): the char
             // was consumed above, so replay it or it would be LOST.
-            NonPreeditAction::PassThrough => self.forward_tap(ui, code),
+            NonPreeditAction::PassThrough => {
+                self.flush();
+                self.forward_tap(ui, code);
+            }
+        }
+    }
+
+    /// Type the deferred mid-word target (see `deferred`).
+    pub(crate) fn flush(&mut self) {
+        if let Some(target) = self.deferred.take() {
+            self.sync_shown(&target, false);
         }
     }
 
     /// Forward one key event through the uinput mirror, stamping presses
     /// for the `type_out` barrier.
     fn forward(&mut self, ui: &mut VirtualDevice, code: KeyCode, value: i32) {
+        self.typer.wait_settled();
         emit(ui, code, value);
+        // Releases arm the barrier too: a Shift release still in transit
+        // when the typer writes the next letter would capitalise it.
+        self.last_uinput_press = Some(Instant::now());
         if value != 0 {
-            self.last_uinput_press = Some(Instant::now());
+            self.down.insert(code.code());
+        } else {
+            self.down.remove(&code.code());
         }
     }
 
     /// `tap` through the uinput mirror, stamped like `forward`.
     fn forward_tap(&mut self, ui: &mut VirtualDevice, code: KeyCode) {
+        self.typer.wait_settled();
         tap(ui, code);
         self.last_uinput_press = Some(Instant::now());
     }
@@ -291,40 +375,16 @@ impl Composer {
         self.typer.backspace_then_type(backspaces, text, sync);
     }
 
-    /// Emit releases for any modifiers the uinput mirror still holds — on
-    /// disengage (focus left) the user's real release lands AFTER ungrab
-    /// and never reaches the mirror, which would pin Super/Ctrl forever
-    /// (same class as the vk1 stuck-Super bug, virtual_keyboard.rs).
-    pub(crate) fn release_mods(&mut self, ui: &mut VirtualDevice) {
-        if self.shift {
-            self.forward(ui, KeyCode::KEY_LEFTSHIFT, 0);
-            self.forward(ui, KeyCode::KEY_RIGHTSHIFT, 0);
-            self.shift = false;
-        }
-        const MODS: [(u8, KeyCode); 6] = [
-            (1, KeyCode::KEY_LEFTCTRL),
-            (2, KeyCode::KEY_RIGHTCTRL),
-            (4, KeyCode::KEY_LEFTALT),
-            (8, KeyCode::KEY_RIGHTALT),
-            (16, KeyCode::KEY_LEFTMETA),
-            (32, KeyCode::KEY_RIGHTMETA),
-        ];
-        for (bit, code) in MODS {
-            if self.sysmods & bit != 0 {
-                self.forward(ui, code, 0);
-            }
-        }
-        self.sysmods = 0;
-    }
-
     /// Physical click while composing: the cursor moved — stop tracking the
     /// word WITHOUT touching the screen (live text stays where it was
     /// typed; a later diff would backspace at the NEW cursor — R8/R17-C).
     pub(crate) fn click_reset(&mut self) {
+        predict::reset_context(); // the cursor moved
         if !self.engine.has_pending() && self.shown.is_empty() {
             return;
         }
         info!("[EVDEV-CLICK] chuột click khi đang gõ dở — drop tracking (R8)");
+        self.deferred = None;
         self.engine.reset();
         self.shown.clear();
         self.common_bytes = 0;
@@ -333,6 +393,7 @@ impl Composer {
     /// A non-composing key ended the word: it is already echoed on screen,
     /// so just forget it (mirrors `finalize_word` in the Wayland live path).
     pub(crate) fn finish_word(&mut self) {
+        self.deferred = None; // the commit diff below runs from `shown`
         if self.engine.has_pending() {
             // R9 English-restore at word end: `test`→`test`, not `tét`.
             // Mirrors the NonPreeditEngine boundary sites (fast_engine.rs);
@@ -340,6 +401,9 @@ impl Composer {
             // R-macro keyword expansion wins over the heuristic (same order
             // as the Wayland path — `commit_text`).
             let target = self.engine.commit_text(None);
+            if self.learn {
+                predict::observe(&target);
+            }
             // sync=true: word ending → roundtrip (next key is cross-channel).
             self.sync_shown(&target, true);
         }
@@ -426,25 +490,9 @@ fn tap(ui: &mut VirtualDevice, code: KeyCode) {
     let _ = ui.emit(&events);
 }
 
+#[path = "evdev_accept.rs"]
+mod accept;
+
 #[cfg(test)]
-mod barrier_tests {
-    use super::*;
-
-    #[test]
-    fn no_recent_press_no_wait() {
-        assert_eq!(settle_remaining(None, Instant::now()), Duration::ZERO);
-    }
-
-    #[test]
-    fn fresh_press_waits_the_remainder() {
-        let t0 = Instant::now();
-        let left = settle_remaining(Some(t0), t0 + Duration::from_millis(10));
-        assert_eq!(left, UINPUT_SETTLE - Duration::from_millis(10));
-    }
-
-    #[test]
-    fn old_press_no_wait() {
-        let t0 = Instant::now();
-        assert_eq!(settle_remaining(Some(t0), t0 + UINPUT_SETTLE * 2), Duration::ZERO);
-    }
-}
+#[path = "evdev_compose_tests.rs"]
+mod barrier_tests;
