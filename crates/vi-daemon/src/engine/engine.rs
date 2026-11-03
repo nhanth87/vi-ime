@@ -197,9 +197,12 @@ impl Engine {
                 return raw;
             }
             // English keys whose rendering is no real Vietnamese word
-            // (system hunspell list, lexicon.rs): English, no doubt.
-            // (Not inside Vietnamese text: names like "Huế" are missing.)
-            if self.lang.get() >= 0 && super::lexicon::is_vietnamese_word(&display) == Some(false) {
+            // (system hunspell list, lexicon.rs): English, no doubt — also
+            // inside Vietnamese text. The sentence context only chooses
+            // between two REAL words; field 2026-11-03 "… kết nối về core"
+            // came out "cỏe" ("more" → "mỏe"). Names missing from the list
+            // ("Huế") never get here: their keys are no English word.
+            if super::lexicon::is_vietnamese_word(&display) == Some(false) {
                 self.note_lang(2);
                 return raw;
             }
