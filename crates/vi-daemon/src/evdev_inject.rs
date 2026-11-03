@@ -399,6 +399,17 @@ pub(crate) fn resolve_x11_display() -> Option<String> {
     })
 }
 
+/// The focused window is a NATIVE Wayland client (Hyprland says so). Chrome
+/// now runs Wayland by default with no `--ozone-platform` flag, so the
+/// cmdline guess "no wayland flag = X11" engaged the evdev fallback on a
+/// Wayland Chrome: its typer's virtual keyboard then handed its own keymap
+/// to the input method, every real key decoded wrong (keycode 2 → BackSpace)
+/// until the user pressed Super — field log 2026-11-03 13:26. False when
+/// unknown (other compositors keep the old behaviour).
+pub(crate) fn focus_is_native_wayland() -> bool {
+    hyprland_focus_is_xwayland() == Some(false)
+}
+
 /// Is the focused Hyprland window an XWayland client? None when hyprctl
 /// can't tell (caller assumes X, the previous behavior).
 fn hyprland_focus_is_xwayland() -> Option<bool> {

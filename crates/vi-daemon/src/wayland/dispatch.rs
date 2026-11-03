@@ -351,6 +351,16 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, KeyboardGrabUserData> for ImeAppStat
         match event {
             Event::Keymap { format, fd, size } => {
                 info!("Received keymap (size: {size})");
+                // Hyprland hands the grab the keymap of the keyboard used
+                // last — sometimes one of OUR virtual keyboards (typer,
+                // `xkb_keycodes "vi"`). Decoding physical keys with it
+                // turned keycode 2 into BackSpace and letters into others
+                // until the user pressed Super (field 2026-11-03). Keep the
+                // real keyboard's keymap instead.
+                if keymap_is_ours(&fd, size) {
+                    warn!("[KEYMAP] ignoring vi-ime's own virtual-keyboard keymap ({size} bytes)");
+                    return;
+                }
                 // Mirror to the virtual keyboard FIRST (borrows the fd), so
                 // forwarded keycodes decode identically app-side…
                 state.vk.set_keymap(format, &fd, size);
@@ -437,4 +447,16 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, KeyboardGrabUserData> for ImeAppStat
         }
         let _ = conn.flush();
     }
+}
+
+/// Does this keymap come from one of vi-ime's own virtual keyboards? Their
+/// keymaps (viet_typer.rs) all name the keycodes section "vi"; libxkbcommon
+/// keeps that name when a compositor re-serializes the keymap.
+fn keymap_is_ours(fd: &std::os::fd::OwnedFd, size: u32) -> bool {
+    use std::os::unix::fs::FileExt;
+    let Ok(dup) = fd.try_clone() else { return false };
+    let file = std::fs::File::from(dup);
+    let mut buf = vec![0u8; (size as usize).min(4096)];
+    let Ok(n) = file.read_at(&mut buf, 0) else { return false };
+    String::from_utf8_lossy(&buf[..n]).contains("xkb_keycodes \"vi\"")
 }

@@ -412,7 +412,8 @@ fn main() {
                                     || (!cmdline.contains("--ozone-platform=wayland")
                                         && !cmdline.contains("--enable-features=UseOzonePlatform"))
                             })
-                        });
+                        })
+                        && !evdev_inject::focus_is_native_wayland();
                     let engage_evdev = wants_legacy || wants_xwayland_evdev;
                     let profile = current_app_id
                         .as_deref()
@@ -515,7 +516,8 @@ fn main() {
                                     || (!cmdline.contains("--ozone-platform=wayland")
                                         && !cmdline.contains("--enable-features=useozone"))
                             })
-                        });
+                        })
+                        && !evdev_inject::focus_is_native_wayland();
                     if is_xwayland_chrome {
                         info!(
                             "[LEGACY-GRAB] ignoring spurious Activate from XWayland bridge \
@@ -589,6 +591,9 @@ fn main() {
                     && config_manager.setting().enabled // IME tắt = không grab
                     && legacy_grab.is_none()
                     && legacy_grab::is_xwayland_fallback_app(&app_id)
+                    // A native Wayland window (Chrome's default now) that
+                    // has not activated simply has no text field focused.
+                    && !evdev_inject::focus_is_native_wayland()
                 {
                     info!(
                         "[XWAYLAND] {} did not Activate via Wayland after {}ms \

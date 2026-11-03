@@ -351,6 +351,13 @@
 > - OnlyOffice: `pre_first_glyph_delay_ms` 60 (30 vẫn mất chữ đầu sau BS ở 50 phím/s).
 > - Chỉ dùng XTEST khi cửa sổ focus là XWayland (`hyprctl activewindow -j`); LibreOffice
 >   Wayland gốc trong evdev fallback dùng bàn phím ảo Wayland — XTEST không tới được nó.
+> - **KHÔNG engage fallback XWayland (Chrome…) cho cửa sổ Wayland GỐC**
+>   (`evdev_inject::focus_is_native_wayland`, cả 3 chỗ trong `main.rs`). Chrome giờ mặc định
+>   chạy Wayland, không có cờ `--ozone-platform` → đoán theo cmdline sai. Bẫy 2026-11-03: grab
+>   trên Chrome Wayland → typer bàn phím ảo của mình làm Hyprland gửi keymap CỦA NÓ cho IM grab
+>   → mọi phím thật giải mã sai (keycode 2 → BackSpace), phím typer bị đường Wayland nuốt;
+>   user phải bấm Super mới gõ lại được. Phòng thủ: IM grab BỎ QUA keymap có
+>   `xkb_keycodes "vi"` (keymap typer của chính vi-ime, `dispatch.rs::keymap_is_ours`).
 
 ### R24b. evdev fallback: grab SONG SONG + hotplug + nhớ phím kẹt
 > - Mỗi bàn phím tự `wait_keys_clear` + grab trên reader thread của nó. Grab tuần tự làm
