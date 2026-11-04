@@ -32,7 +32,8 @@ fn sensitivity_of(purpose: ContentPurpose) -> FieldSensitivity {
     match purpose {
         // Security-critical: engine off, never logged. Non-negotiable.
         ContentPurpose::Password | ContentPurpose::Pin => FieldSensitivity::Secure,
-        // URL fields: passthrough keys so browser autocomplete works.
+        // URL fields (address bar): compose as preedit, no live BackSpaces
+        // (browser autocomplete stays intact) — state.rs `live_echo`.
         ContentPurpose::Url => FieldSensitivity::Url,
         // Terminal: force NonPreedit mode (unless user explicitly chose otherwise).
         ContentPurpose::Terminal => FieldSensitivity::Terminal,

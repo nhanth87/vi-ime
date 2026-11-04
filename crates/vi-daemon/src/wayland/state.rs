@@ -245,9 +245,13 @@ impl ImeAppState {
     pub(crate) fn live_echo(&self) -> bool {
         // Live-echo (backspace-diff qua viet_typer) cho mọi app khi
         // NonPreedit + viet.ready() (commit 1e80bed, keymap tĩnh 8-level).
-        // Field Url/Secure/NumericRaw KHÔNG bao giờ tới đây — process_key
-        // (actions.rs) đã raw-passthrough + return trước khi gọi apply_action.
-        self.engine.mode() == ImeMode::NonPreedit && self.viet.ready()
+        // Secure/NumericRaw never get here (raw passthrough in process_key).
+        // Url (address bar) composes as preedit, never live: live BackSpaces
+        // delete Chrome's selected autocomplete ("meèo"). It used to be raw
+        // passthrough — no Vietnamese in the address bar (user 2026-11-04).
+        self.engine.mode() == ImeMode::NonPreedit
+            && self.viet.ready()
+            && self.field_sensitivity != FieldSensitivity::Url
     }
 
     /// P0: Does the current app honor `surrounding_text`?

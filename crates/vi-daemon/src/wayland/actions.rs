@@ -181,10 +181,11 @@ impl ImeAppState {
         }
 
         // Per-field ContentType gate: password/PIN and numeric fields get
-        // raw keys, no composition, no commit_string, no logging.
+        // raw keys, no composition, no commit_string, no logging. URL fields
+        // (address bar) compose as PREEDIT instead — see `live_echo`.
         if matches!(
             self.field_sensitivity,
-            FieldSensitivity::Secure | FieldSensitivity::NumericRaw | FieldSensitivity::Url
+            FieldSensitivity::Secure | FieldSensitivity::NumericRaw
         ) {
             self.vk.press(keycode);
             return;
@@ -294,7 +295,9 @@ impl ImeAppState {
         // (Blink áp keymap trễ — repro 2026-07-10), không set_preedit
         // (user chọn NonPreedit chính vì không muốn gạch chân). Từ hiện
         // nguyên khối qua commit_string ở word boundary.
-        let silent = !live && self.engine.mode() == ImeMode::NonPreedit;
+        let silent = !live
+            && self.engine.mode() == ImeMode::NonPreedit
+            && self.field_sensitivity != FieldSensitivity::Url; // address bar: show preedit
         // P0: app honors surrounding-text → atomic commit, no sleep-dance.
         let capable = live && self.app_surrounding_capable();
 
