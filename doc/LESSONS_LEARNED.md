@@ -39,6 +39,8 @@ Rules distilled from these live in `AGENTS.md` (R24–R34).
 | "test" → "tét", "bar" → "bả" in Vietnamese sentences | Context always won between two real words | Common English beats rare Vietnamese; prefer-list for everyday words |
 | Capital "H" → "I" in Chrome | Typer keymap packed ASCII in order; Chrome added the held Shift | Keymap in (lower, Shift) pairs (R33) |
 | No Vietnamese in the address bar | URL fields were raw passthrough | Live echo with Delete before BackSpace (R33) |
+| "hút" → "hhuhuthúthút" in a YouTube comment box | The field sent surrounding text, so vi-ime used delete_surrounding + commit; Chrome ignored the delete | delete_surrounding path disabled for good (R33) |
+| "độc" → "đô5c" on some sites | Page re-render made Chrome deactivate/reactivate after every edit; each blink dropped the word | Blink tolerance: same app, no click, < 150 ms keeps the word (R33) |
 | Address bar words appear after 2–3 s | Silent mode waited for boundary / 1.5 s idle commit | Back to live echo |
 
 ## Not resolved (evidence logging in place)

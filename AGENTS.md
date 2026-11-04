@@ -514,6 +514,9 @@
 >   (re-render ô nhập). Drop từ ngay (R8) làm "độc" → "đô5c". Có từ đang gõ → hoãn drop
 >   (`deferred_drop`); Activate trong `BLINK_MS` (150ms), cùng app, không click → GIỮ từ; còn lại
 >   drop như R8. ĐỪNG bỏ điều kiện click/app — đó là phần R8 thật sự bảo vệ.
+> - **KHÔNG dùng `delete_surrounding_text`** (đường "capable" P0, `app_surrounding_capable` = false):
+>   app GỬI surrounding text không có nghĩa là TÔN TRỌNG lệnh xoá. YouTube comment (Chrome) giữ lại
+>   mọi bước → "hút" ra "hhuhuthúthút" (2026-11-04), cùng kết luận 2026-07. Chỉ dùng typer live echo.
 > - Fallback XWayland chỉ engage khi Hyprland báo cửa sổ là XWayland
 >   (`evdev_inject::focus_is_native_wayland`): Chrome giờ mặc định Wayland, không có cờ cmdline.
 

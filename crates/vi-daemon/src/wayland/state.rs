@@ -254,16 +254,13 @@ impl ImeAppState {
         self.engine.mode() == ImeMode::NonPreedit && self.viet.ready()
     }
 
-    /// P0: Does the current app honor `surrounding_text`?
-    /// If yes, `delete_surrounding_text + commit_string` is safe (atomic).
+    /// P0 path (`delete_surrounding_text + commit_string`) — DISABLED.
+    /// An app SENDING surrounding text does not honor the delete: YouTube's
+    /// comment box (Chrome) kept every step, "hút" → "hhuhuthúthút"
+    /// (2026-11-04; same finding as 2026-07, memory delete-surrounding).
+    /// The typer's live echo works everywhere; never trust this signal.
     pub(crate) fn app_surrounding_capable(&self) -> bool {
-        if self.surrounding_seen {
-            return true;
-        }
-        self.runtime
-            .as_ref()
-            .map(|rt| rt.snapshot().surrounding_capable)
-            .unwrap_or(false)
+        false
     }
 
     /// P0 live-commit: atomic `delete_surrounding_text + commit_string`
