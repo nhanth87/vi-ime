@@ -510,6 +510,10 @@
 > - Thanh địa chỉ (ContentPurpose::Url): live echo, NHƯNG mọi lần sửa cần BackSpace phải gõ
 >   Delete (`'\u{7f}'`, phím riêng trên keymap typer, cùng hàng đợi) TRƯỚC — xoá phần autocomplete
 >   Chrome đang bôi đen ("meèo"). ĐỪNG dùng chế độ im lặng (chữ chờ 1.5s mới hiện) hay raw.
+> - **Deactivate "chớp"**: vài trang web làm Chrome deactivate→activate ~20-50ms sau MỖI lần sửa
+>   (re-render ô nhập). Drop từ ngay (R8) làm "độc" → "đô5c". Có từ đang gõ → hoãn drop
+>   (`deferred_drop`); Activate trong `BLINK_MS` (150ms), cùng app, không click → GIỮ từ; còn lại
+>   drop như R8. ĐỪNG bỏ điều kiện click/app — đó là phần R8 thật sự bảo vệ.
 > - Fallback XWayland chỉ engage khi Hyprland báo cửa sổ là XWayland
 >   (`evdev_inject::focus_is_native_wayland`): Chrome giờ mặc định Wayland, không có cờ cmdline.
 

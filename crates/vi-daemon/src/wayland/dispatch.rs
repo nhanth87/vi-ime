@@ -69,6 +69,16 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                 // transition re-grabs here (the only place with a QueueHandle).
                 let prev_app = state.current_app_id.clone();
                 state.maybe_reconfigure();
+                // Blink (same app, no click, within BLINK_MS): keep the word;
+                // anything else drops it as Deactivate always did (R8).
+                if let Some((at, clicks, app)) = state.deferred_drop.take() {
+                    let now = state.runtime.as_ref().map(|rt| rt.clicks()).unwrap_or(0);
+                    if at.elapsed().as_millis() < BLINK_MS && clicks == now && app == state.current_app_id {
+                        info!("[BLINK] deactivate→activate in {}ms — keeping the word", at.elapsed().as_millis());
+                    } else {
+                        drop_word(state);
+                    }
+                }
                 let mode = format!("{:?}", state.engine.mode());
                 info!(
                     "[SCENARIO] ✅ ACTIVATE — IME={mode} composer attached, grabbing keyboard..."
@@ -132,9 +142,14 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                 // Committing now places text at the wrong position.
                 // Instead: drop the buffer. Compositor clears preedit from the
                 // old position automatically when the input method deactivates.
-                state.engine.reset();
-                state.engine.inner_mut().reset_context();
-                crate::engine::predict::reset_context();
+                // Some pages make Chrome deactivate+reactivate ~30 ms after
+                // every edit (2026-11-04: "độc" → "đô5c", the word dropped at
+                // each blink): with a word pending, decide at the next Activate.
+                let clicks = state.runtime.as_ref().map(|rt| rt.clicks()).unwrap_or(0);
+                state.deferred_drop = had_pending.then(|| (Instant::now(), clicks, state.current_app_id.clone()));
+                if !had_pending {
+                    drop_word(state);
+                }
                 crate::godmod::log_deactivate();
                 state.active = false;
                 state.key_buffer.clear();
@@ -143,7 +158,6 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                 state.surrounding_seen = false;
                 state.external_change = false;
                 state.live_echo_pending = 0;
-                state.reset_word_state();
                 state.last_key_time = None;
                 // Grab gone: a held key must not keep repeating into the void.
                 state.repeat_key = None;
@@ -468,4 +482,16 @@ fn keymap_is_ours(fd: &std::os::fd::OwnedFd, size: u32) -> bool {
     let mut buf = vec![0u8; (size as usize).min(4096)];
     let Ok(n) = file.read_at(&mut buf, 0) else { return false };
     String::from_utf8_lossy(&buf[..n]).contains("xkb_keycodes \"vi\"")
+}
+
+/// A deactivate+activate faster than this, in the same app with no click,
+/// is a page re-rendering its field, not the user leaving it.
+const BLINK_MS: u128 = 150;
+
+/// Forget the word being composed (R8: dropped, never committed).
+fn drop_word(state: &mut ImeAppState) {
+    state.engine.reset();
+    state.engine.inner_mut().reset_context();
+    crate::engine::predict::reset_context();
+    state.reset_word_state();
 }
