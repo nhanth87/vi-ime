@@ -497,6 +497,33 @@
 > - Probe/scratch `#[path]` include predict.rs KHÔNG phải cfg(test) → chạy với
 >   `XDG_DATA_HOME`/`HOME` trỏ scratch, nếu không sẽ ghi đè dữ liệu thật của user.
 
+### R33. Keymap của IM grab + bàn phím ảo của chính vi-ime (Hyprland)
+> Hyprland đưa cho keyboard grab keymap của **bàn phím dùng gần nhất** — rất hay là bàn phím
+> ảo của CHÍNH vi-ime (typer, `xkb_keycodes "vi"`, 5812 byte), nhất là lúc daemon vừa khởi
+> động. Giải mã phím thật bằng keymap đó → "1" thành BackSpace, chữ thành chữ khác; không có
+> keymap → phím đi thô. Cả hai đều chỉ hết khi user bấm Super (Hyprland gửi lại keymap thật).
+> - `dispatch.rs::keymap_is_ours` BỎ QUA keymap `"vi"`; nếu chưa có keymap thật thì dựng từ
+>   cấu hình (`xkb::system_keymap`, hyprctl `input:kb_*`). ĐỪNG bỏ một trong hai nhánh.
+> - Keymap tĩnh của typer xếp theo CẶP (thường, Shift) như bàn phím thật (`viet_charset.rs`).
+>   Chrome cộng Shift user đang giữ vào phím typer: xếp ASCII liên tiếp làm "H" (level 0) +
+>   Shift = "I". ĐỪNG xếp lại theo thứ tự liền.
+> - Thanh địa chỉ (ContentPurpose::Url): live echo, NHƯNG mọi lần sửa cần BackSpace phải gõ
+>   Delete (`'\u{7f}'`, phím riêng trên keymap typer, cùng hàng đợi) TRƯỚC — xoá phần autocomplete
+>   Chrome đang bôi đen ("meèo"). ĐỪNG dùng chế độ im lặng (chữ chờ 1.5s mới hiện) hay raw.
+> - Fallback XWayland chỉ engage khi Hyprland báo cửa sổ là XWayland
+>   (`evdev_inject::focus_is_native_wayland`): Chrome giờ mặc định Wayland, không có cờ cmdline.
+
+### R34. Field test trên máy user — bài học vận hành
+> - Kiểm `enabled = true` TRƯỚC mỗi lượt (user hay tắt bộ gõ từ khay; một lượt 0/5 phím thô
+>   từng bị đọc nhầm thành regression). Kiểm load < 4 (4 nhân), chờ thay vì bỏ cuộc.
+> - Guard chạm: dừng ở phím đầu tiên khi focus rời cửa sổ test hoặc có thiết bị vật lý phát
+>   sự kiện; KHÔNG restart khi user quay lại. Cửa sổ chưa có tiêu đề < 4s là đang tải, không phải focus.
+> - Probe tạm (`zz_probe.rs`, xprobe) để TÁI HIỆN bằng engine thật rồi XOÁ — không commit test.
+>   Probe `#[path]` không phải cfg(test): trỏ `XDG_DATA_HOME`/`HOME` vào scratch.
+> - Đối chiếu từ đã gõ với vi_VN.dic (`/opt/onlyoffice/.../vi_VN.dic`) để tìm lỗi Tự do thật
+>   trong log thay vì đoán. Đừng chạy vòng test lặp lại khi không có thay đổi mới — tốn token,
+>   user đã phàn nàn (2026-11-04). Xem `doc/LESSONS_LEARNED.md`.
+
 ### R31. Log file KHÔNG được ghi mọi cấp độ
 > Sự cố 2026-10-24: file log không có filter → `[NORMALIZE]` debug (nhiều dòng/phím) làm
 > `vi-ime.<ngày>.log` lên 4.3 GB trong một ngày, định dạng chuỗi ngay trên đường gõ phím,
