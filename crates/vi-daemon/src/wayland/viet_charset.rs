@@ -121,6 +121,14 @@ pub(crate) fn build_static_keymap() -> (String, HashMap<char, (u32, u8)>) {
             levels.join(", ")
         ));
     }
+    // Forward Delete ('\u{7f}') on the next free key, ONE_LEVEL like
+    // BackSpace: clears the browser's selected autocomplete before a
+    // live-echo BackSpace in the address bar (actions.rs `sync_shown`).
+    // On the typer's own keyboard so it can never arrive after them.
+    if let Some(&code) = SAFE_CODES.get(inv.chunks(4).count() + 1) {
+        map.insert('\u{7f}', (code, 0));
+        syms.push_str(&format!("key <K{code}> {{ [ Delete ] }};\n"));
+    }
 
     let text = format!(
         "xkb_keymap {{\n\

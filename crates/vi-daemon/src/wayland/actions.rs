@@ -295,8 +295,6 @@ impl ImeAppState {
         // (Blink áp keymap trễ — repro 2026-07-10), không set_preedit
         // (user chọn NonPreedit chính vì không muốn gạch chân). Từ hiện
         // nguyên khối qua commit_string ở word boundary.
-        // Address bar (Url, never live) is silent too: no underline, the
-        // word appears whole at the boundary (user choice 2026-11-04).
         let silent = !live && self.engine.mode() == ImeMode::NonPreedit;
         // P0: app honors surrounding-text → atomic commit, no sleep-dance.
         let capable = live && self.app_surrounding_capable();
@@ -455,6 +453,16 @@ impl ImeAppState {
         // composition gets dropped (tone keys appear as literal digits).
         self.live_echo_pending = self.live_echo_pending.saturating_add(1);
         self.last_live_echo_at = Some(std::time::Instant::now());
+        // Address bar: Chrome selects an inline autocomplete after each
+        // letter; a BackSpace would delete that selection instead of our
+        // letter ("meo"+tone → "meèo", 2026-07-12). Delete first clears it
+        // (no-op at the end of the text, where one types). Same typer
+        // queue, so it lands before the BackSpaces; it is a command of its
+        // own, so arm the guard for it too.
+        if self.field_sensitivity == FieldSensitivity::Url && shown.len() > common {
+            self.live_echo_pending = self.live_echo_pending.saturating_add(1);
+            let _ = self.viet.backspace_then_type(0, "\u{7f}", mode);
+        }
         if !self
             .viet
             .backspace_then_type(shown.len() - common, &suffix, mode)
