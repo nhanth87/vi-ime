@@ -14,6 +14,7 @@ pub mod dispatch_stubs;
 pub mod feedback;
 pub mod runtime;
 pub mod state;
+pub(crate) mod viet_charset;
 pub mod viet_typer;
 pub(crate) mod viet_typer_conn;
 pub mod virtual_keyboard;

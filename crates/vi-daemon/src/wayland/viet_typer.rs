@@ -62,6 +62,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use tracing::{info, warn};
+
+// Static keymap + character table: viet_charset.rs (R4 split).
+pub(crate) use super::viet_charset::build_static_keymap;
+#[cfg(test)]
+use super::viet_charset::char_inventory;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use crate::client_profile::ClientProfile;
 use crate::engine::fast_engine::CompositorKind;
@@ -189,111 +194,6 @@ pub(crate) fn memfd_keymap(text: &str) -> Option<(OwnedFd, u32)> {
     Some((f.into(), text.len() as u32 + 1))
 }
 
-/// Everything the static keymap covers: printable ASCII + Vietnamese
-/// (both cases). Engine output can only ever contain these (raw keys are
-/// ASCII; rendered syllables are Vietnamese).
-///
-/// SINH bằng chính Unicode algebra của engine (glyph.rs) — không có chuỗi
-/// literal liệt kê bảng chữ (tinh thần R14): nguyên âm quality qua
-/// `apply_quality`, tone qua `compose(tone_mark)`. Engine ngôn ngữ mới
-/// (multilang vision) mở rộng algebra là inventory tự theo.
-fn char_inventory() -> Vec<char> {
-    use crate::engine::glyph;
-    use crate::engine::tone::Tone;
-
-    let mut v: Vec<char> = (0x20u8..0x7f).map(|b| b as char).collect(); // 95
-
-    // Nguyên âm nền: ASCII + biến thể quality sinh bằng algebra
-    // (a→â/ă, e→ê, o→ô/ơ, u→ư; các cặp vô nghĩa tự trả None).
-    let mut vowels: Vec<char> = vec!['a', 'e', 'i', 'o', 'u', 'y'];
-    for base in ['a', 'e', 'o', 'u'] {
-        for mark in [glyph::CIRCUMFLEX, glyph::BREVE, glyph::HORN] {
-            if let Some(c) = glyph::apply_quality(base, mark) {
-                vowels.push(c);
-            }
-        }
-    }
-
-    let mut viet: Vec<char> = Vec::with_capacity(67);
-    if let Some(dd) = glyph::apply_quality('d', glyph::STROKE) {
-        viet.push(dd); // đ — ngoại lệ duy nhất của algebra (R14)
-    }
-    for &vw in &vowels {
-        if !vw.is_ascii() {
-            viet.push(vw); // â ă ê ô ơ ư (quality, chưa tone)
-        }
-        for tone in [Tone::Acute, Tone::Grave, Tone::Hook, Tone::Tilde, Tone::Dot] {
-            if let Some(c) = glyph::tone_mark(tone).and_then(|m| glyph::compose(vw, m)) {
-                viet.push(c); // 12 nguyên âm × 5 tone = 60
-            }
-        }
-    }
-    let upper: Vec<char> = viet.iter().flat_map(|c| c.to_uppercase()).collect();
-    v.extend(viet);
-    v.extend(upper);
-    v
-}
-
-/// Build the ONE static keymap: key <K2> = BackSpace (ONE_LEVEL), the rest
-/// of SAFE_CODES carry 8 chars each via type VIIM. Returns (keymap_text,
-/// char → (evdev code, level 0-based)).
-pub(crate) fn build_static_keymap() -> (String, HashMap<char, (u32, u8)>) {
-    let inv = char_inventory();
-    let mut map: HashMap<char, (u32, u8)> = HashMap::new();
-    map.insert('\u{0008}', (SAFE_CODES[0], 0));
-
-    let mut codes = String::new();
-    let mut syms = String::new();
-    for code in SAFE_CODES {
-        codes.push_str(&format!("<K{code}> = {};\n", code + 8));
-    }
-    syms.push_str(&format!("key <K{}> {{ [ BackSpace ] }};\n", SAFE_CODES[0]));
-
-    for (slot, chunk) in inv.chunks(8).enumerate() {
-        // Slot 0 of SAFE_CODES is BackSpace — chars start at slot+1.
-        let Some(&code) = SAFE_CODES.get(slot + 1) else {
-            warn!("[VIET-TYPER] bảng ký tự tràn {} keycode — cắt bớt", SAFE_CODES.len());
-            break;
-        };
-        let mut levels: Vec<String> = Vec::with_capacity(8);
-        for (li, &ch) in chunk.iter().enumerate() {
-            map.insert(ch, (code, li as u8));
-            levels.push(format!("U{:04X}", ch as u32));
-        }
-        while levels.len() < 8 {
-            levels.push("NoSymbol".into());
-        }
-        syms.push_str(&format!(
-            "key <K{code}> {{ type[Group1]=\"VIIM\", symbols[Group1]=[ {} ] }};\n",
-            levels.join(", ")
-        ));
-    }
-
-    let text = format!(
-        "xkb_keymap {{\n\
-         xkb_keycodes \"vi\" {{ minimum = 8; maximum = 255;\n{codes}}};\n\
-         xkb_types \"vi\" {{ include \"complete\"\n\
-         type \"VIIM\" {{\n\
-           modifiers = Shift+Mod3+Mod5;\n\
-           map[Shift] = Level2;\n\
-           map[Mod5] = Level3;\n\
-           map[Shift+Mod5] = Level4;\n\
-           map[Mod3] = Level5;\n\
-           map[Shift+Mod3] = Level6;\n\
-           map[Mod3+Mod5] = Level7;\n\
-           map[Shift+Mod3+Mod5] = Level8;\n\
-           level_name[Level1] = \"1\"; level_name[Level2] = \"2\";\n\
-           level_name[Level3] = \"3\"; level_name[Level4] = \"4\";\n\
-           level_name[Level5] = \"5\"; level_name[Level6] = \"6\";\n\
-           level_name[Level7] = \"7\"; level_name[Level8] = \"8\";\n\
-         }};\n\
-         }};\n\
-         xkb_compatibility \"vi\" {{ include \"complete\" }};\n\
-         xkb_symbols \"vi\" {{\n{syms}}};\n\
-         }};\n"
-    );
-    (text, map)
-}
 
 /// A single type command from the main event loop to the typer thread.
 #[derive(Debug)]
