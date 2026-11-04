@@ -206,14 +206,16 @@ impl Engine {
                 self.note_lang(2);
                 return raw;
             }
-            // Both readings are real words: the sentence decides; with no
-            // context, common English (curated list) beats rare Vietnamese
-            // unless the Vietnamese reading is the common one.
+            // Both readings are real words. Common English (curated list)
+            // beats a RARE Vietnamese reading even inside Vietnamese text —
+            // the user mixes English terms into Vietnamese sentences, and
+            // "… như test" / "address bar" came out "tét" / "bả" (2026-11-04).
+            // A common Vietnamese reading (english_prefer_vietnamese.txt:
+            // rét, còn, nó, thế…) stays Vietnamese unless the sentence is
+            // English.
             let lang = self.lang.get();
             let english = lang > 0
-                || (lang == 0
-                    && viet_dict::is_english_word(&self.raw_keys)
-                    && !viet_dict::prefer_vietnamese(&raw));
+                || (viet_dict::is_english_word(&self.raw_keys) && !viet_dict::prefer_vietnamese(&raw));
             if english {
                 self.note_lang(2);
                 return raw;

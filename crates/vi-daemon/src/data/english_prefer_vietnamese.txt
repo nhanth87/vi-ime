@@ -37,3 +37,10 @@ trust
 var
 vast
 beer
+# 2026-11-04: common English now wins over RARE Vietnamese even in Vietnamese
+# text; these collisions are everyday Vietnamese and must stay so.
+these
+there
+this
+sorts
+worst

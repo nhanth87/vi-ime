@@ -295,9 +295,9 @@ impl ImeAppState {
         // (Blink áp keymap trễ — repro 2026-07-10), không set_preedit
         // (user chọn NonPreedit chính vì không muốn gạch chân). Từ hiện
         // nguyên khối qua commit_string ở word boundary.
-        let silent = !live
-            && self.engine.mode() == ImeMode::NonPreedit
-            && self.field_sensitivity != FieldSensitivity::Url; // address bar: show preedit
+        // Address bar (Url, never live) is silent too: no underline, the
+        // word appears whole at the boundary (user choice 2026-11-04).
+        let silent = !live && self.engine.mode() == ImeMode::NonPreedit;
         // P0: app honors surrounding-text → atomic commit, no sleep-dance.
         let capable = live && self.app_surrounding_capable();
 
