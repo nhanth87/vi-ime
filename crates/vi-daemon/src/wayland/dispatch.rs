@@ -359,6 +359,14 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, KeyboardGrabUserData> for ImeAppStat
                 // real keyboard's keymap instead.
                 if keymap_is_ours(&fd, size) {
                     warn!("[KEYMAP] ignoring vi-ime's own virtual-keyboard keymap ({size} bytes)");
+                    // No real keymap yet (daemon just started): build the
+                    // user's layout instead of passing keys raw until Super.
+                    if !state.xkb.has_keymap()
+                        && let Some((kfd, ksize)) = crate::wayland::xkb::system_keymap()
+                    {
+                        state.vk.set_keymap(format, &kfd, ksize);
+                        state.xkb.set_keymap(kfd, ksize);
+                    }
                     return;
                 }
                 // Mirror to the virtual keyboard FIRST (borrows the fd), so

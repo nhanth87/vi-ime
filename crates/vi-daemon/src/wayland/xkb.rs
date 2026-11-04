@@ -32,6 +32,66 @@ pub(crate) type xkb_context = c_void;
 pub(crate) type xkb_keymap = c_void;
 pub(crate) type xkb_state = c_void;
 
+/// `struct xkb_rule_names` (NULL field = libxkbcommon default / XKB_DEFAULT_*).
+#[repr(C)]
+pub(crate) struct XkbRuleNames {
+    rules: *const c_char,
+    model: *const c_char,
+    layout: *const c_char,
+    variant: *const c_char,
+    options: *const c_char,
+}
+
+/// The user's real keyboard keymap, built from the compositor's configured
+/// layout (Hyprland `input:kb_*`; defaults elsewhere), as a memfd for the
+/// grab handler. Used when the only keymap Hyprland sent so far was one of
+/// vi-ime's own virtual keyboards: at daemon start that left the IME with
+/// no keymap → every key passed through raw, no Vietnamese until a press
+/// of Super made Hyprland resend the real one ("chờ 5-10 phút", 2026-11-03).
+pub(crate) fn system_keymap() -> Option<(OwnedFd, u32)> {
+    let opt = |name: &str| -> Option<std::ffi::CString> {
+        let out = std::process::Command::new("hyprctl")
+            .args(["getoption", &format!("input:{name}"), "-j"])
+            .output()
+            .ok()?;
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+        let s = v.get("str")?.as_str()?.trim().to_string();
+        (!s.is_empty() && s != "[[EMPTY]]").then(|| std::ffi::CString::new(s).ok()).flatten()
+    };
+    let (rules, model, layout, variant, options) =
+        (opt("kb_rules"), opt("kb_model"), opt("kb_layout"), opt("kb_variant"), opt("kb_options"));
+    let p = |c: &Option<std::ffi::CString>| c.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+    let names = XkbRuleNames {
+        rules: p(&rules),
+        model: p(&model),
+        layout: p(&layout),
+        variant: p(&variant),
+        options: p(&options),
+    };
+    let text = unsafe {
+        let ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+        if ctx.is_null() {
+            return None;
+        }
+        let km = xkb_keymap_new_from_names(ctx, &names, XKB_KEYMAP_COMPILE_NO_FLAGS);
+        let text = if km.is_null() {
+            None
+        } else {
+            let raw = xkb_keymap_get_as_string(km, XKB_KEYMAP_FORMAT_TEXT_V1);
+            let s = (!raw.is_null()).then(|| std::ffi::CStr::from_ptr(raw).to_string_lossy().into_owned());
+            if !raw.is_null() {
+                libc::free(raw as *mut c_void);
+            }
+            xkb_keymap_unref(km);
+            s
+        };
+        xkb_context_unref(ctx);
+        text?
+    };
+    info!("[KEYMAP] built the configured layout ({:?})", layout);
+    crate::wayland::viet_typer::memfd_keymap(&text)
+}
+
 #[link(name = "xkbcommon")]
 unsafe extern "C" {
     pub(crate) fn xkb_context_new(flags: c_int) -> *mut xkb_context;
@@ -43,6 +103,12 @@ unsafe extern "C" {
         flags: c_int,
     ) -> *mut xkb_keymap;
     pub(crate) fn xkb_keymap_unref(keymap: *mut xkb_keymap);
+    pub(crate) fn xkb_keymap_new_from_names(
+        context: *mut xkb_context,
+        names: *const XkbRuleNames,
+        flags: c_int,
+    ) -> *mut xkb_keymap;
+    pub(crate) fn xkb_keymap_get_as_string(keymap: *mut xkb_keymap, format: c_int) -> *mut c_char;
     pub(crate) fn xkb_state_new(keymap: *mut xkb_keymap) -> *mut xkb_state;
     pub(crate) fn xkb_state_unref(state: *mut xkb_state);
     pub(crate) fn xkb_state_key_get_one_sym(state: *mut xkb_state, key: u32) -> u32;
@@ -100,6 +166,11 @@ impl XkbState {
             keymap: std::ptr::null_mut(),
             state: std::ptr::null_mut(),
         }
+    }
+
+    /// A keymap is loaded (keys can be decoded).
+    pub(crate) fn has_keymap(&self) -> bool {
+        !self.state.is_null()
     }
 
     pub(crate) fn set_keymap(&mut self, fd: OwnedFd, size: u32) {
