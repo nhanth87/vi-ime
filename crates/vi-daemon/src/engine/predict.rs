@@ -174,6 +174,21 @@ fn top3<'a>(it: impl Iterator<Item = (u32, &'a String)>) -> Vec<String> {
     v.into_iter().take(3).map(|(_, w)| w.clone()).collect()
 }
 
+/// Built-in starting data: 1000 common words (data/predict_seed_vi.txt),
+/// scored by rank (1000 for the first … 1 for the last). Suggestions work
+/// from the first day; one word the user typed (×SEED_SPAN) outranks all.
+/// Never saved, never cleared — it is not learned from the user.
+const SEED_SPAN: u32 = 1000;
+static SEED: LazyLock<BTreeMap<String, u32>> = LazyLock::new(|| {
+    include_str!("../data/predict_seed_vi.txt")
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .enumerate()
+        .map(|(i, w)| (fold(w), SEED_SPAN.saturating_sub(i as u32).max(1)))
+        .collect()
+});
+
 fn recompute(p: &mut Predictor) {
     let s = if !p.enabled {
         Vec::new()
@@ -187,13 +202,16 @@ fn recompute(p: &mut Predictor) {
     } else {
         let pre = p.prefix.as_str();
         let follow = p.prev.as_ref().and_then(|a| p.next.get(a));
-        top3(
-            p.words
-                .range::<str, _>((Bound::Included(pre), Bound::Unbounded))
-                .take_while(|(w, _)| w.starts_with(pre))
-                .filter(|(w, _)| w.len() > pre.len())
-                .map(|(w, n)| (n + 10 * follow.and_then(|m| m.get(w)).copied().unwrap_or(0), w)),
-        )
+        let range = (Bound::Included(pre), Bound::Unbounded);
+        let mut cand: HashMap<&String, u32> = HashMap::new();
+        for (w, n) in p.words.range::<str, _>(range).take_while(|(w, _)| w.starts_with(pre)) {
+            let pair = follow.and_then(|m| m.get(w)).copied().unwrap_or(0);
+            cand.insert(w, SEED_SPAN * (n + 10 * pair));
+        }
+        for (w, s) in SEED.range::<str, _>(range).take_while(|(w, _)| w.starts_with(pre)) {
+            *cand.entry(w).or_insert(0) += s;
+        }
+        top3(cand.into_iter().filter(|(w, _)| w.len() > pre.len()).map(|(w, n)| (n, w)))
     };
     if s != p.suggestions {
         p.suggestions = s;
