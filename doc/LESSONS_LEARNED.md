@@ -41,6 +41,7 @@ Rules distilled from these live in `AGENTS.md` (R24–R34).
 | No Vietnamese in the address bar | URL fields were raw passthrough | Live echo with Delete before BackSpace (R33) |
 | "hút" → "hhuhuthúthút" in a YouTube comment box | The field sent surrounding text, so vi-ime used delete_surrounding + commit; Chrome ignored the delete | delete_surrounding path disabled for good (R33) |
 | "độc" → "đô5c" on some sites | Page re-render made Chrome deactivate/reactivate after every edit; each blink dropped the word | Blink tolerance: same app, no click, < 150 ms keeps the word (R33) |
+| "ví" → "vií" in the New Tab page search box | It inline-completes from history like the address bar, but is a normal field | Delete-before-BackSpace there too (title "New Tab") |
 | Address bar words appear after 2–3 s | Silent mode waited for boundary / 1.5 s idle commit | Back to live echo |
 
 ## Not resolved (evidence logging in place)

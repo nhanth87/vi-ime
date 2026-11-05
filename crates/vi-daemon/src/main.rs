@@ -380,6 +380,12 @@ fn main() {
                 current_focus = new_focus;
                 current_app_id = current_focus.app_id.clone();
                 let title = browser_title(&current_app_id, &current_focus);
+                // New Tab page search box inline-completes from history like
+                // the address bar ("ví" → "vií", 2026-11-05): actions.rs clears
+                // the selection with Delete before a BackSpace there too.
+                runtime.set_inline_complete(title.is_some_and(|t| {
+                    ["New Tab", "Thẻ mới", "Tab mới"].iter().any(|p| t.starts_with(p))
+                }));
                 if let Some(ref app_id) = current_app_id {
                     let cat = AppCategory::classify(app_id);
                     info!(

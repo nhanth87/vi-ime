@@ -459,7 +459,9 @@ impl ImeAppState {
         // (no-op at the end of the text, where one types). Same typer
         // queue, so it lands before the BackSpaces; it is a command of its
         // own, so arm the guard for it too.
-        if self.field_sensitivity == FieldSensitivity::Url && shown.len() > common {
+        let inline_box = self.field_sensitivity == FieldSensitivity::Url
+            || self.runtime.as_ref().is_some_and(|rt| rt.inline_complete());
+        if inline_box && shown.len() > common {
             self.live_echo_pending = self.live_echo_pending.saturating_add(1);
             let _ = self.viet.backspace_then_type(0, "\u{7f}", mode);
         }

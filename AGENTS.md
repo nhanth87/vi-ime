@@ -510,6 +510,9 @@
 > - Thanh địa chỉ (ContentPurpose::Url): live echo, NHƯNG mọi lần sửa cần BackSpace phải gõ
 >   Delete (`'\u{7f}'`, phím riêng trên keymap typer, cùng hàng đợi) TRƯỚC — xoá phần autocomplete
 >   Chrome đang bôi đen ("meèo"). ĐỪNG dùng chế độ im lặng (chữ chờ 1.5s mới hiện) hay raw.
+>   Ô tìm kiếm trang New Tab của Chrome (field Normal, KHÔNG báo surrounding) cũng tự hoàn thành
+>   từ lịch sử → cùng xử lý qua `RuntimeConfig::inline_complete` (main.rs theo tiêu đề cửa sổ
+>   "New Tab"/"Thẻ mới"). Field 2026-11-05: "ví" → "vií".
 > - **Deactivate "chớp"**: vài trang web làm Chrome deactivate→activate ~20-50ms sau MỖI lần sửa
 >   (re-render ô nhập). Drop từ ngay (R8) làm "độc" → "đô5c". Có từ đang gõ → hoãn drop
 >   (`deferred_drop`); Activate trong `BLINK_MS` (150ms), cùng app, không click → GIỮ từ; còn lại

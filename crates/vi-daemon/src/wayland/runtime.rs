@@ -72,6 +72,8 @@ pub struct RuntimeConfig {
     /// the IME thread compares this counter before each key and drops the
     /// half-typed word (R8) so it can never be committed at the new spot.
     clicks: AtomicU64,
+    /// See `set_inline_complete`.
+    inline_complete: AtomicBool,
     /// eventfd the click watcher signals so the IME event loop wakes
     /// IMMEDIATELY on a physical click (Preedit mode must clear the
     /// preedit before the app reacts — waiting for the next key is too
@@ -319,6 +321,17 @@ impl RuntimeConfig {
     /// Current click counter (compared by the IME thread per key).
     pub fn clicks(&self) -> u64 {
         self.clicks.load(Ordering::Acquire)
+    }
+
+    /// The focused window is a browser search box that inline-completes
+    /// from history like the address bar (Chrome's New Tab page): set by
+    /// the main thread from the window title, read per edit (no bump, R27).
+    pub fn set_inline_complete(&self, on: bool) {
+        self.inline_complete.store(on, Ordering::Release);
+    }
+
+    pub fn inline_complete(&self) -> bool {
+        self.inline_complete.load(Ordering::Acquire)
     }
 
     /// Install the click-wakeup eventfd (daemon startup, before threads).
