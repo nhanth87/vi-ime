@@ -76,6 +76,14 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                     if at.elapsed().as_millis() < BLINK_MS && clicks == now && app == state.current_app_id {
                         info!("[BLINK] deactivate→activate in {}ms — keeping the word", at.elapsed().as_millis());
                     } else {
+                        // Evidence for "cho7"-shaped reports (R22): a word lost here
+                        // turns the next tone key into a literal digit.
+                        info!(
+                            "[BLINK] word dropped: activate after {}ms, clicked={}, same app={}",
+                            at.elapsed().as_millis(),
+                            clicks != now,
+                            app == state.current_app_id
+                        );
                         drop_word(state);
                     }
                 }
