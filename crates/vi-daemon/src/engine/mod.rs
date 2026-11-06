@@ -23,6 +23,7 @@ pub(crate) mod emoji;
 pub(crate) mod lexicon;
 mod normalize;
 pub(crate) mod predict;
+pub(crate) mod habit;
 mod rhyme;
 mod style;
 mod syllable;

@@ -61,6 +61,8 @@ pub enum IpcCommand {
         predict: Option<bool>,
         #[serde(default)]
         smart_raw_incomplete: Option<bool>,
+        #[serde(default)]
+        learn_habits: Option<bool>,
     },
     #[serde(rename = "list_apps")]
     ListApps,
@@ -141,6 +143,11 @@ pub struct IpcResponse {
     pub predict: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub smart_raw_incomplete: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub learn_habits: Option<bool>,
+    /// Tự do tone style learned so far: [Telex words, VNI words].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub habit_style: Option<[u32; 2]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggestions: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -324,6 +331,7 @@ fn handle_client(mut stream: UnixStream, tx: &Sender<DaemonEvent>) {
             }
             IpcCommand::ClearPredict => {
                 crate::engine::predict::clear();
+                crate::engine::habit::clear();
                 info!("IPC: learned word suggestions cleared");
                 let _ = writeln!(stream, "{}", IpcResponse::reload().to_line());
             }

@@ -172,6 +172,27 @@ impl Engine {
     /// No word-list mangling of valid Vietnamese ("ấ", "mất" — field bug
     /// 2026-07-12): Vietnamese is only ever replaced by the raw keys.
     pub fn smart_commit_english_only(&self, app_id: Option<&str>) -> String {
+        // Learned choices first (habit.rs): a correction just made or a
+        // preference the user taught. Only real two-way choices with letter
+        // keys — digit keys never print (see below).
+        let raw: String = self.raw_keys.iter().collect();
+        let display = super::rhyme::fix_open_uo(&self.display).unwrap_or_else(|| self.display.clone());
+        let choice = display != raw && self.last_valid && !raw.chars().any(|c| c.is_ascii_digit());
+        if choice && let Some(english) = super::habit::decide(&raw) {
+            let out = if english { raw.clone() } else { self.vietnamese(display) };
+            super::habit::record(&raw, english, out.chars().count(), false);
+            return out;
+        }
+        let out = self.decide_by_rules(app_id);
+        if display != raw {
+            let vni = raw.chars().any(|c| c.is_ascii_digit());
+            super::habit::record(&raw, out == raw, out.chars().count(), vni);
+        }
+        out
+    }
+
+    /// The rule layer of `smart_commit_english_only` (no learning).
+    fn decide_by_rules(&self, app_id: Option<&str>) -> String {
         use super::viet_dict;
         let raw: String = self.raw_keys.iter().collect();
         // Cheat system: field-reported false positives get forced English

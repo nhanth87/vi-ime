@@ -26,6 +26,7 @@ mod godmod;
 mod ipc;
 mod learning;
 mod legacy_grab;
+mod log_file;
 mod notify;
 mod plugin;
 mod rivals;
@@ -46,12 +47,10 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
 /// Non-blocking tracing init (P0-1). Writes to stderr via a background thread
-/// AND to a rotating log file at ~/.local/share/vi-ime/vi-ime.log for field
-/// debugging. The file log captures ALL log levels (trace→error) while stderr
-/// respects RUST_LOG for interactive use. The returned guards must stay alive
+/// AND to ~/.local/share/vi-ime/vi-ime.log (deleted past 10 MB, log_file.rs)
+/// for field debugging. The returned guards must stay alive
 /// for the daemon's lifetime (drop flushes the queues).
 fn init_tracing() -> (tracing_appender::non_blocking::WorkerGuard, tracing_appender::non_blocking::WorkerGuard) {
-    // File log: rotating daily, max 3 files of 5MB each
     let log_dir = {
         let mut d = std::path::PathBuf::from(
             std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| {
@@ -63,14 +62,7 @@ fn init_tracing() -> (tracing_appender::non_blocking::WorkerGuard, tracing_appen
         d
     };
     let _ = std::fs::create_dir_all(&log_dir);
-    let file_appender = tracing_appender::rolling::Builder::new()
-        .rotation(tracing_appender::rolling::Rotation::DAILY)
-        .filename_prefix("vi-ime")
-        .filename_suffix("log")
-        .max_log_files(3)
-        .build(&log_dir)
-        .expect("Failed to create log file appender");
-    let (file_writer, file_guard) = tracing_appender::non_blocking(file_appender);
+    let (file_writer, file_guard) = tracing_appender::non_blocking(log_file::CappedLog::open(&log_dir));
     let (stderr_writer, stderr_guard) = tracing_appender::non_blocking(std::io::stderr());
 
     // stderr respects RUST_LOG (default info). The file used to take EVERY
@@ -400,6 +392,7 @@ fn main() {
                 if app_changed {
                     // Save word suggestions learned so far (off the typing thread).
                     crate::engine::predict::flush();
+                    crate::engine::habit::flush();
                     let wants_legacy = current_app_id
                         .as_deref()
                         .is_some_and(legacy_grab::is_legacy_app);
@@ -703,6 +696,7 @@ fn apply_config(
         setting.effective_config_layered(current_app_id.as_deref(), title, learned.as_ref());
     runtime.store(&crate::wayland::RuntimeSnapshot { raw_incomplete: setting.smart_raw_incomplete, ..resolved_to_snapshot(&resolved) });
     crate::engine::predict::set_enabled(setting.predict);
+    crate::engine::habit::set_enabled(setting.learn_habits);
     // R-macro: publish keyword + hotkey tables (parsed once here, shared as
     // Arc; both IME paths pick them up — Wayland via maybe_reconfigure,
     // evdev via the consumer loop).

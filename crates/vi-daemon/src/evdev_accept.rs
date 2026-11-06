@@ -10,6 +10,22 @@ use super::*;
 const ALT: u8 = 4 | 8;
 
 impl Composer {
+    /// Runtime switches the composer's engine follows (emoji, Tự do raw display).
+    pub(crate) fn apply_runtime(&mut self, snap: &crate::wayland::runtime::RuntimeSnapshot) {
+        self.engine.set_emoji_enabled(snap.emoji);
+        self.engine.inner_mut().set_raw_incomplete(snap.raw_incomplete);
+    }
+
+    /// Enable emoji shortcode/emoticon expansion on the composer's engine.
+    pub(crate) fn set_emoji_enabled(&mut self, enabled: bool) {
+        self.engine.set_emoji_enabled(enabled);
+    }
+
+    /// Publish fresh R-macro tables (pointer-checked inside — ~free).
+    pub(crate) fn set_macros(&mut self, macros: std::sync::Arc<crate::engine::macro_dict::MacroDict>) {
+        self.engine.set_macros(macros);
+    }
+
     /// Emit releases for any modifiers the uinput mirror still holds — on
     /// disengage (focus left) the user's real release lands AFTER ungrab
     /// and never reaches the mirror, which would pin Super/Ctrl forever

@@ -545,6 +545,16 @@
 > nhỏ dự phòng. Trạng thái theo `setting.conf` qua inotify (không poll). Clipboard NFC dùng
 > wl-paste/wl-copy. ĐỪNG thêm lại toolkit GUI vào daemon — UI thuộc vi-settings (Qt Quick).
 
+### R36. Học thói quen gõ (engine/habit.rs) — sửa một lần là nhớ, không tự củng cố sai
+> Lớp TRƯỚC luật Tự do (`smart_commit_english_only` → `habit::decide`, rồi `decide_by_rules`).
+> - **Sửa** = xoá từ vừa commit (BackSpace ngoài composition, số lần ∈ [len, len+2]) rồi gõ lại
+>   ĐÚNG chuỗi phím trong 20s → từ đó ra dạng kia NGAY, điểm đặt ±4 (≥3 là quyết định).
+> - **Giữ nguyên** = ±1, chặn ±8: chỉ củng cố, không vượt được một lần sửa. ĐỪNG cho "giữ" cộng dồn
+>   không chặn — IME sẽ tự củng cố lựa chọn sai của chính nó.
+> - Chỉ học khi `set_learning(true)` (Wayland `learns()`, evdev `Composer::learn`); phím có chữ số
+>   (VNI) không qua lớp này. Kiểu gõ Tự do (Telex/VNI) chỉ GỢI Ý trong Cấu hình, không tự đổi.
+> - `habit.tsv` cục bộ, `learn_habits` tắt được, "Xóa dữ liệu học" xoá cùng gợi ý từ.
+
 ### R31. Log file KHÔNG được ghi mọi cấp độ
 > Sự cố 2026-10-24: file log không có filter → `[NORMALIZE]` debug (nhiều dòng/phím) làm
 > `vi-ime.<ngày>.log` lên 4.3 GB trong một ngày, định dạng chuỗi ngay trên đường gõ phím,
@@ -553,6 +563,8 @@
 > ĐỪNG thêm debug log nhiều dòng/phím vào module được bật debug mặc định
 > (`evdev_compose`, `wayland::actions`); dùng `trace!` cho chi tiết nội bộ engine.
 > Harness/test ĐỪNG đọc lại cả file log liên tục — tail từ offset cuối.
+> File log DUY NHẤT `vi-ime.log`, tự xoá khi vượt 10 MB (`log_file.rs`, ghi trên worker thread
+> của tracing). File theo ngày cũ (`vi-ime.<ngày>.log`) bị xoá lúc khởi động.
 
 ---
 

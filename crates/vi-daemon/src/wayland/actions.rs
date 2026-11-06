@@ -191,6 +191,7 @@ impl ImeAppState {
             return;
         }
 
+        crate::engine::habit::set_learning(self.learns());
         // Godmod (R6): count backspaces — kept below the Secure gate so no
         // keystrokes are recorded in password/PIN fields (R11b).
         if keycode == 14 {
@@ -206,6 +207,7 @@ impl ImeAppState {
                 return;
             }
             // No pending composition → pass through to app.
+            crate::engine::habit::backspace();
             self.vk.press(keycode);
             return;
         }

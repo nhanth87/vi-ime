@@ -498,6 +498,33 @@ FloatingWindow {
                                 }
                             }
                             SettingRow {
+                                id: habitRow
+                                readonly property int telex: daemon.habitStyle[0] || 0
+                                readonly property int vni: daemon.habitStyle[1] || 0
+                                readonly property int total: telex + vni
+                                // Suggest a fixed method once Tự do is clearly used one way.
+                                readonly property string suggest: daemon.inputMethod !== "Tự do" || total < 200 ? ""
+                                    : telex >= total * 0.95 ? "Telex" : vni >= total * 0.95 ? "VNI" : ""
+                                label: "Học thói quen gõ"
+                                description: "Xoá một từ vừa gõ rồi gõ lại đúng các phím đó: vi-ime hiểu là đoán sai và nhớ lựa chọn của bạn."
+                                    + (total > 0 ? " Đã học: Tự do gõ " + Math.round(100 * telex / total) + "% kiểu Telex, "
+                                                   + Math.round(100 * vni / total) + "% kiểu VNI." : "")
+                                RowLayout {
+                                    spacing: 8
+                                    VButton {
+                                        visible: habitRow.suggest !== ""
+                                        kind: "ghost"
+                                        text: "Chuyển sang " + habitRow.suggest
+                                        onClicked: daemon.setConfig({ input_method: habitRow.suggest })
+                                    }
+                                    VSwitch {
+                                        checked: daemon.learnHabits
+                                        accessibleName: "Học thói quen gõ"
+                                        onToggled: function (next) { daemon.setConfig({ learn_habits: next }) }
+                                    }
+                                }
+                            }
+                            SettingRow {
                                 label: "Biểu tượng cảm xúc"
                                 description: "Gõ :) hoặc :smile: rồi dấu cách để ra 🙂."
                                 VSwitch {

@@ -103,21 +103,6 @@ impl Composer {
         }
     }
 
-    /// Runtime switches the composer's engine follows (emoji, Tự do raw display).
-    pub(crate) fn apply_runtime(&mut self, snap: &crate::wayland::runtime::RuntimeSnapshot) {
-        self.engine.set_emoji_enabled(snap.emoji);
-        self.engine.inner_mut().set_raw_incomplete(snap.raw_incomplete);
-    }
-
-    /// Enable emoji shortcode/emoticon expansion on the composer's engine.
-    pub(crate) fn set_emoji_enabled(&mut self, enabled: bool) {
-        self.engine.set_emoji_enabled(enabled);
-    }
-
-    /// Publish fresh R-macro tables (pointer-checked inside — ~free).
-    pub(crate) fn set_macros(&mut self, macros: std::sync::Arc<crate::engine::macro_dict::MacroDict>) {
-        self.engine.set_macros(macros);
-    }
 
     /// R-macro hotkey identity for a chord on the grabbed keyboard.
     /// Plain/shift-only keys never qualify.
@@ -135,6 +120,7 @@ impl Composer {
     /// One key event from a grabbed keyboard (value: 0=release 1=press 2=repeat).
     pub(crate) fn handle(&mut self, ui: &mut VirtualDevice, code: KeyCode, value: i32) {
         let is_char = key_to_char(code, self.shift).is_some();
+        crate::engine::habit::set_learning(self.learn);
         if value != 2 {
             if let Some((c, v, t)) = self.last_key
                 && value == 1
@@ -243,6 +229,7 @@ impl Composer {
                 if !self.shown.is_empty() {
                     self.finish_word();
                 }
+                crate::engine::habit::backspace();
                 self.type_out(1, "", true);
             }
             return;

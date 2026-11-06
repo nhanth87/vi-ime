@@ -51,6 +51,13 @@ Rules distilled from these live in `AGENTS.md` (R24–R34).
   libraries and 9 threads, and a missing appindicator3 stopped the daemon from
   starting at all. Replaced by `ksni` (pure-Rust D-Bus tray): 5 libraries.
 
+## Adaptive typing (v7.6.0)
+
+- "The more you type, the smarter": the only reliable signal is the user's own
+  correction (delete the word just typed, retype the same keys). Counting every
+  kept word as approval alone would just reinforce the IME's own guesses, so
+  kept words only nudge (±1, capped) and a correction sets the outcome (±4).
+
 ## Not resolved (evidence logging in place)
 
 - Same key arriving twice 55–67 ms apart on the evdev path ("chơ" → "cho7"):

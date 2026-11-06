@@ -31,6 +31,8 @@ Item {
     property bool emoji: true
     property bool predict: true
     property bool smartRaw: true
+    property bool learnHabits: true
+    property var habitStyle: [0, 0]      // Tự do words typed [Telex, VNI]
     property var macros: ({})
     property var macroHotkeys: ({})
     property var apps: []
@@ -46,7 +48,8 @@ Item {
         input_method: "inputMethod", tone_style: "toneStyle", ime_mode: "imeMode",
         output_mode: "outputMode", enabled: "imeEnabled", free_tone_placement: "freeTone",
         auto_detect_lang: "autoEnglish", enable_per_app: "perApp", emoji: "emoji",
-        predict: "predict", smart_raw_incomplete: "smartRaw"
+        predict: "predict", smart_raw_incomplete: "smartRaw",
+        learn_habits: "learnHabits"
     })
     property var _pending: []
 
@@ -112,6 +115,8 @@ Item {
             if (r.emoji !== undefined) d.emoji = r.emoji
             if (r.predict !== undefined) d.predict = r.predict
             if (r.smart_raw_incomplete !== undefined) d.smartRaw = r.smart_raw_incomplete
+            if (r.learn_habits !== undefined) d.learnHabits = r.learn_habits
+            if (r.habit_style !== undefined) d.habitStyle = r.habit_style
             if (r.macros) d.macros = r.macros
             if (r.macro_hotkeys) d.macroHotkeys = r.macro_hotkeys
             if (r.config_path) d.configPath = r.config_path

@@ -175,6 +175,10 @@ pub struct Setting {
     /// the raw keys ("veet", not "vêt"); the tone key turns it Vietnamese.
     #[serde(default = "default_true")]
     pub smart_raw_incomplete: bool,
+    /// Learn from the user's corrections at the English/Vietnamese word
+    /// boundary (engine/habit.rs). Local only, erased with the suggestions.
+    #[serde(default = "default_true")]
+    pub learn_habits: bool,
 }
 
 fn default_ime_mode() -> ImeMode {
@@ -205,6 +209,7 @@ impl Default for Setting {
             macro_hotkeys: HashMap::new(),
             predict: true,
             smart_raw_incomplete: true,
+            learn_habits: true,
         }
     }
 }
