@@ -44,6 +44,13 @@ Rules distilled from these live in `AGENTS.md` (R24–R34).
 | "ví" → "vií" in the New Tab page search box | It inline-completes from history like the address bar, but is a normal field | Delete-before-BackSpace there too (title "New Tab") |
 | Address bar words appear after 2–3 s | Silent mode waited for boundary / 1.5 s idle commit | Back to live echo |
 
+## Footprint
+
+- vi-ime showed 28 MB / 22 threads. Measured: 21 MB of that was shared libraries,
+  the real share (PSS) ~9 MB — but GTK, used only for the tray icon, linked 74
+  libraries and 9 threads, and a missing appindicator3 stopped the daemon from
+  starting at all. Replaced by `ksni` (pure-Rust D-Bus tray): 5 libraries.
+
 ## Not resolved (evidence logging in place)
 
 - Same key arriving twice 55–67 ms apart on the evdev path ("chơ" → "cho7"):

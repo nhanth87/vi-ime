@@ -281,7 +281,7 @@ fn consumer_loop(
     // NOTE: the NATIVE typer's keymap is ASCII+Vietnamese — emoji glyphs only render through
     // the wtype/xdotool injector; see evdev_compose::apply CommitEmoji.
     if let Some(rt) = &runtime {
-        composer.set_emoji_enabled(rt.snapshot().emoji);
+        composer.apply_runtime(&rt.snapshot());
         composer.set_macros(rt.macros());
     }
     let mut last_clicks = runtime.as_ref().map(|rt| rt.clicks()).unwrap_or(0);

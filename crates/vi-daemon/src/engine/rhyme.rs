@@ -133,3 +133,11 @@ pub(crate) fn fix_open_uo(word: &str) -> Option<String> {
     out[i] = if out[i] == 'Ư' { 'U' } else { 'u' };
     Some(out.into_iter().collect())
 }
+
+/// Word ends in a stop consonant (-c, -ch, -p, -t) but carries no sắc/nặng —
+/// the only tones a stop syllable takes. Still a prefix ("vêt" → "vết").
+pub(crate) fn stop_ending_without_tone(word: &str) -> bool {
+    let w = word.to_lowercase();
+    let stop = w.ends_with('c') || w.ends_with("ch") || w.ends_with('p') || w.ends_with('t');
+    stop && !w.nfd().any(|c| c == '\u{0301}' || c == '\u{0323}')
+}

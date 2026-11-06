@@ -103,6 +103,12 @@ impl Composer {
         }
     }
 
+    /// Runtime switches the composer's engine follows (emoji, Tự do raw display).
+    pub(crate) fn apply_runtime(&mut self, snap: &crate::wayland::runtime::RuntimeSnapshot) {
+        self.engine.set_emoji_enabled(snap.emoji);
+        self.engine.inner_mut().set_raw_incomplete(snap.raw_incomplete);
+    }
+
     /// Enable emoji shortcode/emoticon expansion on the composer's engine.
     pub(crate) fn set_emoji_enabled(&mut self, enabled: bool) {
         self.engine.set_emoji_enabled(enabled);

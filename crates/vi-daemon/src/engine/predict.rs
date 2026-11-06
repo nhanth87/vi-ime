@@ -224,6 +224,13 @@ fn with<R>(f: impl FnOnce(&mut Predictor) -> R) -> Option<R> {
     STATE.0.lock().ok().map(|mut p| f(&mut p))
 }
 
+/// Load the learned table and the seed list now (startup thread) instead of
+/// on the first keystroke.
+pub(crate) fn warm() {
+    LazyLock::force(&STATE);
+    LazyLock::force(&SEED);
+}
+
 /// Config switch (`predict` in setting.conf).
 pub(crate) fn set_enabled(on: bool) {
     with(|p| {

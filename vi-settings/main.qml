@@ -489,6 +489,15 @@ FloatingWindow {
                                 }
                             }
                             SettingRow {
+                                label: "Tự do: hiện phím gốc khi chưa đủ dấu"
+                                description: "Từ tận cùng -c, -ch, -p, -t chưa có dấu sắc/nặng hiện đúng phím đã gõ (veet, text); gõ dấu là thành tiếng Việt (vết)."
+                                VSwitch {
+                                    checked: daemon.smartRaw
+                                    accessibleName: "Tự do: hiện phím gốc khi chưa đủ dấu"
+                                    onToggled: function (next) { daemon.setConfig({ smart_raw_incomplete: next }) }
+                                }
+                            }
+                            SettingRow {
                                 label: "Biểu tượng cảm xúc"
                                 description: "Gõ :) hoặc :smile: rồi dấu cách để ra 🙂."
                                 VSwitch {

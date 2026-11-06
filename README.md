@@ -172,7 +172,7 @@ Hoặc dùng menu chuột phải trên tray icon — đổi gì cũng ghi thẳn
 ## Yêu cầu hệ thống
 
 - Compositor **wlroots**: niri, Hyprland, Sway, COSMIC, KDE plasma (hỗ trợ `zwp_input_method_v2` + `zwp_virtual_keyboard_v1`). GNOME chưa hỗ trợ đủ protocol nên nằm ngoài phạm vi dự án.
-- Rust 1.80+, `libxkbcommon`, `libwayland-dev`, GTK3 + libappindicator3
+- Rust 1.80+, `libxkbcommon` (tray icon: D-Bus StatusNotifierItem thuần Rust, không cần GTK)
 (cho tray icon)
 - Cửa sổ Cài đặt cần Quickshell (module `Quickshell.Io`)
 

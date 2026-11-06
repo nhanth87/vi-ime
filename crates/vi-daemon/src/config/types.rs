@@ -171,6 +171,10 @@ pub struct Setting {
     /// suggestion bar + Alt+1..3. Data stays on this machine.
     #[serde(default = "default_true")]
     pub predict: bool,
+    /// Tự do: while a word ending in -c/-ch/-p/-t has no sắc/nặng yet, show
+    /// the raw keys ("veet", not "vêt"); the tone key turns it Vietnamese.
+    #[serde(default = "default_true")]
+    pub smart_raw_incomplete: bool,
 }
 
 fn default_ime_mode() -> ImeMode {
@@ -200,6 +204,7 @@ impl Default for Setting {
             macros: HashMap::new(),
             macro_hotkeys: HashMap::new(),
             predict: true,
+            smart_raw_incomplete: true,
         }
     }
 }

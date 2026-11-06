@@ -123,6 +123,9 @@ pub(crate) fn warm() {
         let _ = std::thread::Builder::new().name("vi-lexicon".into()).spawn(|| {
             let vi = VIETNAMESE.as_ref().map_or(0, |s| s.len());
             tracing::info!("[LEXICON] {} âm tiết Việt, {} từ Anh", vi, ENGLISH.len());
+            // Suggestion data too (predict.tsv + the 1000-word seed): the
+            // first keystroke after a restart paid ~8 ms loading it (2026-11-05).
+            super::predict::warm();
         });
     });
 }

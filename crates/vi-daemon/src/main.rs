@@ -242,7 +242,10 @@ fn main() {
 
     // Shared runtime config — the live bridge to the IME thread.
     let resolved = setting.effective_config_layered(None, None, None);
-    let runtime = Arc::new(RuntimeConfig::new(&resolved_to_snapshot(&resolved)));
+    let runtime = Arc::new(RuntimeConfig::new(&crate::wayland::RuntimeSnapshot {
+        raw_incomplete: config_manager.setting().smart_raw_incomplete,
+        ..resolved_to_snapshot(&resolved)
+    }));
 
     // Physical mouse-click watcher: the universal "cursor moved" signal for
     // apps that report nothing over text-input (see click_watch.rs). The
@@ -698,7 +701,7 @@ fn apply_config(
     let learned = adapt.learned_config(current_app_id.as_deref());
     let resolved =
         setting.effective_config_layered(current_app_id.as_deref(), title, learned.as_ref());
-    runtime.store(&resolved_to_snapshot(&resolved));
+    runtime.store(&crate::wayland::RuntimeSnapshot { raw_incomplete: setting.smart_raw_incomplete, ..resolved_to_snapshot(&resolved) });
     crate::engine::predict::set_enabled(setting.predict);
     // R-macro: publish keyword + hotkey tables (parsed once here, shared as
     // Arc; both IME paths pick them up — Wayland via maybe_reconfigure,

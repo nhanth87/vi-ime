@@ -36,6 +36,7 @@ pub fn to_snapshot(eff: &EffectiveConfig) -> RuntimeSnapshot {
         },
         free_tone: eff.free_tone_placement,
         auto_detect: eff.auto_detect_lang,
+        raw_incomplete: true, // main.rs fills in setting.smart_raw_incomplete
         tone_style: match eff.tone_style {
             crate::config::ToneStyle::Classic => crate::engine::ToneStyle::Classic,
             crate::config::ToneStyle::Modern => crate::engine::ToneStyle::Modern,

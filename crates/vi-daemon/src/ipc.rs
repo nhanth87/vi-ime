@@ -59,6 +59,8 @@ pub enum IpcCommand {
         emoji: Option<bool>,
         #[serde(default)]
         predict: Option<bool>,
+        #[serde(default)]
+        smart_raw_incomplete: Option<bool>,
     },
     #[serde(rename = "list_apps")]
     ListApps,
@@ -137,6 +139,8 @@ pub struct IpcResponse {
     pub emoji: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub predict: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smart_raw_incomplete: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggestions: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]

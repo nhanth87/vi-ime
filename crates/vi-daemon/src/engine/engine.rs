@@ -41,6 +41,8 @@ pub struct Engine {
     /// Pushed on every composing keystroke, popped on backspace.
     undo: Vec<Snapshot>,
     auto_detect: bool,
+    /// Tự do: show the raw keys while a stop-ending word lacks its tone.
+    raw_incomplete: bool,
     free_tone: bool,
     tone_style: ToneStyle,
     output_mode: OutputMode,
@@ -61,6 +63,7 @@ impl Engine {
             last_valid: false,
             undo: Vec::with_capacity(16),
             auto_detect: true,
+            raw_incomplete: true,
             free_tone: true,
             tone_style: ToneStyle::Classic,
             output_mode: OutputMode::UnicodeDungSan,
@@ -78,6 +81,9 @@ impl Engine {
     }
 
     /// English auto-restore: invalid syllables are displayed/committed as raw.
+    pub fn set_raw_incomplete(&mut self, enabled: bool) {
+        self.raw_incomplete = enabled;
+    }
     pub fn set_auto_detect(&mut self, enabled: bool) {
         self.auto_detect = enabled;
     }
@@ -128,10 +134,28 @@ impl Engine {
 
     /// Buffer formatted for committing: applies the output mode (NFC/NFD).
     pub fn preedit_output(&self) -> String {
+        let shown = self.live_display();
         match self.output_mode {
-            OutputMode::UnicodeDungSan => self.display.clone(),
-            OutputMode::UnicodeToHop => self.display.nfd().collect(),
+            OutputMode::UnicodeDungSan => shown,
+            OutputMode::UnicodeToHop => shown.nfd().collect(),
         }
+    }
+
+    /// Tự do (`smart_raw_incomplete`): a word ending in -c/-ch/-p/-t without
+    /// sắc/nặng is no Vietnamese syllable yet ("veet" → "vêt") — show the raw
+    /// keys until the tone comes ("vết"), so English words look right while
+    /// typing (user 2026-11-06). Never with digit keys: they would print.
+    fn live_display(&self) -> String {
+        if self.method == InputMethod::Smart && self.raw_incomplete {
+            let raw: String = self.raw_keys.iter().collect();
+            if raw != self.display
+                && !raw.chars().any(|c| c.is_ascii_digit())
+                && super::rhyme::stop_ending_without_tone(&self.display)
+            {
+                return raw;
+            }
+        }
+        self.display.clone()
     }
 
     /// Word-boundary commit (every NonPreedit path, R9): decides between the
@@ -171,6 +195,15 @@ impl Engine {
         // Vietnamese — field 2026-10-27: "sa84", "kie63", "d9uo67n2g".
         if changed && raw.chars().any(|c| c.is_ascii_digit()) {
             return self.vietnamese(display);
+        }
+        // Same rule as the live display (`live_display`): what was shown
+        // while typing is what gets committed — no "veet" → "vêt" flip at space.
+        if changed
+            && self.method == InputMethod::Smart
+            && self.raw_incomplete
+            && super::rhyme::stop_ending_without_tone(&display)
+        {
+            return raw;
         }
         // A plain ASCII word no Vietnamese syllable looks like ("take"):
         // English context too.

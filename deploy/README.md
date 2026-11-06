@@ -120,7 +120,7 @@ systemctl --user enable --now vi-im.service
 
 ```bash
 # Ubuntu/Debian
-sudo apt install libxdo-dev libgtk-3-dev libwayland-dev
+sudo apt install libxkbcommon-dev
 
 # Arch
 sudo pacman -S xdotool gtk3 wayland

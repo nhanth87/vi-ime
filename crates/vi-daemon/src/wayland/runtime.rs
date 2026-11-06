@@ -52,6 +52,7 @@ pub struct RuntimeConfig {
     output: AtomicU8,
     free_tone: AtomicBool,
     auto_detect: AtomicBool,
+    raw_incomplete: AtomicBool,
     tone_style: AtomicU8,
     emoji: AtomicBool,
     /// True when `mode` came from an explicit user rule (setting.conf app/
@@ -100,6 +101,8 @@ pub struct RuntimeSnapshot {
     pub output: OutputMode,
     pub free_tone: bool,
     pub auto_detect: bool,
+    /// Tự do raw display for tone-less stop endings (`smart_raw_incomplete`).
+    pub raw_incomplete: bool,
     pub tone_style: ToneStyle,
     pub emoji: bool,
     /// The ime_mode was an explicit user (setting.conf) choice.
@@ -122,6 +125,7 @@ impl Default for RuntimeSnapshot {
             output: OutputMode::UnicodeDungSan,
             free_tone: true,
             auto_detect: true,
+            raw_incomplete: true,
             tone_style: ToneStyle::Classic,
             emoji: true,
             mode_from_user: false,
@@ -210,6 +214,7 @@ impl RuntimeConfig {
             && cur.output == snap.output
             && cur.free_tone == snap.free_tone
             && cur.auto_detect == snap.auto_detect
+            && cur.raw_incomplete == snap.raw_incomplete
             && cur.tone_style == snap.tone_style
             && cur.emoji == snap.emoji
             && cur.mode_from_user == snap.mode_from_user
@@ -223,6 +228,7 @@ impl RuntimeConfig {
         self.output.store(encode_output(snap.output), Ordering::Relaxed);
         self.free_tone.store(snap.free_tone, Ordering::Relaxed);
         self.auto_detect.store(snap.auto_detect, Ordering::Relaxed);
+        self.raw_incomplete.store(snap.raw_incomplete, Ordering::Relaxed);
         self.tone_style.store(encode_tone_style(snap.tone_style), Ordering::Relaxed);
         self.emoji.store(snap.emoji, Ordering::Relaxed);
         self.mode_from_user.store(snap.mode_from_user, Ordering::Relaxed);
@@ -241,6 +247,7 @@ impl RuntimeConfig {
             output: decode_output(self.output.load(Ordering::Relaxed)),
             free_tone: self.free_tone.load(Ordering::Relaxed),
             auto_detect: self.auto_detect.load(Ordering::Relaxed),
+            raw_incomplete: self.raw_incomplete.load(Ordering::Relaxed),
             tone_style: decode_tone_style(self.tone_style.load(Ordering::Relaxed)),
             emoji: self.emoji.load(Ordering::Relaxed),
             mode_from_user: self.mode_from_user.load(Ordering::Relaxed),
@@ -357,6 +364,7 @@ pub fn apply_snapshot(engine: &mut NonPreeditEngine, snap: &RuntimeSnapshot) {
     inner.set_output_mode(snap.output);
     inner.set_free_tone(snap.free_tone);
     inner.set_auto_detect(snap.auto_detect);
+    inner.set_raw_incomplete(snap.raw_incomplete);
     inner.set_tone_style(snap.tone_style);
 }
 

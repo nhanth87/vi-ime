@@ -23,10 +23,8 @@ evdev = "0.13"
 # System-tray icon (StatusNotifierItem) — fcitx-style tray + menu. Sync/thread
 # based (0.2) to match the daemon's threading model (no async runtime).
 # ksni = "0.2"  # Replaced by appindicator3 for better panel compatibility
-appindicator3 = "0.3"
-gtk = { version = "0.18", features = ["v3_24"] }
-gdk = "0.18"
-glib = "0.18"
+# Tray: StatusNotifierItem over D-Bus, pure Rust (zbus) — no GTK.
+ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"

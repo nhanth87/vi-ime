@@ -402,6 +402,10 @@
 >    không có ngữ cảnh → `english_prefer_vietnamese.txt` quyết định.
 > - KHÔNG nhúng vi_VN.dic vào repo (GPLv2 vs GPL-3.0-only) — `lexicon.rs` đọc lúc chạy.
 > - `viet_syllables.txt` THIẾU (~1.3k/6.6k) — không dùng để bác bỏ chữ Việt.
+> - `smart_raw_incomplete` (mặc định bật): Tự do, từ tận cùng -c/-ch/-p/-t chưa có sắc/nặng →
+>   hiện PHÍM GỐC ngay lúc gõ ("veet", "text") và commit ĐÚNG cái đã hiện (không lật ở dấu
+>   cách). Không áp khi phím gốc có chữ số (VNI). `Engine::live_display` + nhánh tương ứng trong
+>   `smart_commit_english_only` phải luôn cùng điều kiện.
 > - **Phím gốc có CHỮ SỐ đã thành dấu (VNI, cả Tự do) KHÔNG BAO GIỜ trả về phím gốc.** Từ bị
 >   cắt ngắn / gõ sai ("sẵ", "kiể", "đưồng") giữ nguyên chữ Việt đang hiện. Field 2026-10-27:
 >   "sa84", "kie63", "la62", "d9uo67n2g" — số không bao giờ là tiếng Anh, trả về chỉ in ra phím.
@@ -533,6 +537,13 @@
 > - Đối chiếu từ đã gõ với vi_VN.dic (`/opt/onlyoffice/.../vi_VN.dic`) để tìm lỗi Tự do thật
 >   trong log thay vì đoán. Đừng chạy vòng test lặp lại khi không có thay đổi mới — tốn token,
 >   user đã phàn nàn (2026-11-04). Xem `doc/LESSONS_LEARNED.md`.
+
+### R35. Tray = `ksni` (D-Bus SNI thuần Rust), KHÔNG GTK; menu chính = Qt Quick
+> GTK/appindicator chỉ để vẽ 1 icon mà kéo 70 thư viện, 9 luồng, ~20 MB, và thiếu
+> appindicator3 trên máy đích là daemon KHÔNG khởi động được (cả gõ phím). Giờ binary chỉ link
+> libxkbcommon + libc. Click trái/giữa → `vi-settings --menu` (menu.qml); click phải → menu D-Bus
+> nhỏ dự phòng. Trạng thái theo `setting.conf` qua inotify (không poll). Clipboard NFC dùng
+> wl-paste/wl-copy. ĐỪNG thêm lại toolkit GUI vào daemon — UI thuộc vi-settings (Qt Quick).
 
 ### R31. Log file KHÔNG được ghi mọi cấp độ
 > Sự cố 2026-10-24: file log không có filter → `[NORMALIZE]` debug (nhiều dòng/phím) làm
