@@ -107,7 +107,7 @@ impl LearnedStore {
         }
         let content = toml::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        fs::write(path, content)
+        crate::privfile::write(path, content)
     }
 
     pub fn profile(&self, app_id: &str) -> Option<&LearnedProfile> {

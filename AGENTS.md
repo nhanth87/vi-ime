@@ -571,7 +571,11 @@
 > - Chỉ sửa khi MỌI từ hoặc đã có dấu (mỏ neo, giữ nguyên) hoặc là âm tiết Việt đã biết; có từ lạ ("car") → bỏ cả
 >   đoạn. Không sửa đoạn 1 từ, ô không `learns()` (terminal, mật khẩu, URL, số), ô tự hoàn thành (`inline_complete`).
 > - Viết lại = `sync_shown` từ ký tự đầu tiên thay đổi, dấu câu đi CHUNG lệnh typer (R26). BackSpace ngay sau đó =
->   trả lại chữ đã gõ + ghi các từ đó vào `diacritic_keep.txt` (không sửa nữa; xoá cùng "Xóa dữ liệu học").
+>   trả lại chữ đã gõ. CHỈ khi lần sửa đổi đúng MỘT từ thì từ đó vào `diacritic_keep.txt` (không sửa nữa; xoá cùng
+>   "Xóa dữ liệu học") — ghi mọi từ của đoạn làm tính năng tự tắt cho "toi", "di", "hoc" sau một lần hoàn tác.
+> - **Phản hồi của chính lần gõ lại** (20+ BackSpace, app báo mỗi cái là `TextChangeCause::Other`) KHÔNG được xoá
+>   đoạn/undo: `expect_echo` đẩy `last_live_echo_at` về tương lai 15 ms/phím (tối đa 1,5 s), `Done` chỉ
+>   `reset_context` + `autodia::clear` khi `!recent_live`. Thử lồng 2026-11-13: thiếu cái này BackSpace chỉ xoá dấu ".".
 > - Mới có trên đường Wayland live echo. Đường evdev (XWayland, LibreOffice, OnlyOffice) CHƯA có.
 
 ### R31. Log file KHÔNG được ghi mọi cấp độ
@@ -584,6 +588,25 @@
 > Harness/test ĐỪNG đọc lại cả file log liên tục — tail từ offset cuối.
 > File log DUY NHẤT `vi-ime.log`, tự xoá khi vượt 10 MB (`log_file.rs`, ghi trên worker thread
 > của tracing). File theo ngày cũ (`vi-ime.<ngày>.log`) bị xoá lúc khởi động.
+
+### R38. Bảo mật dữ liệu gõ — bộ gõ thấy mọi phím nên mặc định phải kín
+> Không ai dùng bộ gõ không chứng minh được an toàn (user 2026-11-13).
+> - **Không có code mạng.** Dependency chỉ Wayland/D-Bus/evdev/X11/xkb —
+>   `Cargo.lock` không có reqwest/hyper/tokio/openssl. Đừng thêm bất kỳ
+>   crate mạng nào vào daemon.
+> - **Ô nhạy cảm phân lớp:** Secure/PIN (tắt engine, không log) và NumericRaw
+>   (`Digits`/`Number`/`Phone`/… — mã OTP cũng là secret, `dispatch.rs`
+>   `sensitivity_of`). `learns()` == Normal mới được học/log nội dung.
+> - **Log không bao giờ ghi chữ ở ô không học:** `[KEY-IN]`/`[COMMIT]`/
+>   `[LIVE-SYNC]`/`[EVDEV-SYNC]` redact qua `commit::log_text` (chỉ độ dài).
+>   Mật khẩu `sudo` gõ trong terminal cũng không được lọt ký tự vào log.
+>   Muốn content ở ô nhạy cảm → user tự bật `RUST_LOG=debug` (quyết định của họ).
+> - **File học 0600, thư mục 0700** (`privfile.rs`): mọi chỗ ghi
+>   predict/habit/diacritic/telemetry/learned/log/setting đều qua
+>   `privfile::write`; daemon `harden_dir` lúc khởi động để khoá file cũ.
+>   Thêm chỗ ghi file user-data mới → phải qua `privfile`.
+> - Clipboard chỉ đọc khi user bấm nút NFC (log số ký tự, không nội dung).
+>   Godmod ghi full trace — chỉ khi user tự bật debug, mặc định tắt.
 
 ---
 

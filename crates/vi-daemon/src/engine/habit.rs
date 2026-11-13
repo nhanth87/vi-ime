@@ -100,7 +100,7 @@ fn save(h: &Habit) {
             let _ = std::fs::create_dir_all(dir);
         }
         let tmp = path.with_extension("tmp");
-        if std::fs::write(&tmp, out).is_ok() {
+        if crate::privfile::write(&tmp, out).is_ok() {
             let _ = std::fs::rename(tmp, path);
         }
     });

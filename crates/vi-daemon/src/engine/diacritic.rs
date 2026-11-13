@@ -212,7 +212,7 @@ pub(crate) fn keep(words: &[String]) {
     let all: String = set.iter().map(|w| format!("{w}\n")).collect();
     std::thread::spawn(move || {
         if let Some(f) = keep_file() {
-            let _ = std::fs::write(f, all);
+            let _ = crate::privfile::write(&f, all);
         }
     });
 }

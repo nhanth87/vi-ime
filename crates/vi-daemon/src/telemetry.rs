@@ -146,7 +146,7 @@ impl Telemetry {
         }
         let content = toml::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        fs::write(path, content)
+        crate::privfile::write(path, content)
     }
 
     fn app(&mut self, app_id: Option<&str>) -> &mut AppMetrics {

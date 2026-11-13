@@ -58,7 +58,7 @@ impl ConfigManager {
                 fs::create_dir_all(parent)?;
             }
             let content = toml::to_string_pretty(&setting).map_err(toml_to_io_error)?;
-            fs::write(&path, content)?;
+            crate::privfile::write(&path, content)?;
             setting
         };
 
@@ -79,7 +79,7 @@ impl ConfigManager {
     /// Save current setting to disk.
     pub fn save(&mut self) -> std::io::Result<()> {
         let content = toml::to_string_pretty(&self.setting).map_err(toml_to_io_error)?;
-        fs::write(&self.path, content)?;
+        crate::privfile::write(&self.path, content)?;
         self.last_mtime = Self::mtime_of(&self.path);
         Ok(())
     }

@@ -44,6 +44,8 @@ impl CappedLog {
             let _ = std::fs::remove_file(&self.path);
         }
         self.file = OpenOptions::new().create(true).append(true).open(&self.path).ok();
+        // R38: keystroke-adjacent log — never world-readable.
+        crate::privfile::harden_dir(&crate::privfile::data_dir());
         self.size = self.file.as_ref().and_then(|f| f.metadata().ok()).map_or(0, |m| m.len());
     }
 }

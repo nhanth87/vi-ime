@@ -440,13 +440,13 @@ impl ImeAppState {
             pressed,
             timestamp: now,
         });
-        // NEVER log key identities in secure fields (password/PIN).
-        if pressed && self.field_sensitivity != FieldSensitivity::Secure {
-            let ch = self.xkb.keycode_to_char(keycode);
-            let ch_str = ch.map(|c| format!("'{c}'")).unwrap_or_else(|| "?".into());
+        // R38: Secure/NumericRaw log nothing; Url/Terminal log the keycode
+        // only (sudo passwords included) — chars stay in Normal fields.
+        if pressed && !matches!(self.field_sensitivity, FieldSensitivity::Secure | FieldSensitivity::NumericRaw) {
+            let raw = self.learns().then(|| self.xkb.keycode_to_char(keycode)).flatten();
+            let ch = raw.map(|c| format!("'{c}'")).unwrap_or("?".into());
             info!(
-                "[KEY-IN] code={keycode} char={} mode={:?} queue={}/16",
-                ch_str,
+                "[KEY-IN] code={keycode} char={ch} mode={:?} queue={}/16",
                 self.engine.mode(),
                 self.key_buffer.len()
             );

@@ -65,7 +65,7 @@ fn save_stale(v: &[(String, KeyCode)]) {
         let _ = std::fs::create_dir_all(dir);
     }
     let text: String = v.iter().map(|(d, k)| format!("{d}\t{}\n", k.code())).collect();
-    let _ = std::fs::write(path, text);
+    let _ = crate::privfile::write(&path, text);
 }
 
 /// Ctrl/Alt/Super/Shift — keys that must always be waited out.

@@ -450,9 +450,11 @@ impl Composer {
         let bs_count = self.shown[common_bytes..].chars().count();
         let suffix = &target[common_bytes..];
         tracing::debug!(
-            "[EVDEV-SYNC] shown={:?} → target={target:?} (bs={}, suffix={suffix:?}, sync={sync})",
-            self.shown,
-            bs_count
+            "[EVDEV-SYNC] shown={} → target={} (bs={}, suffix={}, sync={sync})",
+            crate::wayland::commit::log_text(self.learn, &self.shown),
+            crate::wayland::commit::log_text(self.learn, target),
+            bs_count,
+            crate::wayland::commit::log_text(self.learn, suffix),
         );
         self.type_out(bs_count, suffix, sync);
         self.shown.clear();

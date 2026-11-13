@@ -29,6 +29,7 @@ mod legacy_grab;
 mod log_file;
 mod notify;
 mod plugin;
+mod privfile;
 mod rivals;
 mod sync;
 mod telemetry;
@@ -204,6 +205,10 @@ fn main() {
     let (_log_guard, _stderr_guard) = init_tracing();
 
     info!("vi-ime daemon starting...");
+
+    // R38: learned typing data from older runs may be world-readable —
+    // lock the data dir down before anything else touches it.
+    privfile::harden_dir(&privfile::data_dir());
 
     // Godmod debug telemetry (R6): only active with --godmod, VI_GODMOD env,
     // or RUST_LOG=debug. No-op otherwise, so the idle daemon stays zero-cost.

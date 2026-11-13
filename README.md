@@ -89,6 +89,24 @@ Riêng tư:
 File log (`~/.local/share/vi-ime/vi-ime.log`) chỉ còn một file và tự xoá khi
 vượt 10 MB.
 
+## Bảo mật: bộ gõ thấy mọi phím nên phải chứng minh được
+
+- **Không có code mạng.** Dependency chỉ có Wayland, D-Bus (khay hệ thống),
+evdev/X11 (bắt phím) và xkb — trong `Cargo.lock` không hề có
+reqwest/hyper/tokio/openssl. Không có đường nào để dữ liệu rời máy.
+- **Ô nhạy cảm được đối xử khác hẳn.** Mật khẩu/PIN/mã OTP → tắt engine
+hoặc phím đi thẳng, không log, không học. Thanh địa chỉ và terminal →
+không học, log không ghi nội dung chữ (chỉ số phím và độ dài).
+- **File học chỉ mình bạn đọc được.** `~/.local/share/vi-ime/` và mọi file
+trong đó (`predict.tsv`, `habit.tsv`, `diacritic_keep.txt`, `learned.toml`,
+`telemetry.toml`, `vi-ime.log`) đều 0600/0700 — user khác trên cùng máy
+không đọc được. File cũ sót lại 0644 được tự khoá lại khi daemon khởi động.
+- **Muốn kiểm chứng:** `grep -c . ~/.local/share/vi-ime/vi-ime.log` sau khi
+gõ mật khẩu — không có dòng nào chứa ký tự đã gõ. "Xóa dữ liệu học" trong
+Cấu hình xoá toàn bộ gợi ý + thói quen + từ giữ lại.
+- Chế độ debug (`RUST_LOG=debug`, godmod) ghi chi tiết để bắt bug — chỉ bật
+khi bạn tự debug, đừng gửi log debug cho ai khi trong đó có mật khẩu.
+
 ## Tự thêm dấu theo ngữ cảnh (thử nghiệm, mặc định tắt)
 
 Gõ không dấu, tới dấu `,` `.` `?` `!` thì vi-ime thêm dấu cho cả đoạn:
@@ -97,8 +115,8 @@ ngữ cảnh".
 
 - Từ bạn đã tự gõ dấu được giữ nguyên và dùng làm ngữ cảnh cho các từ còn lại.
 - Đoạn có từ không phải tiếng Việt thì không bị đụng tới.
-- Nhấn BackSpace ngay sau khi sửa để lấy lại đúng chữ đã gõ. Các từ đó được
-nhớ và không bị sửa nữa.
+- Nhấn BackSpace ngay sau khi sửa để lấy lại đúng chữ đã gõ. Nếu lần sửa đó
+chỉ đổi một từ thì từ ấy được nhớ và không bị sửa nữa.
 - Không chậm thêm lúc gõ: chỉ tính một lần ở dấu câu, khoảng 30 micro giây.
 Bảng tra 5 MB nằm sẵn trong bộ gõ, không cần mạng.
 - Độ chính xác đo được khoảng 95-96% theo từng từ, nghĩa là cứ khoảng 3 đoạn

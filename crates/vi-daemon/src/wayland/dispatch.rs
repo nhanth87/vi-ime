@@ -17,36 +17,7 @@ use crate::engine::ImeMode;
 use crate::wayland::feedback::ImeFeedback;
 use crate::wayland::state::{ContentHintV3, FieldSensitivity, ImeAppState};
 use crate::wayland::{ImUserData, KeyboardGrabUserData};
-
-/// ⚠️ Chrome/Firefox depend on this: `ContentPurpose::Url` → `FieldSensitivity::Url`
-/// is what makes the address bar type raw ASCII instead of composing
-/// Vietnamese ("tự chuyển tiếng Anh khi gõ trong address bar"). Verified
-/// working 2026-07-10 against Chrome — do NOT touch this mapping without
-/// re-testing an actual browser address bar, since the browser's own
-/// text-input-v3 behavior here has historically been inconsistent across
-/// versions and this is the ONLY place that consumes `ContentPurpose::Url`.
-/// Map the app's self-declared field purpose to our per-field gate.
-/// Terminal gets its own variant to force NonPreedit mode (preedit-everywhere
-/// commit_string works, but preedit underline breaks in terminals).
-fn sensitivity_of(purpose: ContentPurpose) -> FieldSensitivity {
-    match purpose {
-        // Security-critical: engine off, never logged. Non-negotiable.
-        ContentPurpose::Password | ContentPurpose::Pin => FieldSensitivity::Secure,
-        // URL fields (address bar): compose as preedit, no live BackSpaces
-        // (browser autocomplete stays intact) — state.rs `live_echo`.
-        ContentPurpose::Url => FieldSensitivity::Url,
-        // Terminal: force NonPreedit mode (unless user explicitly chose otherwise).
-        ContentPurpose::Terminal => FieldSensitivity::Terminal,
-        // Digits, Number etc. → Normal (preedit works everywhere).
-        ContentPurpose::Digits
-        | ContentPurpose::Number
-        | ContentPurpose::Phone
-        | ContentPurpose::Date
-        | ContentPurpose::Time
-        | ContentPurpose::Datetime => FieldSensitivity::Normal,
-        _ => FieldSensitivity::Normal,
-    }
-}
+use super::dispatch_util::{BLINK_MS, drop_word, keymap_is_ours, sensitivity_of};
 
 // ============================================================================
 // Dispatch implementations
@@ -201,8 +172,14 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                     // wrong place. Drop it even with no composition pending
                     // (mid-phrase click + BackSpace-undo otherwise retypes
                     // at the new cursor).
-                    crate::engine::predict::reset_context();
-                    crate::wayland::autodia::clear();
+                    // Not while our own typing is still echoing back: a
+                    // phrase rewrite is 20+ BackSpaces, each reported as
+                    // `Other` (nested GTK, 2026-11-13: the echoes cleared the
+                    // undo, BackSpace only deleted the ".").
+                    if !recent_live {
+                        crate::engine::predict::reset_context();
+                        crate::wayland::autodia::clear();
+                    }
                     if state.engine.has_pending() && !recent_live {
                         info!(
                             "[SCENARIO] 🖱️ external cursor/text change — \
@@ -340,7 +317,7 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                     // the "address bar / password loses the first char"
                     // bug. Flush it as real text before going raw.
                     // BUT: don't finalize for Terminal - we want to keep composing.
-                    let should_finalize = matches!(sens, FieldSensitivity::Secure | FieldSensitivity::Url)
+                    let should_finalize = matches!(sens, FieldSensitivity::Secure | FieldSensitivity::Url | FieldSensitivity::NumericRaw)
                         
                         && state.engine.has_pending()
                         && state.input_method.is_some();
@@ -487,26 +464,6 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, KeyboardGrabUserData> for ImeAppStat
     }
 }
 
-/// Does this keymap come from one of vi-ime's own virtual keyboards? Their
-/// keymaps (viet_typer.rs) all name the keycodes section "vi"; libxkbcommon
-/// keeps that name when a compositor re-serializes the keymap.
-fn keymap_is_ours(fd: &std::os::fd::OwnedFd, size: u32) -> bool {
-    use std::os::unix::fs::FileExt;
-    let Ok(dup) = fd.try_clone() else { return false };
-    let file = std::fs::File::from(dup);
-    let mut buf = vec![0u8; (size as usize).min(4096)];
-    let Ok(n) = file.read_at(&mut buf, 0) else { return false };
-    String::from_utf8_lossy(&buf[..n]).contains("xkb_keycodes \"vi\"")
-}
-
-/// A deactivate+activate faster than this, in the same app with no click,
-/// is a page re-rendering its field, not the user leaving it.
-const BLINK_MS: u128 = 150;
-
-/// Forget the word being composed (R8: dropped, never committed).
-fn drop_word(state: &mut ImeAppState) {
-    state.engine.reset();
-    state.engine.inner_mut().reset_context();
-    crate::engine::predict::reset_context();
-    state.reset_word_state();
-}
+#[cfg(test)]
+#[path = "dispatch_tests.rs"]
+mod dispatch_tests;

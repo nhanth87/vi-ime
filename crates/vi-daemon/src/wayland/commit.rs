@@ -6,6 +6,16 @@
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_v2::ZwpInputMethodV2;
 use crate::wayland::state::ImeAppState;
 
+/// Log user text, or only its length outside learnable fields (R38):
+/// passwords, OTP codes, URLs and terminal input must never reach the disk.
+pub(crate) fn log_text(visible: bool, s: &str) -> String {
+    if visible {
+        format!("{s:?}")
+    } else {
+        format!("({} chars)", s.chars().count())
+    }
+}
+
 impl ImeAppState {
     /// Finalize the in-progress word (arrows, shortcuts, reconfigure…).
     ///

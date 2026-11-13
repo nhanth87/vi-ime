@@ -328,7 +328,7 @@ impl ImeAppState {
             }
             NonPreeditAction::CommitWithBackspace { text, .. } => {
                 crate::godmod::log_commit(!text.is_ascii());
-                info!("[COMMIT] word done: \"{text}\" + replay code={keycode}");
+                info!("[COMMIT] word done: {} + replay code={keycode}", super::commit::log_text(self.learns(), &text));
                 if self.learns() {
                     predict::observe(&text);
                 }
@@ -370,7 +370,7 @@ impl ImeAppState {
                 // pending, so `shown_word` is empty (nothing to diff/backspace).
                 // The trigger key is folded into `text`, so it is NOT replayed.
                 crate::godmod::log_commit(!text.is_ascii());
-                info!("[COMMIT] emoji/flush: \"{text}\"");
+                info!("[COMMIT] emoji/flush: {}", super::commit::log_text(self.learns(), &text));
                 im.commit_string(text);
                 im.commit(self.serial);
             }
@@ -439,10 +439,13 @@ impl ImeAppState {
             .take_while(|(a, b)| a == b)
             .count();
         let suffix: String = tgt[common..].iter().collect();
+        let vis = self.learns();
         tracing::debug!(
-            "[LIVE-SYNC] shown={:?} → target={target:?} (bs={}, suffix={suffix:?})",
-            self.shown_word,
-            shown.len() - common
+            "[LIVE-SYNC] shown={} → target={} (bs={}, suffix={})",
+            super::commit::log_text(vis, &self.shown_word),
+            super::commit::log_text(vis, target),
+            shown.len() - common,
+            super::commit::log_text(vis, &suffix),
         );
         // Pacing per app (`type_mode_for`): Burst by default so the edit
         // lands in one frame (no flicker), Paced only for VCL/CEF which
