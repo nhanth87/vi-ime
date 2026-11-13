@@ -222,6 +222,15 @@ ShellRoot {
                 onActivated: { daemon.quitDaemon(); quitTimer.start() }
                 Timer { id: quitTimer; interval: 120; onTriggered: root.close() }
             }
+            Text {
+                visible: daemon.version !== ""
+                text: "vi-ime " + daemon.version
+                color: Theme.faint
+                font.pixelSize: Theme.fsSmall
+                Layout.alignment: Qt.AlignHCenter
+                Layout.topMargin: 4
+                Layout.bottomMargin: 6
+            }
         }
     }
 

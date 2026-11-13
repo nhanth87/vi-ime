@@ -103,6 +103,10 @@ use crate::sync::resolved_to_snapshot;
 use crate::wayland::RuntimeConfig;
 
 fn main() {
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        println!("vi-ime {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     // One-shot diagnosis mode: layer-by-layer verdict, then exit.
     if std::env::args().any(|a| a == "--doctor") {
         doctor::run();

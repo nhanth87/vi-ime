@@ -199,6 +199,12 @@ impl ksni::Tray for ViTray {
             }
             .into(),
             StandardItem {
+                label: concat!("vi-ime ", env!("CARGO_PKG_VERSION")).into(),
+                enabled: false,
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
                 label: "Thoát".into(),
                 activate: Box::new(|_: &mut Self| std::process::exit(0)),
                 ..Default::default()

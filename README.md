@@ -66,6 +66,33 @@ từng site. Address bar tự động passthrough tiếng Anh.
 vào game
 - **Trường mật khẩu/PIN** → tắt hẳn engine, không log phím
 
+## Tự học cách bạn gõ (từ v7.6.0)
+
+vi-ime nhớ cách bạn gõ và tự điều chỉnh, không cần cấu hình:
+
+- **Học thói quen gõ** — ở kiểu gõ Tự do, nếu vi-ime chọn sai giữa chữ Việt
+và tiếng Anh (ví dụ "rest" ↔ "rét"), bạn chỉ cần xoá từ đó và gõ lại đúng
+chuỗi phím. Từ lần sau, từ đó ra đúng dạng bạn muốn. Sửa một lần là nhớ.
+- **Gợi ý từ** — thanh gợi ý hiện từ bạn hay dùng và từ thường đi sau từ
+vừa gõ. Bấm `Alt+1`, `Alt+2`, `Alt+3` để chọn.
+- **Gợi ý kiểu gõ** — nếu bạn ở Tự do nhưng thực tế chỉ gõ Telex hoặc chỉ gõ
+VNI, cửa sổ Cấu hình gợi ý chuyển sang kiểu đó. vi-ime không tự đổi.
+
+Riêng tư:
+
+- Dữ liệu học chỉ nằm trên máy bạn, trong `~/.local/share/vi-ime/`
+(`habit.tsv`, `predict.tsv`). Không gửi đi đâu.
+- Không học trong ô mật khẩu, thanh địa chỉ, ô nhập số và terminal.
+- Tắt được từng phần trong Cấu hình ("Học thói quen gõ", "Gợi ý từ"). Nút
+"Xóa dữ liệu học" xoá toàn bộ.
+
+File log (`~/.local/share/vi-ime/vi-ime.log`) chỉ còn một file và tự xoá khi
+vượt 10 MB.
+
+**Đang phát triển, chưa có trong bản phát hành:** tự thêm dấu theo ngữ cảnh.
+Gõ không dấu, tới dấu `,` hoặc `.` thì vi-ime thêm dấu cho cả đoạn. Sẽ có
+công tắc bật/tắt và mặc định tắt.
+
 ## App hỗ trợ đặc biệt
 
 
@@ -163,6 +190,7 @@ vi-ime --switch    # đổi kiểu gõ: Telex ↔ VNI ↔ Tự do
 vi-ime --toggle    # bật/tắt
 vi-ime --mode      # đổi Preedit ↔ NonPreedit
 vi-ime --status    # xem trạng thái hiện tại
+vi-ime --version   # xem số phiên bản
 vi-ime --doctor    # chẩn đoán cấu hình từng lớp
 ```
 

@@ -2,7 +2,7 @@
 # Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 [package]
 name = "vi-settings"
-version = "0.1.0"
+version = "7.6.1"
 edition = "2024"
 description = "Settings window for vi-ime — QML-based"
 
