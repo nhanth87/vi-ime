@@ -20,6 +20,8 @@ static DATA: &[u8] = include_bytes!("../data/vdia.bin");
 static TABLE: OnceLock<Option<Table>> = OnceLock::new();
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static OFFICE: AtomicBool = AtomicBool::new(false);
+/// Tone placement of the output: "hoà" (modern) or "hòa" (classic), as the engine types it.
+static MODERN: AtomicBool = AtomicBool::new(false);
 /// Unaccented words the user took back once: never changed again.
 static KEEP: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 const MAX_CAND: usize = 8;
@@ -208,6 +210,31 @@ pub(crate) fn office_enabled() -> bool {
     enabled() && OFFICE.load(Ordering::Relaxed)
 }
 
+pub(crate) fn set_modern_tone(on: bool) {
+    MODERN.store(on, Ordering::Relaxed);
+}
+
+/// `form` in the user's tone placement. The corpus mixes both; only open
+/// oa/oe/uy differ ("qu" is an initial: "quý" has one spelling).
+fn restyle(form: &str) -> String {
+    const PAIRS: [(&str, &str); 15] = [
+        ("òa", "oà"), ("óa", "oá"), ("ỏa", "oả"), ("õa", "oã"), ("ọa", "oạ"),
+        ("òe", "oè"), ("óe", "oé"), ("ỏe", "oẻ"), ("õe", "oẽ"), ("ọe", "oẹ"),
+        ("ùy", "uỳ"), ("úy", "uý"), ("ủy", "uỷ"), ("ũy", "uỹ"), ("ụy", "uỵ"),
+    ];
+    if form.starts_with('q') {
+        return form.to_string();
+    }
+    let modern = MODERN.load(Ordering::Relaxed);
+    for (classic, new) in PAIRS {
+        let (from, to) = if modern { (classic, new) } else { (new, classic) };
+        if let Some(head) = form.strip_suffix(from) {
+            return format!("{head}{to}");
+        }
+    }
+    form.to_string()
+}
+
 pub(crate) fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
@@ -269,7 +296,7 @@ pub(crate) fn fix(words: &[String]) -> Option<Vec<String>> {
         .iter()
         .zip(best)
         .map(|(w, id)| match id {
-            Some(id) => recase(w, t.words[usize::from(id)]),
+            Some(id) => recase(w, &restyle(t.words[usize::from(id)])),
             None => w.clone(),
         })
         .collect();

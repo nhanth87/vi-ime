@@ -708,6 +708,7 @@ fn apply_config(
     crate::engine::habit::set_enabled(setting.learn_habits);
     crate::engine::diacritic::set_enabled(setting.auto_diacritics);
     crate::engine::diacritic::set_office(setting.auto_diacritics_office);
+    crate::engine::diacritic::set_modern_tone(setting.tone_style == crate::config::ToneStyle::Modern);
     // R-macro: publish keyword + hotkey tables (parsed once here, shared as
     // Arc; both IME paths pick them up — Wayland via maybe_reconfigure,
     // evdev via the consumer loop).
