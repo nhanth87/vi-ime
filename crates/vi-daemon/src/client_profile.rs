@@ -98,6 +98,30 @@ impl ClientProfile {
             };
         }
 
+        // ── Orca (Electron chat, Wayland native): slow renderer swallows
+        // BS+char bursts whole — field 2026-11-13: "test" committed right
+        // by the engine but the live rewrite (bs=2 + "est ") never landed
+        // (roundtrip 83–186ms, "glyph hiện trễ"). Same class as VCL/CEF
+        // (R21): force Paced (roundtrip per BackSpace). R30: scoped to
+        // orca only — no field proof for other Electron apps, don't extend.
+        if id.starts_with("orca") {
+            return Self {
+                label: "Orca (Electron, slow render — Paced)",
+                backspace_delay_ms: 20,
+                glyph_delay_ms: 20,
+                pre_first_glyph_delay_ms: 30,
+                batch_delay_ms: 0,    // NEVER batch — bursts get swallowed
+                batch_safe: false,
+                is_slow: true,
+                needs_injector: false,
+                is_legacy: false,
+                xwayland_fallback: false,
+            xtest_delay_ms: 2,
+            xtest_pre_glyph_ms: 0,
+            accent_settle_ms: 0,
+            };
+        }
+
         // ── Chromium/Electron browsers under XWayland ──
         if XWAYLAND_BROWSERS.contains(&id.as_str())
             || XWAYLAND_BROWSERS.iter().any(|p| id.starts_with(p))
@@ -202,6 +226,7 @@ impl ClientProfile {
         ("onlyoffice", "OnlyOffice"),
         ("libreoffice", "LibreOffice"),
         ("firefox", "Firefox"),
+        ("orca", "Orca (Electron, gõ chậm)"),
         ("kitty", "Terminal (kitty, foot, …)"),
     ];
 
@@ -266,6 +291,18 @@ mod tests {
         assert!(p.needs_injector);
         assert!(p.is_slow);
         assert!(!p.batch_safe);
+    }
+
+    #[test]
+    fn detect_orca_is_paced() {
+        // Field 2026-11-13: Orca (Electron) swallows BS bursts — must be
+        // Paced like VCL/CEF, but stays a native Wayland client.
+        let p = ClientProfile::detect("orca");
+        assert!(!p.batch_safe);
+        assert!(p.is_slow);
+        assert!(!p.is_legacy);
+        assert!(!p.needs_injector);
+        assert_eq!(p.batch_delay_ms, 0);
     }
 
     #[test]
