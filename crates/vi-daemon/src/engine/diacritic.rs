@@ -265,6 +265,35 @@ pub(crate) fn fix(words: &[String]) -> Option<Vec<String>> {
     (out != words).then_some(out)
 }
 
+/// Whether the table has seen `word` right after `prev` (Tự do: of two real
+/// readings, the one that continues the sentence). False while the table is
+/// not loaded.
+pub(crate) fn follows(prev: &str, word: &str) -> bool {
+    let Some(Some(t)) = enabled().then(|| TABLE.get()).flatten() else { return false };
+    let id = |w: &str| t.ids.get(w.to_lowercase().as_str()).copied();
+    matches!((id(prev), id(word)), (Some(a), Some(b)) if t.pair(a, b) > 0.0)
+}
+
+/// The `n` words the table has seen most often after `prev` (suggestion bar,
+/// when the user's own history has nothing). One row scan, at a word end.
+pub(crate) fn next_words(prev: &str, n: usize) -> Vec<String> {
+    let Some(Some(t)) = enabled().then(|| TABLE.get()).flatten() else { return Vec::new() };
+    let Some(&a) = t.ids.get(prev.to_lowercase().as_str()) else { return Vec::new() };
+    let (s, e) = (u32_at(t.rows, usize::from(a)) as usize, u32_at(t.rows, usize::from(a) + 1) as usize);
+    // Best = highest 4-bit count; ties go to the more common word (lower id).
+    let mut best: Vec<(u8, u16)> = Vec::with_capacity(n + 1);
+    for j in s..e {
+        let score = (t.nib.get(j / 2).copied().unwrap_or(0) >> (4 * (j & 1))) & 15;
+        let id = t.id2.get(2 * j..2 * j + 2).map_or(u16::MAX, |c| u16::from_le_bytes([c[0], c[1]]));
+        let at = best.partition_point(|&(sc, i)| (sc, std::cmp::Reverse(i)) >= (score, std::cmp::Reverse(id)));
+        if at < n {
+            best.insert(at, (score, id));
+            best.truncate(n);
+        }
+    }
+    best.iter().filter_map(|&(_, id)| t.words.get(usize::from(id)).map(|w| (*w).to_string())).collect()
+}
+
 /// `form` with the capitals of `typed` (same length: one char per letter).
 fn recase(typed: &str, form: &str) -> String {
     typed

@@ -576,6 +576,10 @@
 > - **Phản hồi của chính lần gõ lại** (20+ BackSpace, app báo mỗi cái là `TextChangeCause::Other`) KHÔNG được xoá
 >   đoạn/undo: `expect_echo` đẩy `last_live_echo_at` về tương lai 15 ms/phím (tối đa 1,5 s), `Done` chỉ
 >   `reset_context` + `autodia::clear` khi `!recent_live`. Thử lồng 2026-11-13: thiếu cái này BackSpace chỉ xoá dấu ".".
+> - **Bảng đã nạp (tức `auto_diacritics` bật) còn phục vụ mọi kiểu gõ:** `predict.rs` lấp chỗ trống trên thanh gợi ý
+>   bằng `diacritic::next_words` (lịch sử của user luôn đứng trước; quét một hàng CSR ở ranh giới từ, ≤70 µs);
+>   Tự do, khi cả hai cách đọc đều là từ thật, chọn tiếng Việt nếu `diacritic::follows(từ trước, từ này)`
+>   ("trời rét", "bánh tét" có; "như tét", "cái tét" không → vẫn "test"). Bảng chưa nạp → hành vi cũ, không tốn RAM.
 > - Mới có trên đường Wayland live echo. Đường evdev (XWayland, LibreOffice, OnlyOffice) CHƯA có.
 
 ### R31. Log file KHÔNG được ghi mọi cấp độ

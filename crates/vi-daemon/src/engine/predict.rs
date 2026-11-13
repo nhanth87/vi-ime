@@ -193,10 +193,20 @@ fn recompute(p: &mut Predictor) {
     let s = if !p.enabled {
         Vec::new()
     } else if p.prefix.is_empty() {
-        match p.prev.as_ref().and_then(|a| p.next.get(a)) {
+        let mut own = match p.prev.as_ref().and_then(|a| p.next.get(a)) {
             Some(m) => top3(m.iter().map(|(w, n)| (*n, w))),
             None => Vec::new(),
+        };
+        // The user's own history first; the diacritic table (when loaded)
+        // fills the free slots with what usually follows this word.
+        if let Some(prev) = p.prev.as_ref().filter(|_| own.len() < 3) {
+            for w in super::diacritic::next_words(prev, 6) {
+                if own.len() < 3 && !own.contains(&w) {
+                    own.push(w);
+                }
+            }
         }
+        own
     } else if p.prefix.chars().count() < MIN_PREFIX {
         Vec::new()
     } else {
@@ -331,6 +341,12 @@ pub(crate) fn observe(word: &str) {
     if due {
         save_async();
     }
+}
+
+/// The word committed just before the one being typed, if the typing thread
+/// can have it without waiting (Tự do reads the sentence with it).
+pub(crate) fn prev_word() -> Option<String> {
+    STATE.0.try_lock().ok()?.prev.clone()
 }
 
 /// Bumped by every `reset_context`: phrase tracking (wayland/autodia.rs)

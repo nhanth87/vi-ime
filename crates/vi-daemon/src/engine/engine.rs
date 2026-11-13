@@ -268,6 +268,14 @@ impl Engine {
             // rét, còn, nó, thế…) stays Vietnamese unless the sentence is
             // English.
             let lang = self.lang.get();
+            // The Vietnamese reading continues the sentence ("trời" + "rét",
+            // "bánh" + "tét": a pair the diacritic table has seen) → Vietnamese,
+            // whatever the curated lists say. Only when that table is loaded.
+            if lang <= 0
+                && super::predict::prev_word().is_some_and(|p| super::diacritic::follows(&p, &display))
+            {
+                return self.vietnamese(display);
+            }
             let english = lang > 0
                 || (viet_dict::is_english_word(&self.raw_keys) && !viet_dict::prefer_vietnamese(&raw));
             if english {
