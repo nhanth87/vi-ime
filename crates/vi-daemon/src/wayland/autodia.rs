@@ -115,7 +115,7 @@ pub(crate) fn on_word(text: &str, c: char) -> Option<(String, String)> {
         let mut all = p.words.clone();
         all.push((text.to_string(), String::new()));
         let typed: Vec<String> = all.iter().map(|(w, _)| w.clone()).collect();
-        let Some(mut fixed) = diacritic::fix(&typed) else {
+        let Some(mut fixed) = diacritic::fix_at(&typed, p.frozen == 0) else {
             // Failed (unknown word, table off…): keep the whole sentence,
             // current word included, for the next sentence end. The
             // separator IS the punctuation: it is on screen, and a later

@@ -566,6 +566,9 @@
 >   bản luật chiếm 45% khối lượng → nghiêng về "bản/bán" thay vì "bạn". Đo 2026-11-14 (5 MB, 4 bit): hội thoại
 >   (`work/chat.txt`, 50 câu tự viết) 90,4% → 92,6% từ; văn bản thường 95,6% → 95,2%; báo chí 91,2% → 90,9%.
 >   Phụ đề ×4 hay bỏ hẳn luật đều kém hơn. Đổi trọng số = đo lại cả ba bộ.
+> - **Đầu câu:** từ vựng có mục giả `<s>` (ô cuối), hàng của nó = số lần mỗi từ mở đầu câu (cột `initial` của
+>   `case.tsv`, cùng trọng số). `fix_at(words, start)` chèn `<s>` khi đoạn không có ngữ cảnh trái (`frozen == 0`).
+>   Đo: văn bản thường 95,2% → 96,0%, hội thoại 92,6% → 93,0%. "ban an com chua" → "bạn ăn cơm chưa" (trước: "bàn").
 > - **Nguồn đếm:** Wikipedia vi (CC BY-SA), OPUS OpenSubtitles, văn bản luật (CC BY 4.0), dựng bằng script của
 >   dmoreq/vndiacritics (MIT). KHÔNG dùng bảng báo 2017 (`Vietnamese-Accent-Prediction`, không giấy phép).
 > - **Đoạn (phrase)** = chuỗi từ gõ liền nhau trong một ô. `autodia::begin_key` ở đầu MỖI phím bỏ đoạn trừ khi phím

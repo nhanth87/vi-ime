@@ -269,6 +269,13 @@ pub(crate) fn clear() {
 /// the table is not ready, or the phrase is not plain Vietnamese (any word
 /// that is neither accented nor a known syllable).
 pub(crate) fn fix(words: &[String]) -> Option<Vec<String>> {
+    fix_at(words, false)
+}
+
+/// `fix`, with `start` when the phrase opens a sentence: the table then
+/// also knows how often each word comes first ("ban …" → "bạn", not "bàn";
+/// its `<s>` row, measured +0.8 points on general text).
+pub(crate) fn fix_at(words: &[String], start: bool) -> Option<Vec<String>> {
     if !enabled() || words.len() < 2 || words.len() > MAX_WORDS {
         return None;
     }
@@ -291,7 +298,14 @@ pub(crate) fn fix(words: &[String]) -> Option<Vec<String>> {
     if open == 0 {
         return None;
     }
-    let best = t.viterbi(&cols);
+    let opener = start.then(|| t.ids.get("<s>").copied()).flatten();
+    if let Some(id) = opener {
+        cols.insert(0, vec![id]);
+    }
+    let mut best = t.viterbi(&cols);
+    if opener.is_some() {
+        best.remove(0);
+    }
     let out: Vec<String> = words
         .iter()
         .zip(best)
