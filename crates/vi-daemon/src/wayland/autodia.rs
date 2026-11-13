@@ -28,6 +28,9 @@ const PHRASE_KEEP: usize = 40;
 struct Phrase {
     /// (word as on screen, separator typed after it).
     words: Vec<(String, String)>,
+    /// Leading words that are context only (the end of the clause before a
+    /// `,`, already fixed): read by the table, never rewritten.
+    frozen: usize,
     /// The key before this one was plain typing.
     keep: bool,
     ctx: u64,
@@ -35,7 +38,7 @@ struct Phrase {
     undo: Option<(String, String, Vec<String>)>,
 }
 
-static PHRASE: Mutex<Phrase> = Mutex::new(Phrase { words: Vec::new(), keep: false, ctx: 0, undo: None });
+static PHRASE: Mutex<Phrase> = Mutex::new(Phrase { words: Vec::new(), frozen: 0, keep: false, ctx: 0, undo: None });
 
 fn with<R: Default>(f: impl FnOnce(&mut Phrase) -> R) -> R {
     PHRASE.try_lock().map(|mut p| f(&mut p)).unwrap_or_default()
@@ -47,6 +50,7 @@ pub(crate) fn begin_key() {
         let ctx = predict::CONTEXT_GEN.load(Ordering::Relaxed);
         if !p.keep || p.ctx != ctx {
             p.words.clear();
+            p.frozen = 0;
             p.undo = None;
         }
         p.ctx = ctx;
@@ -88,12 +92,14 @@ fn on_word(text: &str, c: char) -> Option<(String, String)> {
         p.undo = None;
         if text.is_empty() || !text.chars().all(char::is_alphabetic) {
             p.words.clear();
+            p.frozen = 0;
             return None;
         }
         let push = |p: &mut Phrase, word: String, sep: String| {
             p.words.push((word, sep));
             if p.words.len() > PHRASE_CAP {
                 p.words.drain(..p.words.len() - PHRASE_KEEP);
+                p.frozen = 0;
             }
             p.keep = true;
         };
@@ -109,23 +115,38 @@ fn on_word(text: &str, c: char) -> Option<(String, String)> {
         let mut all = p.words.clone();
         all.push((text.to_string(), String::new()));
         let typed: Vec<String> = all.iter().map(|(w, _)| w.clone()).collect();
-        let Some(fixed) = diacritic::fix(&typed) else {
+        let Some(mut fixed) = diacritic::fix(&typed) else {
             // Failed (unknown word, table off…): keep the whole sentence,
-            // current word included, for the next sentence end.
-            push(p, text.to_string(), String::new());
+            // current word included, for the next sentence end. The
+            // separator IS the punctuation: it is on screen, and a later
+            // rewrite that starts before it must count it.
+            push(p, text.to_string(), c.to_string());
             return None;
         };
-        let first = typed.iter().zip(&fixed).position(|(a, b)| a != b)?;
+        fixed[..p.frozen].clone_from_slice(&typed[..p.frozen]);
+        let Some(first) = typed.iter().zip(&fixed).position(|(a, b)| a != b) else {
+            push(p, text.to_string(), c.to_string());
+            return None;
+        };
         let tail = |ws: &[String]| -> String {
             ws[first..].iter().zip(&all[first..]).map(|(w, (_, sep))| format!("{w}{sep}")).collect()
         };
         let (old, new) = (tail(&typed), tail(&fixed));
         if old.chars().count() > MAX_TAIL {
             p.words.clear(); // too messy to rewrite — start the next phrase over
+            p.frozen = 0;
             return None;
         }
         let changed = typed.iter().zip(&fixed).filter(|(a, b)| a != b).map(|(a, _)| a.clone()).collect();
-        p.words.clear(); // consumed by the successful fix
+        // Consumed by the successful fix. After a comma the sentence goes on:
+        // its last word stays as left context for the next clause ("…, ban o
+        // lai." read "ban" with nothing before it and chose "bản").
+        p.words.clear();
+        p.frozen = 0;
+        if let (',', Some(last)) = (c, fixed.last()) {
+            p.words.push((last.clone(), c.to_string()));
+            p.frozen = 1;
+        }
         p.undo = Some((format!("{new}{c}"), format!("{old}{c}"), changed));
         p.keep = true;
         Some((old, new))
@@ -149,7 +170,9 @@ impl ImeAppState {
         let head: String = old.chars().take(old.chars().count() - text.chars().count()).collect();
         self.shown_word.insert_str(0, &head);
         let target = format!("{new}{c}");
+        let keys = self.shown_word.chars().count() + target.chars().count();
         self.sync_shown(&target);
+        self.expect_echo(keys);
         if self.shown_word == target {
             info!("[AUTODIA] phrase tail retyped ({} chars)", target.chars().count());
         } else {
@@ -157,15 +180,31 @@ impl ImeAppState {
         }
     }
 
+    /// A rewrite of `keys` keys comes back from the app as that many text
+    /// changes. Until they have passed they are ours, not an external edit
+    /// (`dispatch.rs` Done: `recent_live`), so they must not drop the undo
+    /// or the next word.
+    fn expect_echo(&mut self, keys: usize) {
+        let ms = (keys as u64 * 15).min(1500);
+        self.last_live_echo_at = Some(std::time::Instant::now() + std::time::Duration::from_millis(ms));
+    }
+
     /// BackSpace right after a fix: put the typed text back. True = handled.
     pub(crate) fn undo_diacritics(&mut self) -> bool {
         let Some((fixed, typed, changed)) = with(|p| p.undo.take()) else { return false };
+        let keys = fixed.chars().count() + typed.chars().count();
         self.shown_word = fixed;
         self.sync_shown(&typed);
+        self.expect_echo(keys);
         self.reset_word_state();
-        diacritic::keep(&changed);
+        // Only a one-word fix names the word the user rejected. Keeping every
+        // word of a longer phrase switched the feature off for "toi", "di",
+        // "hoc"… after a single undo (nested test 2026-11-13).
+        if changed.len() == 1 {
+            diacritic::keep(&changed);
+        }
         clear();
-        info!("[AUTODIA] undone, {} word(s) kept as typed from now on", changed.len());
+        info!("[AUTODIA] undone ({} word(s) had changed)", changed.len());
         true
     }
 }
