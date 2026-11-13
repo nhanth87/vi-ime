@@ -580,7 +580,7 @@
 >   bằng `diacritic::next_words` (lịch sử của user luôn đứng trước; quét một hàng CSR ở ranh giới từ, ≤70 µs);
 >   Tự do, khi cả hai cách đọc đều là từ thật, chọn tiếng Việt nếu `diacritic::follows(từ trước, từ này)`
 >   ("trời rét", "bánh tét" có; "như tét", "cái tét" không → vẫn "test"). Bảng chưa nạp → hành vi cũ, không tốn RAM.
-> - Đã thử đầu-cuối trên đường Wayland live echo (compositor lồng + GTK, 2026-11-13). Đường evdev (LibreOffice,
+> - Đã thử đầu-cuối trên đường Wayland live echo (compositor lồng, GTK + Chrome Wayland, 2026-11-13: sửa, hai vế, hoàn tác). Đường evdev (LibreOffice,
 >   OnlyOffice — chỉ app `Composer::learn`, KHÔNG BAO GIỜ trình duyệt X11) có code (`evdev_accept.rs::boundary`,
 >   `backspace_outside`, `retype`) nhưng CHƯA có field test → nằm sau `auto_diacritics_office` (chỉ trong
 >   setting.conf, mặc định tắt, không có trong cửa sổ Cấu hình). Chỉ đưa lên UI sau khi field test xanh (R22/R29).
