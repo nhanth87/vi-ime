@@ -562,6 +562,10 @@
 >   `None` ngay nếu bảng chưa sẵn sàng (`OnceLock::get`, `try_lock`). Đo: ~30 µs/đoạn, nạp 55 ms, RSS +~20 MB.
 > - **Đo trước khi đổi định dạng bảng** (`/mnt/data/user/vndict/work`): 4 bit @5 MB = bảng đầy đủ 151 MB
 >   (95,6% từ, ~68% đoạn đúng trọn); 8/10 MB không hơn; **1 bit chỉ 72%** (ngang chọn dạng phổ biến nhất) — đừng thử lại.
+> - **Trọng số nguồn: Wikipedia ×2, phụ đề ×3, văn bản luật ×0,5** (`work/wmerge.sh`, phương án F). Trộn đều thì văn
+>   bản luật chiếm 45% khối lượng → nghiêng về "bản/bán" thay vì "bạn". Đo 2026-11-14 (5 MB, 4 bit): hội thoại
+>   (`work/chat.txt`, 50 câu tự viết) 90,4% → 92,6% từ; văn bản thường 95,6% → 95,2%; báo chí 91,2% → 90,9%.
+>   Phụ đề ×4 hay bỏ hẳn luật đều kém hơn. Đổi trọng số = đo lại cả ba bộ.
 > - **Nguồn đếm:** Wikipedia vi (CC BY-SA), OPUS OpenSubtitles, văn bản luật (CC BY 4.0), dựng bằng script của
 >   dmoreq/vndiacritics (MIT). KHÔNG dùng bảng báo 2017 (`Vietnamese-Accent-Prediction`, không giấy phép).
 > - **Đoạn (phrase)** = chuỗi từ gõ liền nhau trong một ô. `autodia::begin_key` ở đầu MỖI phím bỏ đoạn trừ khi phím

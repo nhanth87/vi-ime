@@ -119,8 +119,9 @@ ngữ cảnh".
 chỉ đổi một từ thì từ ấy được nhớ và không bị sửa nữa.
 - Không chậm thêm lúc gõ: chỉ tính một lần ở dấu câu, khoảng 30 micro giây.
 Bảng tra 5 MB nằm sẵn trong bộ gõ, không cần mạng.
-- Độ chính xác đo được khoảng 95-96% theo từng từ, nghĩa là cứ khoảng 3 đoạn
-thì 1 đoạn còn một từ sai dấu ("bạn"/"bán", "tới"/"tôi").
+- Độ chính xác đo được: khoảng 95% số từ với văn bản thường, khoảng 93% với
+câu trò chuyện. Nghĩa là cứ khoảng 3 đoạn thì 1 đoạn còn một từ sai dấu
+("bạn"/"bàn", "tới"/"tôi"), nhất là từ đứng đầu câu.
 - Khi bật, bảng tra còn giúp hai việc khác ở mọi kiểu gõ: thanh gợi ý có thêm
 từ thường đi sau từ vừa gõ ("cảm" gợi ý "ơn"), và kiểu Tự do chọn chữ Việt
 hay tiếng Anh theo từ đứng trước ("trời rét" nhưng "như test").
