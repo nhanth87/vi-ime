@@ -107,7 +107,7 @@ Cấu hình xoá toàn bộ gợi ý + thói quen + từ giữ lại.
 - Chế độ debug (`RUST_LOG=debug`, godmod) ghi chi tiết để bắt bug — chỉ bật
 khi bạn tự debug, đừng gửi log debug cho ai khi trong đó có mật khẩu.
 
-## Tự thêm dấu theo ngữ cảnh (thử nghiệm, mặc định tắt)
+## Tự thêm dấu theo ngữ cảnh (v7.7.0, thử nghiệm, mặc định tắt)
 
 Gõ không dấu, tới dấu `,` `.` `?` `!` thì vi-ime thêm dấu cho cả đoạn:
 `toi di hoc.` thành `tôi đi học.` Bật trong Cấu hình, mục "Tự thêm dấu theo

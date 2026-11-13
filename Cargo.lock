@@ -1231,7 +1231,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vi-daemon"
-version = "7.6.1"
+version = "7.7.0"
 dependencies = [
  "dirs",
  "evdev",
@@ -1254,7 +1254,7 @@ dependencies = [
 
 [[package]]
 name = "vi-settings"
-version = "7.6.1"
+version = "7.7.0"
 dependencies = [
  "tracing",
  "tracing-subscriber",
