@@ -580,7 +580,12 @@
 >   bằng `diacritic::next_words` (lịch sử của user luôn đứng trước; quét một hàng CSR ở ranh giới từ, ≤70 µs);
 >   Tự do, khi cả hai cách đọc đều là từ thật, chọn tiếng Việt nếu `diacritic::follows(từ trước, từ này)`
 >   ("trời rét", "bánh tét" có; "như tét", "cái tét" không → vẫn "test"). Bảng chưa nạp → hành vi cũ, không tốn RAM.
-> - Mới có trên đường Wayland live echo. Đường evdev (XWayland, LibreOffice, OnlyOffice) CHƯA có.
+> - Đã thử đầu-cuối trên đường Wayland live echo (compositor lồng + GTK, 2026-11-13). Đường evdev (LibreOffice,
+>   OnlyOffice — chỉ app `Composer::learn`, KHÔNG BAO GIỜ trình duyệt X11) có code (`evdev_accept.rs::boundary`,
+>   `backspace_outside`, `retype`) nhưng CHƯA có field test → nằm sau `auto_diacritics_office` (chỉ trong
+>   setting.conf, mặc định tắt, không có trong cửa sổ Cấu hình). Chỉ đưa lên UI sau khi field test xanh (R22/R29).
+>   Rủi ro đã biết: autocorrect của office tự viết hoa đầu câu — `retype` giữ phần đầu giống nhau nên "Toi"→"Tôi"
+>   còn hoa, nhưng từ đổi chữ ĐẦU ("Di"→"đi") sẽ mất hoa; OnlyOffice chờ 150 ms sau mỗi chữ có dấu → gõ lại chậm.
 
 ### R31. Log file KHÔNG được ghi mọi cấp độ
 > Sự cố 2026-10-24: file log không có filter → `[NORMALIZE]` debug (nhiều dòng/phím) làm

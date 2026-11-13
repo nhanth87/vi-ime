@@ -87,7 +87,7 @@ pub(crate) fn clear() {
 /// phrase intact for a later sentence end — only a successful fix
 /// consumes it. So random mid-phrase punctuation no longer destroys
 /// the sentence context.
-fn on_word(text: &str, c: char) -> Option<(String, String)> {
+pub(crate) fn on_word(text: &str, c: char) -> Option<(String, String)> {
     with(|p| {
         p.undo = None;
         if text.is_empty() || !text.chars().all(char::is_alphabetic) {
@@ -151,6 +151,12 @@ fn on_word(text: &str, c: char) -> Option<(String, String)> {
         p.keep = true;
         Some((old, new))
     })
+}
+
+/// The pending undo, if the key before this one was the fix:
+/// (fixed tail, typed tail, typed words that changed).
+pub(crate) fn take_undo() -> Option<(String, String, Vec<String>)> {
+    with(|p| p.undo.take())
 }
 
 impl ImeAppState {

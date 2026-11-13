@@ -124,8 +124,9 @@ thì 1 đoạn còn một từ sai dấu ("bạn"/"bán", "tới"/"tôi").
 - Khi bật, bảng tra còn giúp hai việc khác ở mọi kiểu gõ: thanh gợi ý có thêm
 từ thường đi sau từ vừa gõ ("cảm" gợi ý "ơn"), và kiểu Tự do chọn chữ Việt
 hay tiếng Anh theo từ đứng trước ("trời rét" nhưng "như test").
-- Hiện chỉ chạy ở app Wayland gốc. Chrome X11, LibreOffice và OnlyOffice
-chưa có.
+- Hiện chỉ chạy ở app Wayland gốc. LibreOffice và OnlyOffice đang thử
+nghiệm riêng (thêm `auto_diacritics_office = true` vào `setting.conf`), chưa
+được kiểm chứng. Trình duyệt chạy X11 không có tính năng này.
 
 Bảng tra dựng từ Wikipedia tiếng Việt (CC BY-SA), OPUS OpenSubtitles và văn
 bản pháp luật Việt Nam (CC BY 4.0), theo thuật toán của

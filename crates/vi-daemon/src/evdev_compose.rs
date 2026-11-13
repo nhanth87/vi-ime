@@ -145,6 +145,9 @@ impl Composer {
         if value == 1 && !is_char && !modifier && self.engine.has_pending() && code != KeyCode::KEY_BACKSPACE {
             debug!("[EVDEV-END] {code:?} ended {:?} (sysmods={})", self.engine.inner().preedit_output(), self.sysmods);
         }
+        if value == 1 && !modifier {
+            crate::wayland::autodia::begin_key(); // R37 phrase tracking
+        }
         // Only plain composing keys (letters/digits, mid-word BackSpace)
         // may join the deferred batch; anything else — modifiers forwarded
         // to the app, boundaries, shortcuts — must see the screen up to date
@@ -213,24 +216,11 @@ impl Composer {
             return;
         }
 
-        // Backspace OUTSIDE composition: the screen text was typed through
-        // the virtual-keyboard typer, NOT uinput. Forwarding raw backspace
-        // through uinput (`emit`) lands on a different device than what
-        // produced the text → compositor/client may reject/drop it, so the
-        // second backspace (or backspace past a deleted word) stops working.
-        // Route through the SAME typer path instead, with roundtrip for
-        // ordering guarantees (field bug 2026-07-15: backspace stops after
-        // 1 char outside of a composed word).
+        // Backspace OUTSIDE composition: typed by the typer, never uinput
+        // (see `backspace_outside`).
         if code == KeyCode::KEY_BACKSPACE {
             if value != 0 {
-                // Force-settle any leftover shown tracking, then issue one
-                // raw BackSpace via the typer (the same device that wrote the
-                // text) so the compositor respects it.
-                if !self.shown.is_empty() {
-                    self.finish_word();
-                }
-                crate::engine::habit::backspace();
-                self.type_out(1, "", true);
+                self.backspace_outside();
             }
             return;
         }
@@ -239,12 +229,12 @@ impl Composer {
             // Non-composing key (space, Enter, arrows…): the rendered word
             // is ALREADY on screen (live echo) — just stop tracking it.
             if value != 0 {
-                self.finish_word();
+                let word = self.finish_word();
                 // Printable (space, punctuation): type it on the typer's
                 // channel, behind the word — see `boundary_char`. The
                 // release is then dropped (press never went to uinput).
                 if let Some(c) = boundary_char(code, self.shift) {
-                    self.type_out(0, &c.to_string(), false);
+                    self.boundary(word, c);
                     return;
                 }
             }
@@ -280,6 +270,7 @@ impl Composer {
                 // sync=false: mid-word, no roundtrip (opt 1).
                 // Deferred: typed by `flush` once the queued keys are in.
                 let target = self.engine.inner().preedit_output();
+                crate::wayland::autodia::typing();
                 if self.learn {
                     predict::set_prefix(&target);
                 }
@@ -313,6 +304,7 @@ impl Composer {
                 self.common_bytes = 0;
             }
             NonPreeditAction::ClearPreedit => {
+                crate::wayland::autodia::typing();
                 self.deferred = None;
                 predict::set_prefix("");
                 self.sync_shown("", true);
@@ -385,8 +377,9 @@ impl Composer {
 
     /// A non-composing key ended the word: it is already echoed on screen,
     /// so just forget it (mirrors `finalize_word` in the Wayland live path).
-    pub(crate) fn finish_word(&mut self) {
+    pub(crate) fn finish_word(&mut self) -> Option<String> {
         self.deferred = None; // the commit diff below runs from `shown`
+        let mut done = None;
         if self.engine.has_pending() {
             // R9 English-restore at word end: `test`→`test`, not `tét`.
             // Mirrors the NonPreeditEngine boundary sites (fast_engine.rs);
@@ -399,10 +392,12 @@ impl Composer {
             }
             // sync=true: word ending → roundtrip (next key is cross-channel).
             self.sync_shown(&target, true);
+            done = Some(target);
         }
         self.engine.reset();
         self.shown.clear();
         self.common_bytes = 0;
+        done
     }
 
     /// Make the app show `target` for the in-progress word: BackSpace × k

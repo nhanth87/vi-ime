@@ -183,6 +183,10 @@ pub struct Setting {
     /// context (engine/diacritic.rs, R37). Off unless the user turns it on.
     #[serde(default)]
     pub auto_diacritics: bool,
+    /// The same in LibreOffice/OnlyOffice (evdev path). No field test yet:
+    /// setting.conf only, not in the settings window.
+    #[serde(default)]
+    pub auto_diacritics_office: bool,
 }
 
 fn default_ime_mode() -> ImeMode {
@@ -215,6 +219,7 @@ impl Default for Setting {
             smart_raw_incomplete: true,
             learn_habits: true,
             auto_diacritics: false,
+            auto_diacritics_office: false,
         }
     }
 }

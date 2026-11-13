@@ -5,6 +5,8 @@
 //! (engine/predict.rs). Child of `evdev_compose` (R4: that file is full).
 
 use super::*;
+use crate::engine::diacritic;
+use crate::wayland::autodia;
 
 /// Alt bits in `Composer::sysmods` (left, right).
 const ALT: u8 = 4 | 8;
@@ -85,6 +87,67 @@ impl Composer {
         self.common_bytes = 0;
         predict::observe(&word);
         true
+    }
+
+    /// Backspace OUTSIDE composition: the screen text was typed through
+    /// the virtual-keyboard typer, NOT uinput. Forwarding raw backspace
+    /// through uinput (`emit`) lands on a different device than what
+    /// produced the text → compositor/client may reject/drop it, so the
+    /// second backspace (or backspace past a deleted word) stops working.
+    /// Route through the SAME typer path instead, with roundtrip for
+    /// ordering guarantees (field bug 2026-07-15: backspace stops after
+    /// 1 char outside of a composed word).
+    pub(super) fn backspace_outside(&mut self) {
+        // Force-settle any leftover shown tracking first.
+        if !self.shown.is_empty() {
+            self.finish_word();
+        }
+        // R37: right after a diacritic fix, BackSpace puts the typed text back.
+        if let Some((fixed, typed, changed)) = autodia::take_undo() {
+            self.retype(&fixed, &typed);
+            if changed.len() == 1 {
+                diacritic::keep(&changed);
+            }
+            autodia::clear();
+            info!("[AUTODIA] undone ({} word(s) had changed)", changed.len());
+            return;
+        }
+        crate::engine::habit::backspace();
+        self.type_out(1, "", true);
+    }
+
+    /// A printable boundary `c` after `word` (None: nothing was composing).
+    /// At a phrase end the changed tail is retyped with `c`, all on the
+    /// typer (R26, R37). Office apps only, and only with
+    /// `auto_diacritics_office` — this path has had no field test yet.
+    pub(super) fn boundary(&mut self, word: Option<String>, c: char) {
+        let plan = match word {
+            Some(w) if self.learn && diacritic::office_enabled() => autodia::on_word(&w, c),
+            Some(_) => {
+                autodia::clear();
+                None
+            }
+            None => {
+                autodia::passthrough(Some(c));
+                None
+            }
+        };
+        match plan {
+            Some((old, new)) => {
+                self.retype(&old, &format!("{new}{c}"));
+                info!("[AUTODIA] phrase tail retyped ({} chars)", new.chars().count() + 1);
+            }
+            None => self.type_out(0, &c.to_string(), false),
+        }
+    }
+
+    /// Turn the last chars on screen from `old` into `new`, keeping their
+    /// common start: the app may have capitalised it itself (office
+    /// autocorrect), and fewer keys is faster.
+    fn retype(&mut self, old: &str, new: &str) {
+        let common = old.chars().zip(new.chars()).take_while(|(a, b)| a == b).count();
+        let suffix: String = new.chars().skip(common).collect();
+        self.type_out(old.chars().count() - common, &suffix, true);
     }
 
     /// Before forwarding another chord key: give the app back the Alt that

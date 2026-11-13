@@ -19,6 +19,7 @@ use std::sync::{Mutex, OnceLock};
 static DATA: &[u8] = include_bytes!("../data/vdia.bin");
 static TABLE: OnceLock<Option<Table>> = OnceLock::new();
 static ENABLED: AtomicBool = AtomicBool::new(false);
+static OFFICE: AtomicBool = AtomicBool::new(false);
 /// Unaccented words the user took back once: never changed again.
 static KEEP: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 const MAX_CAND: usize = 8;
@@ -195,6 +196,16 @@ pub(crate) fn set_enabled(on: bool) {
             }
         });
     }
+}
+
+/// `auto_diacritics_office`: also on the evdev path (LibreOffice,
+/// OnlyOffice). Separate until that path has a field test.
+pub(crate) fn set_office(on: bool) {
+    OFFICE.store(on, Ordering::Relaxed);
+}
+
+pub(crate) fn office_enabled() -> bool {
+    enabled() && OFFICE.load(Ordering::Relaxed)
 }
 
 pub(crate) fn enabled() -> bool {
