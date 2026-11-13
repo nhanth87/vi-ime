@@ -333,8 +333,13 @@ pub(crate) fn observe(word: &str) {
     }
 }
 
+/// Bumped by every `reset_context`: phrase tracking (wayland/autodia.rs)
+/// drops its phrase when the cursor may have moved.
+pub(crate) static CONTEXT_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Focus moved / cursor jumped / field changed: start a new sentence.
 pub(crate) fn reset_context() {
+    CONTEXT_GEN.fetch_add(1, Ordering::Relaxed);
     let Ok(mut p) = STATE.0.try_lock() else {
         RESET_QUEUED.store(true, Ordering::Relaxed);
         return;

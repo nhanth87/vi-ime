@@ -179,6 +179,10 @@ pub struct Setting {
     /// boundary (engine/habit.rs). Local only, erased with the suggestions.
     #[serde(default = "default_true")]
     pub learn_habits: bool,
+    /// Add the missing diacritics to a phrase at `,` `.` `?` `!` from its
+    /// context (engine/diacritic.rs, R37). Off unless the user turns it on.
+    #[serde(default)]
+    pub auto_diacritics: bool,
 }
 
 fn default_ime_mode() -> ImeMode {
@@ -210,6 +214,7 @@ impl Default for Setting {
             predict: true,
             smart_raw_incomplete: true,
             learn_habits: true,
+            auto_diacritics: false,
         }
     }
 }

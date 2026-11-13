@@ -525,6 +525,15 @@ FloatingWindow {
                                 }
                             }
                             SettingRow {
+                                label: "Tự thêm dấu theo ngữ cảnh"
+                                description: "Gõ không dấu, tới dấu , . ? ! thì thêm dấu cho cả đoạn: \"toi di hoc.\" thành \"tôi đi học.\". Từ bạn đã gõ dấu được giữ nguyên. Nhấn BackSpace ngay sau đó để lấy lại chữ đã gõ. Có thể sai dấu ở khoảng 1 trong 20 từ."
+                                VSwitch {
+                                    checked: daemon.autoDiacritics
+                                    accessibleName: "Tự thêm dấu theo ngữ cảnh"
+                                    onToggled: function (next) { daemon.setConfig({ auto_diacritics: next }) }
+                                }
+                            }
+                            SettingRow {
                                 label: "Biểu tượng cảm xúc"
                                 description: "Gõ :) hoặc :smile: rồi dấu cách để ra 🙂."
                                 VSwitch {

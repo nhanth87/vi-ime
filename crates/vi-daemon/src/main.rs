@@ -701,6 +701,7 @@ fn apply_config(
     runtime.store(&crate::wayland::RuntimeSnapshot { raw_incomplete: setting.smart_raw_incomplete, ..resolved_to_snapshot(&resolved) });
     crate::engine::predict::set_enabled(setting.predict);
     crate::engine::habit::set_enabled(setting.learn_habits);
+    crate::engine::diacritic::set_enabled(setting.auto_diacritics);
     // R-macro: publish keyword + hotkey tables (parsed once here, shared as
     // Arc; both IME paths pick them up — Wayland via maybe_reconfigure,
     // evdev via the consumer loop).

@@ -32,6 +32,7 @@ Item {
     property bool predict: true
     property bool smartRaw: true
     property bool learnHabits: true
+    property bool autoDiacritics: false
     property var habitStyle: [0, 0]      // Tự do words typed [Telex, VNI]
     property var macros: ({})
     property var macroHotkeys: ({})
@@ -49,7 +50,7 @@ Item {
         output_mode: "outputMode", enabled: "imeEnabled", free_tone_placement: "freeTone",
         auto_detect_lang: "autoEnglish", enable_per_app: "perApp", emoji: "emoji",
         predict: "predict", smart_raw_incomplete: "smartRaw",
-        learn_habits: "learnHabits"
+        learn_habits: "learnHabits", auto_diacritics: "autoDiacritics"
     })
     property var _pending: []
 
@@ -116,6 +117,7 @@ Item {
             if (r.predict !== undefined) d.predict = r.predict
             if (r.smart_raw_incomplete !== undefined) d.smartRaw = r.smart_raw_incomplete
             if (r.learn_habits !== undefined) d.learnHabits = r.learn_habits
+            if (r.auto_diacritics !== undefined) d.autoDiacritics = r.auto_diacritics
             if (r.habit_style !== undefined) d.habitStyle = r.habit_style
             if (r.macros) d.macros = r.macros
             if (r.macro_hotkeys) d.macroHotkeys = r.macro_hotkeys

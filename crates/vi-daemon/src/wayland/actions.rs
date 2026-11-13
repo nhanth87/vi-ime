@@ -124,6 +124,7 @@ impl ImeAppState {
             self.vk.press(keycode);
             return;
         }
+        crate::wayland::autodia::begin_key();
 
         // Shortcut (Ctrl/Alt/Super held): finalize the word and let the raw
         // key through so the app's keybinding fires.
@@ -207,6 +208,9 @@ impl ImeAppState {
                 return;
             }
             // No pending composition → pass through to app.
+            if self.undo_diacritics() {
+                return;
+            }
             crate::engine::habit::backspace();
             self.vk.press(keycode);
             return;
@@ -304,6 +308,7 @@ impl ImeAppState {
         match action {
             NonPreeditAction::Buffer | NonPreeditAction::UpdatePreedit(_) => {
                 let target = self.engine.inner().preedit_output();
+                crate::wayland::autodia::typing();
                 if self.learns() {
                     predict::set_prefix(&target);
                 }
@@ -341,7 +346,7 @@ impl ImeAppState {
                     // Screen already shows the rendered form (live sync) —
                     // usually a no-op diff, then the boundary key.
                     match boundary {
-                        Some(c) => self.sync_shown(&format!("{text}{c}")),
+                        Some(c) => self.commit_boundary(&text, c),
                         None => self.sync_shown(&text),
                     }
                 } else {
@@ -370,6 +375,7 @@ impl ImeAppState {
                 im.commit(self.serial);
             }
             NonPreeditAction::ClearPreedit => {
+                crate::wayland::autodia::typing();
                 predict::set_prefix("");
                 if capable {
                     // P0: word deleted → atomic clear.
@@ -384,6 +390,7 @@ impl ImeAppState {
             }
             NonPreeditAction::PassThrough => {
                 // Same ordering rule: never overtake queued typer output.
+                crate::wayland::autodia::passthrough(self.xkb.keycode_to_char(keycode));
                 self.viet.wait_idle();
                 self.vk.press(keycode);
             }

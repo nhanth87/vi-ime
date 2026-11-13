@@ -30,6 +30,7 @@ pub fn handle_read_command(
             predict: Some(setting.predict),
             smart_raw_incomplete: Some(setting.smart_raw_incomplete),
             learn_habits: Some(setting.learn_habits),
+            auto_diacritics: Some(setting.auto_diacritics),
             habit_style: Some({
                 let (t, v) = crate::engine::habit::style();
                 [t, v]
@@ -101,7 +102,7 @@ pub fn handle_write_command(
         IpcCommand::SetConfig {
             input_method, tone_style, enabled, ime_mode, output_mode,
             free_tone_placement, auto_detect_lang, enable_per_app, emoji, predict,
-            smart_raw_incomplete, learn_habits,
+            smart_raw_incomplete, learn_habits, auto_diacritics,
         } => {
             if let Some(m) = input_method {
                 s.input_method = parse_method(m).unwrap_or(InputMethod::Telex);
@@ -129,6 +130,7 @@ pub fn handle_write_command(
             if let Some(v) = *predict { s.predict = v; }
             if let Some(v) = *smart_raw_incomplete { s.smart_raw_incomplete = v; }
             if let Some(v) = *learn_habits { s.learn_habits = v; }
+            if let Some(v) = *auto_diacritics { s.auto_diacritics = v; }
             info!("IPC: config updated via settings UI");
         }
         IpcCommand::AddApp {

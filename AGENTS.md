@@ -555,6 +555,25 @@
 >   (VNI) không qua lớp này. Kiểu gõ Tự do (Telex/VNI) chỉ GỢI Ý trong Cấu hình, không tự đổi.
 > - `habit.tsv` cục bộ, `learn_habits` tắt được, "Xóa dữ liệu học" xoá cùng gợi ý từ.
 
+### R37. Tự thêm dấu theo ngữ cảnh (engine/diacritic.rs + wayland/autodia.rs) — tốc độ gõ đứng trước
+> Thứ tự ưu tiên của user (2026-11-13): tốc độ gõ > tương thích > tính năng này. Mặc định TẮT (`auto_diacritics`).
+> - **Không có việc gì chạy theo từng phím.** Bảng `data/vdia.bin` (5 MB: 65 535 âm tiết, 1,6 triệu cặp dạng
+>   CSR `u16` + điểm 4 bit) giải mã MỘT lần trên thread nền khi bật; `fix` chỉ chạy ở `,` `.` `?` `!` và trả
+>   `None` ngay nếu bảng chưa sẵn sàng (`OnceLock::get`, `try_lock`). Đo: ~30 µs/đoạn, nạp 55 ms, RSS +~20 MB.
+> - **Đo trước khi đổi định dạng bảng** (`/mnt/data/user/vndict/work`): 4 bit @5 MB = bảng đầy đủ 151 MB
+>   (95,6% từ, ~68% đoạn đúng trọn); 8/10 MB không hơn; **1 bit chỉ 72%** (ngang chọn dạng phổ biến nhất) — đừng thử lại.
+> - **Nguồn đếm:** Wikipedia vi (CC BY-SA), OPUS OpenSubtitles, văn bản luật (CC BY 4.0), dựng bằng script của
+>   dmoreq/vndiacritics (MIT). KHÔNG dùng bảng báo 2017 (`Vietnamese-Accent-Prediction`, không giấy phép).
+> - **Đoạn (phrase)** = chuỗi từ gõ liền nhau trong một ô. `autodia::begin_key` ở đầu MỖI phím bỏ đoạn trừ khi phím
+>   trước là gõ chữ thuần (`typing`/`passthrough` dấu cách/`on_word`), hoặc `predict::CONTEXT_GEN` đã đổi (click,
+>   mũi tên, phím tắt, Deactivate). Đường nào quên báo thì chỉ MẤT đoạn, không bao giờ xoá nhầm chữ ở chỗ khác.
+>   ĐỪNG đảo logic thành "giữ trừ khi được báo xoá".
+> - Chỉ sửa khi MỌI từ hoặc đã có dấu (mỏ neo, giữ nguyên) hoặc là âm tiết Việt đã biết; có từ lạ ("car") → bỏ cả
+>   đoạn. Không sửa đoạn 1 từ, ô không `learns()` (terminal, mật khẩu, URL, số), ô tự hoàn thành (`inline_complete`).
+> - Viết lại = `sync_shown` từ ký tự đầu tiên thay đổi, dấu câu đi CHUNG lệnh typer (R26). BackSpace ngay sau đó =
+>   trả lại chữ đã gõ + ghi các từ đó vào `diacritic_keep.txt` (không sửa nữa; xoá cùng "Xóa dữ liệu học").
+> - Mới có trên đường Wayland live echo. Đường evdev (XWayland, LibreOffice, OnlyOffice) CHƯA có.
+
 ### R31. Log file KHÔNG được ghi mọi cấp độ
 > Sự cố 2026-10-24: file log không có filter → `[NORMALIZE]` debug (nhiều dòng/phím) làm
 > `vi-ime.<ngày>.log` lên 4.3 GB trong một ngày, định dạng chuỗi ngay trên đường gõ phím,

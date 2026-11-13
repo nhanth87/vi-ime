@@ -24,6 +24,7 @@ pub(crate) mod lexicon;
 mod normalize;
 pub(crate) mod predict;
 pub(crate) mod habit;
+pub(crate) mod diacritic;
 mod rhyme;
 mod style;
 mod syllable;

@@ -25,6 +25,7 @@ impl ImeAppState {
         }
         self.engine.reset();
         self.reset_word_state();
+        crate::wayland::autodia::clear();
     }
 
     /// Send a preedit update (classic Preedit mode only). Protocol cursor

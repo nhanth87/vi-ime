@@ -89,9 +89,26 @@ Riêng tư:
 File log (`~/.local/share/vi-ime/vi-ime.log`) chỉ còn một file và tự xoá khi
 vượt 10 MB.
 
-**Đang phát triển, chưa có trong bản phát hành:** tự thêm dấu theo ngữ cảnh.
-Gõ không dấu, tới dấu `,` hoặc `.` thì vi-ime thêm dấu cho cả đoạn. Sẽ có
-công tắc bật/tắt và mặc định tắt.
+## Tự thêm dấu theo ngữ cảnh (thử nghiệm, mặc định tắt)
+
+Gõ không dấu, tới dấu `,` `.` `?` `!` thì vi-ime thêm dấu cho cả đoạn:
+`toi di hoc.` thành `tôi đi học.` Bật trong Cấu hình, mục "Tự thêm dấu theo
+ngữ cảnh".
+
+- Từ bạn đã tự gõ dấu được giữ nguyên và dùng làm ngữ cảnh cho các từ còn lại.
+- Đoạn có từ không phải tiếng Việt thì không bị đụng tới.
+- Nhấn BackSpace ngay sau khi sửa để lấy lại đúng chữ đã gõ. Các từ đó được
+nhớ và không bị sửa nữa.
+- Không chậm thêm lúc gõ: chỉ tính một lần ở dấu câu, khoảng 30 micro giây.
+Bảng tra 5 MB nằm sẵn trong bộ gõ, không cần mạng.
+- Độ chính xác đo được khoảng 95-96% theo từng từ, nghĩa là cứ khoảng 3 đoạn
+thì 1 đoạn còn một từ sai dấu ("bạn"/"bán", "tới"/"tôi").
+- Hiện chỉ chạy ở app Wayland gốc. Chrome X11, LibreOffice và OnlyOffice
+chưa có.
+
+Bảng tra dựng từ Wikipedia tiếng Việt (CC BY-SA), OPUS OpenSubtitles và văn
+bản pháp luật Việt Nam (CC BY 4.0), theo thuật toán của
+[dmoreq/vndiacritics](https://github.com/dmoreq/vndiacritics) (MIT).
 
 ## App hỗ trợ đặc biệt
 
