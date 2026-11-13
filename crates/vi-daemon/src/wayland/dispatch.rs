@@ -194,29 +194,36 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                 let recent_live = state
                     .last_live_echo_at
                     .map_or(false, |t| t.elapsed().as_millis() < 200);
-                if std::mem::take(&mut state.external_change)
-                    && state.engine.has_pending()
-                    && !recent_live
-                {
-                    info!(
-                        "[SCENARIO] 🖱️ external cursor/text change — \
-                         dropping composition (R8: Drop, Don't Commit)"
-                    );
-                    state.engine.reset();
-                    state.reset_word_state();
-                    // ⚠️ Mode-aware, same rule as `finalize_word`/
-                    // `on_physical_click`/`maybe_reconfigure`'s app-switch
-                    // branch: NonPreedit/live mode (terminals) never calls
-                    // set_preedit_string in the first place — raw keys are
-                    // forwarded live and ARE already real text on screen.
-                    // Sending an empty set_preedit_string here anyway is a
-                    // spurious protocol message and reproduces the exact
-                    // "nhảy chữ theo con trỏ" symptom this block exists to
-                    // prevent (confirmed live on kitty, 2026-07-10 — a first
-                    // cut of the app-switch fix made this same mistake).
-                    let live = state.live_echo();
-                    if !live && let Some(im) = state.input_method.clone() {
-                        state.set_preedit(&im, "");
+                if std::mem::take(&mut state.external_change) {
+                    // Any external change invalidates the diacritic phrase
+                    // tracker (R37): its words no longer describe the cursor
+                    // position, so a later rewrite/undo would land in the
+                    // wrong place. Drop it even with no composition pending
+                    // (mid-phrase click + BackSpace-undo otherwise retypes
+                    // at the new cursor).
+                    crate::engine::predict::reset_context();
+                    crate::wayland::autodia::clear();
+                    if state.engine.has_pending() && !recent_live {
+                        info!(
+                            "[SCENARIO] 🖱️ external cursor/text change — \
+                             dropping composition (R8: Drop, Don't Commit)"
+                        );
+                        state.engine.reset();
+                        state.reset_word_state();
+                        // ⚠️ Mode-aware, same rule as `finalize_word`/
+                        // `on_physical_click`/`maybe_reconfigure`'s app-switch
+                        // branch: NonPreedit/live mode (terminals) never calls
+                        // set_preedit_string in the first place — raw keys are
+                        // forwarded live and ARE already real text on screen.
+                        // Sending an empty set_preedit_string here anyway is a
+                        // spurious protocol message and reproduces the exact
+                        // "nhảy chữ theo con trỏ" symptom this block exists to
+                        // prevent (confirmed live on kitty, 2026-07-10 — a first
+                        // cut of the app-switch fix made this same mistake).
+                        let live = state.live_echo();
+                        if !live && let Some(im) = state.input_method.clone() {
+                            state.set_preedit(&im, "");
+                        }
                     }
                 }
                 // Flush any keys buffered during the commit sequence.

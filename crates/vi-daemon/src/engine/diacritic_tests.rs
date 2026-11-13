@@ -71,3 +71,39 @@ fn viterbi_keeps_unknown_slot_empty() {
     assert!(best[0].is_some());
     assert!(best[1].is_none());
 }
+
+/// Fidelity gate (Yo-ByT5 lesson, 2610.01634): a "smarter" table must
+/// never trade base-text corruption for accuracy — the stripped form of
+/// every restored word equals the typed stripped form.
+#[test]
+fn table_never_alters_base_text() {
+    let t = Table::parse(DATA).expect("vdia.bin must parse");
+    let phrases = [
+        vec!["toi", "di", "hoc"],
+        vec!["cam", "on", "ban", "rat", "nhieu"],
+        vec!["hom", "nay", "troi", "dep"],
+        vec!["toi", "di", "hoc", "o", "truong", "dai", "hoc", "bach", "khoa"],
+        vec!["car", "xe", "hoi"],
+        vec!["Toi", "Di", "Hoc"],
+    ];
+    for ph in phrases {
+        let cols: Vec<Vec<u16>> = ph.iter().map(|w| t.cand.get(&w.to_lowercase()).cloned().unwrap_or_default()).collect();
+        for (w, id) in ph.iter().zip(t.viterbi(&cols)) {
+            if let Some(id) = id {
+                let form = t.words[usize::from(id)];
+                // Case-insensitive: fix() lowercases for lookup and `recase`
+                // restores the capitals afterwards.
+                assert_eq!(
+                    strip(form).to_lowercase(),
+                    strip(w).to_lowercase(),
+                    "base text altered: {w} -> {form}"
+                );
+                assert_eq!(
+                    form.chars().count(),
+                    w.chars().count(),
+                    "length changed (recase would truncate): {w} -> {form}"
+                );
+            }
+        }
+    }
+}

@@ -19,6 +19,10 @@ use crate::engine::{diacritic, predict};
 use crate::wayland::state::ImeAppState;
 
 const MAX_TAIL: usize = 120;
+/// Phrase length bound: the table only looks at the last MAX_WORDS (40),
+// so older words are dropped instead of growing without limit.
+const PHRASE_CAP: usize = 48;
+const PHRASE_KEEP: usize = 40;
 
 #[derive(Default)]
 struct Phrase {
@@ -75,6 +79,10 @@ pub(crate) fn clear() {
 
 /// A word committed with boundary `c`. At a phrase end returns
 /// (typed tail, fixed tail): the text from the first changed word on.
+/// A boundary that cannot trigger a fix (or a failed fix) leaves the
+/// phrase intact for a later sentence end — only a successful fix
+/// consumes it. So random mid-phrase punctuation no longer destroys
+/// the sentence context.
 fn on_word(text: &str, c: char) -> Option<(String, String)> {
     with(|p| {
         p.undo = None;
@@ -82,27 +90,42 @@ fn on_word(text: &str, c: char) -> Option<(String, String)> {
             p.words.clear();
             return None;
         }
-        if c == ' ' {
-            p.words.push((text.to_string(), " ".into()));
+        let push = |p: &mut Phrase, word: String, sep: String| {
+            p.words.push((word, sep));
+            if p.words.len() > PHRASE_CAP {
+                p.words.drain(..p.words.len() - PHRASE_KEEP);
+            }
             p.keep = true;
+        };
+        if c == ' ' {
+            push(p, text.to_string(), " ".into());
             return None;
         }
-        let mut words = std::mem::take(&mut p.words);
         if !matches!(c, ',' | '.' | '?' | '!') {
+            // `;` `:` …: part of the sentence, not its end.
+            push(p, text.to_string(), c.to_string());
             return None;
         }
-        words.push((text.to_string(), String::new()));
-        let typed: Vec<String> = words.iter().map(|(w, _)| w.clone()).collect();
-        let fixed = diacritic::fix(&typed)?;
+        let mut all = p.words.clone();
+        all.push((text.to_string(), String::new()));
+        let typed: Vec<String> = all.iter().map(|(w, _)| w.clone()).collect();
+        let Some(fixed) = diacritic::fix(&typed) else {
+            // Failed (unknown word, table off…): keep the whole sentence,
+            // current word included, for the next sentence end.
+            push(p, text.to_string(), String::new());
+            return None;
+        };
         let first = typed.iter().zip(&fixed).position(|(a, b)| a != b)?;
         let tail = |ws: &[String]| -> String {
-            ws[first..].iter().zip(&words[first..]).map(|(w, (_, sep))| format!("{w}{sep}")).collect()
+            ws[first..].iter().zip(&all[first..]).map(|(w, (_, sep))| format!("{w}{sep}")).collect()
         };
         let (old, new) = (tail(&typed), tail(&fixed));
         if old.chars().count() > MAX_TAIL {
+            p.words.clear(); // too messy to rewrite — start the next phrase over
             return None;
         }
         let changed = typed.iter().zip(&fixed).filter(|(a, b)| a != b).map(|(a, _)| a.clone()).collect();
+        p.words.clear(); // consumed by the successful fix
         p.undo = Some((format!("{new}{c}"), format!("{old}{c}"), changed));
         p.keep = true;
         Some((old, new))
