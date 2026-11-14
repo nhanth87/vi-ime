@@ -2,7 +2,7 @@
 # Copyright (c) 2024-2026 Tran Huu Nhan <nhanth87>
 [package]
 name = "vi-daemon"
-version = "7.7.0"
+version = "7.7.1"
 edition = "2024"
 description = "Vietnamese IME daemon — main binary, wires all subsystems"
 
