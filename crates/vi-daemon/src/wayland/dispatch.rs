@@ -42,10 +42,14 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                 state.maybe_reconfigure();
                 // Blink (same app, no click, within BLINK_MS): keep the word;
                 // anything else drops it as Deactivate always did (R8).
-                if let Some((at, clicks, app)) = state.deferred_drop.take() {
+                if let Some((at, clicks, app, word)) = state.deferred_drop.take() {
                     let now = state.runtime.as_ref().map(|rt| rt.clicks()).unwrap_or(0);
                     if at.elapsed().as_millis() < BLINK_MS && clicks == now && app == state.current_app_id {
-                        info!("[BLINK] deactivate→activate in {}ms — keeping the word", at.elapsed().as_millis());
+                        if word {
+                            info!("[BLINK] deactivate→activate in {}ms — keeping the word", at.elapsed().as_millis());
+                        }
+                    } else if !word {
+                        drop_word(state); // no word was pending: just the context
                     } else {
                         // Evidence for "cho7"-shaped reports (R22): a word lost here
                         // turns the next tone key into a literal digit.
@@ -124,11 +128,12 @@ impl Dispatch<ZwpInputMethodV2, ImUserData> for ImeAppState {
                 // Some pages make Chrome deactivate+reactivate ~30 ms after
                 // every edit (2026-11-04: "độc" → "đô5c", the word dropped at
                 // each blink): with a word pending, decide at the next Activate.
+                // Between words too: the sentence context (diacritic phrase,
+                // suggestions, Tự do language) survives a blink. Dropping it at
+                // once cut every Facebook phrase in pieces (2026-11-14: "em
+                // danh mot cay" left bare, only the rest of the phrase fixed).
                 let clicks = state.runtime.as_ref().map(|rt| rt.clicks()).unwrap_or(0);
-                state.deferred_drop = had_pending.then(|| (Instant::now(), clicks, state.current_app_id.clone()));
-                if !had_pending {
-                    drop_word(state);
-                }
+                state.deferred_drop = Some((Instant::now(), clicks, state.current_app_id.clone(), had_pending));
                 crate::godmod::log_deactivate();
                 state.active = false;
                 state.key_buffer.clear();

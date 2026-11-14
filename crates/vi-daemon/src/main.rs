@@ -402,6 +402,11 @@ fn main() {
                     godmod::set_app(app_id);
                 }
                 if app_changed {
+                    // Another app: a new sentence. Wayland keeps the context
+                    // across a Deactivate until the next Activate (blink), so
+                    // an app reached without one (evdev fallback) must not
+                    // inherit the last phrase.
+                    crate::engine::predict::reset_context();
                     // Save word suggestions learned so far (off the typing thread).
                     crate::engine::predict::flush();
                     crate::engine::habit::flush();

@@ -597,6 +597,12 @@
 >   (chuỗi nhiều cặp của user phải thắng) — cần CẢ HAI. Tra cặp theo chỉ mục từ đầu (`personal_pairs(forms)`): quét cả
 >   lịch sử 7k cặp tốn 1,5 ms. Đoạn mà số từ user tự gõ dấu ≥ số từ trơn → để nguyên cả đoạn (user đang gõ CÓ dấu,
 >   từ trơn là cố ý: field "con chim ở trọ nồi than," ra "… nồi thân,").
+> - **"Chớp" giữa hai từ cũng không được xoá ngữ cảnh** (dispatch.rs Deactivate, `deferred_drop` có thêm cờ `word`):
+>   Deactivate KHÔNG có từ đang gõ trước đây gọi `drop_word` ngay → `predict::reset_context` → đoạn bị cắt. Facebook
+>   (Chrome) chớp deactivate→activate sau gần như MỌI lần sửa → đoạn bị băm nhỏ (field 2026-11-14: "em danh mot cay"
+>   không được sửa, chỉ phần sau). Giờ hoãn tới Activate như từ đang gõ: chớp (<150 ms, cùng app, không click) giữ ngữ
+>   cảnh; còn lại mới `drop_word`. Đổi app thật (`main.rs` focus, `app_changed`) gọi `predict::reset_context` để đường
+>   evdev không thừa hưởng đoạn của app trước.
 > - **Công tắc engine nạp cả lúc khởi động** (`main.rs::apply_engine_switches`): `apply_config` chỉ chạy khi có sự kiện
 >   focus/config, nên sau restart mà không đổi cửa sổ thì tính năng nằm im (field 2026-11-14: "toi di hoc," không đổi).
 > - **Bảng đã nạp (tức `auto_diacritics` bật) còn phục vụ mọi kiểu gõ:** `predict.rs` lấp chỗ trống trên thanh gợi ý

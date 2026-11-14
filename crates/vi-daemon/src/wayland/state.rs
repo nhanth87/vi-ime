@@ -121,8 +121,9 @@ pub struct ImeAppState {
     pub(crate) external_change: bool,
     /// Last seen physical-click counter (evdev watcher via RuntimeConfig).
     pub(crate) last_clicks: u64,
-    /// Deactivate with a word pending: (when, clicks, app) — dropped or kept at the next Activate.
-    pub(crate) deferred_drop: Option<(std::time::Instant, u64, Option<String>)>,
+    /// Deactivate seen: (when, click count, app, a word was pending). The
+    /// next Activate keeps the word and the sentence context on a blink.
+    pub(crate) deferred_drop: Option<(std::time::Instant, u64, Option<String>, bool)>,
     /// Compositor-clock ms of the last key press (non-monotonic delivery telemetry).
     pub(crate) last_key_time: Option<u32>,
     /// Process start, the base for comparing our clock to event times.
