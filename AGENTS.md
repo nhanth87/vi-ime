@@ -583,6 +583,13 @@
 > - **Phản hồi của chính lần gõ lại** (20+ BackSpace, app báo mỗi cái là `TextChangeCause::Other`) KHÔNG được xoá
 >   đoạn/undo: `expect_echo` đẩy `last_live_echo_at` về tương lai 15 ms/phím (tối đa 1,5 s), `Done` chỉ
 >   `reset_context` + `autodia::clear` khi `!recent_live`. Thử lồng 2026-11-13: thiếu cái này BackSpace chỉ xoá dấu ".".
+> - **Cặp từ của chính user thắng bảng** (`diacritic::personal` ← `predict::personal_pairs`, user 2026-11-14: "cuc cuc"
+>   phải ra "cục cức", "con ga gay o o o" phải ra "con gà gáy ò ó o"). Cặp có dấu user đã gõ MỘT lần là đủ để thêm dấu;
+>   muốn GIỮ một từ không dấu mà bảng thêm dấu thì cặp đó phải được gõ ≥3 lần (lịch sử còn chứa chữ gõ không dấu từ
+>   trước khi có tính năng này). Từ một chữ cái là nguyên âm ("ò", "ó", "ở", "ạ") giờ cũng được học (`predict::normalize`).
+>   Chỉ đọc bằng `try_lock`; bận thì bỏ qua, không chờ.
+> - **Công tắc engine nạp cả lúc khởi động** (`main.rs::apply_engine_switches`): `apply_config` chỉ chạy khi có sự kiện
+>   focus/config, nên sau restart mà không đổi cửa sổ thì tính năng nằm im (field 2026-11-14: "toi di hoc," không đổi).
 > - **Bảng đã nạp (tức `auto_diacritics` bật) còn phục vụ mọi kiểu gõ:** `predict.rs` lấp chỗ trống trên thanh gợi ý
 >   bằng `diacritic::next_words` (lịch sử của user luôn đứng trước; quét một hàng CSR ở ranh giới từ, ≤70 µs);
 >   Tự do, khi cả hai cách đọc đều là từ thật, chọn tiếng Việt nếu `diacritic::follows(từ trước, từ này)`

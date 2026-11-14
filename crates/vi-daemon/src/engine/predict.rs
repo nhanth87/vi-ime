@@ -165,7 +165,12 @@ fn fold(word: &str) -> String {
 fn normalize(word: &str) -> Option<String> {
     let w = fold(word);
     let n = w.chars().count();
-    (n >= 2 && n <= MAX_WORD_CHARS && w.chars().all(char::is_alphabetic)).then_some(w)
+    // One-letter words are learned when they are a vowel: "ở", "à", "ạ",
+    // and the "ò ó o" of "con gà gáy ò ó o" (user 2026-11-14). A lone
+    // consonant is a stray key, not a word.
+    let vowel = |c: char| "aeiouy".contains(super::diacritic::base(c));
+    let long_enough = n >= 2 || w.chars().all(vowel);
+    (n >= 1 && long_enough && n <= MAX_WORD_CHARS && w.chars().all(char::is_alphabetic)).then_some(w)
 }
 
 fn top3<'a>(it: impl Iterator<Item = (u32, &'a String)>) -> Vec<String> {
@@ -347,6 +352,32 @@ pub(crate) fn observe(word: &str) {
 /// can have it without waiting (Tự do reads the sentence with it).
 pub(crate) fn prev_word() -> Option<String> {
     STATE.0.try_lock().ok()?.prev.clone()
+}
+
+/// The user's own accented pairs for a phrase typed without diacritics:
+/// (index of the first word, first, second, times typed), the most typed
+/// pair per position. `words` are lowercase; `strip` removes diacritics.
+/// Empty when the table is busy — the typing thread never waits.
+pub(crate) fn personal_pairs(words: &[String], strip: fn(&str) -> String) -> Vec<(usize, String, String, u32)> {
+    let Ok(p) = STATE.0.try_lock() else { return Vec::new() };
+    let bare: Vec<String> = words.iter().map(|w| strip(w)).collect();
+    // A typed word matches a learned one when it is that word, or its bare form.
+    let fits = |typed: &String, base: &String, learned: &str| *typed == learned || (typed == base && strip(learned) == *base);
+    let mut best: Vec<Option<(String, String, u32)>> = vec![None; words.len()];
+    for (a, followers) in &p.next {
+        for i in 0..words.len().saturating_sub(1) {
+            if !fits(&words[i], &bare[i], a) {
+                continue;
+            }
+            for (b, &n) in followers {
+                let adds = *a != bare[i] || *b != bare[i + 1];
+                if adds && fits(&words[i + 1], &bare[i + 1], b) && best[i].as_ref().is_none_or(|x| n > x.2) {
+                    best[i] = Some((a.clone(), b.clone(), n));
+                }
+            }
+        }
+    }
+    best.into_iter().enumerate().filter_map(|(i, x)| x.map(|(a, b, n)| (i, a, b, n))).collect()
 }
 
 /// Bumped by every `reset_context`: phrase tracking (wayland/autodia.rs)

@@ -114,6 +114,8 @@ Gõ không dấu, tới dấu `,` `.` `?` `!` thì vi-ime thêm dấu cho cả �
 ngữ cảnh".
 
 - Từ bạn đã tự gõ dấu được giữ nguyên và dùng làm ngữ cảnh cho các từ còn lại.
+- Cụm từ bạn đã từng gõ có dấu được ưu tiên hơn bảng tra: gõ "con gà gáy ò ó
+o" một lần, lần sau `con ga gay o o o` ra đúng như vậy.
 - Đoạn có từ không phải tiếng Việt thì không bị đụng tới.
 - Nhấn BackSpace ngay sau khi sửa để lấy lại đúng chữ đã gõ. Nếu lần sửa đó
 chỉ đổi một từ thì từ ấy được nhớ và không bị sửa nữa.

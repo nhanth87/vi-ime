@@ -42,7 +42,7 @@ struct Table {
     skip: u32,
 }
 
-fn base(c: char) -> char {
+pub(crate) fn base(c: char) -> char {
     const GROUPS: [(&str, char); 7] = [
         ("àáảãạăằắẳẵặâầấẩẫậ", 'a'),
         ("èéẻẽẹêềếểễệ", 'e'),
@@ -306,11 +306,14 @@ pub(crate) fn fix_at(words: &[String], start: bool) -> Option<Vec<String>> {
     if opener.is_some() {
         best.remove(0);
     }
+    let mut forms: Vec<Option<String>> =
+        best.iter().map(|id| id.map(|id| restyle(t.words[usize::from(id)]))).collect();
+    personal(words, kept.as_ref(), &mut forms);
     let out: Vec<String> = words
         .iter()
-        .zip(best)
-        .map(|(w, id)| match id {
-            Some(id) => recase(w, &restyle(t.words[usize::from(id)])),
+        .zip(forms)
+        .map(|(w, form)| match form {
+            Some(form) => recase(w, &form),
             None => w.clone(),
         })
         .collect();
@@ -344,6 +347,32 @@ pub(crate) fn next_words(prev: &str, n: usize) -> Vec<String> {
         }
     }
     best.iter().filter_map(|&(_, id)| t.words.get(usize::from(id)).map(|w| (*w).to_string())).collect()
+}
+
+/// The user's own pairs win over the table: "cuc cuc" is "cục cức" for
+/// someone who has typed that, whatever the corpus says (user 2026-11-14).
+/// A pair typed once is enough to ADD diacritics; to leave a word bare that
+/// the table accents it must have been typed 3 times (the history also holds
+/// what was typed before this feature fixed it).
+fn personal(words: &[String], kept: Option<&HashSet<String>>, forms: &mut [Option<String>]) {
+    let low: Vec<String> = words.iter().map(|w| w.to_lowercase()).collect();
+    let mut locked = vec![false; words.len()];
+    for (i, a, b, n) in super::predict::personal_pairs(&low, strip) {
+        let ok = |j: usize, form: &String| {
+            let bare = strip(form) == *form;
+            let table_accents = forms[j].as_ref().is_some_and(|f| strip(f) != *f);
+            form.chars().count() == low[j].chars().count()
+                && !kept.is_some_and(|k| k.contains(&low[j]))
+                && (!locked[j] || forms[j].as_ref() == Some(form))
+                && (!bare || !table_accents || n >= 3)
+        };
+        if ok(i, &a) && ok(i + 1, &b) {
+            forms[i] = Some(restyle(&a));
+            forms[i + 1] = Some(restyle(&b));
+            locked[i] = true;
+            locked[i + 1] = true;
+        }
+    }
 }
 
 /// `form` with the capitals of `typed` (same length: one char per letter).
