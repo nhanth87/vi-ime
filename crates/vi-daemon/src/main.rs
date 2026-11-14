@@ -27,6 +27,7 @@ mod ipc;
 mod learning;
 mod legacy_grab;
 mod log_file;
+mod shutdown;
 mod notify;
 mod plugin;
 mod privfile;
@@ -202,6 +203,7 @@ fn main() {
         return;
     }
 
+    shutdown::install(); // before any thread: they inherit the blocked signals
     let (_log_guard, _stderr_guard) = init_tracing();
 
     info!("vi-ime daemon starting...");

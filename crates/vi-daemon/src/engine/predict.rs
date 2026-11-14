@@ -131,8 +131,19 @@ fn load(p: &mut Predictor) {
 /// Write the table from a background thread (it takes the lock itself, so
 /// the typing thread pays nothing but a brief wait at its next word end).
 fn save_async() {
+    std::thread::spawn(write_file);
+}
+
+/// Save now, on this thread (daemon exit: a spawned save would be killed).
+pub(crate) fn save_now() {
+    if with(|p| std::mem::take(&mut p.unsaved) > 0) == Some(true) {
+        write_file();
+    }
+}
+
+fn write_file() {
     let Some(path) = file() else { return };
-    std::thread::spawn(move || {
+    {
         let out = {
             let Ok(p) = STATE.0.lock() else { return };
             let mut out = String::new();
@@ -153,7 +164,7 @@ fn save_async() {
         if crate::privfile::write(&tmp, out).is_ok() {
             let _ = std::fs::rename(tmp, path);
         }
-    });
+    }
 }
 
 /// Lowercase NFC, so precomposed and decomposed output modes share counts.

@@ -609,6 +609,12 @@
 >   Rủi ro đã biết: autocorrect của office tự viết hoa đầu câu — `retype` giữ phần đầu giống nhau nên "Toi"→"Tôi"
 >   còn hoa, nhưng từ đổi chữ ĐẦU ("Di"→"đi") sẽ mất hoa; OnlyOffice chờ 150 ms sau mỗi chữ có dấu → gõ lại chậm.
 
+### R39. Thoát daemon phải LƯU dữ liệu học (`shutdown.rs`)
+> Trước 2026-11-14, `predict.tsv`/`habit.tsv` chỉ được ghi khi đổi ứng dụng → "Thoát vi-im", `systemctl stop`, logout
+> làm mất mọi thứ học từ lần đổi app gần nhất. Giờ: SIGTERM/SIGINT/SIGHUP bị chặn ở MỌI thread (`shutdown::install`
+> gọi TRƯỚC khi tạo thread nào, kể cả tracing) và một thread `sigwait` lưu ĐỒNG BỘ (`save_now`) rồi thoát. IPC `quit`
+> và mục "Thoát" của khay đi qua `shutdown::exit`. ĐỪNG gọi `std::process::exit` trực tiếp trong daemon.
+
 ### R31. Log file KHÔNG được ghi mọi cấp độ
 > Sự cố 2026-10-24: file log không có filter → `[NORMALIZE]` debug (nhiều dòng/phím) làm
 > `vi-ime.<ngày>.log` lên 4.3 GB trong một ngày, định dạng chuỗi ngay trên đường gõ phím,

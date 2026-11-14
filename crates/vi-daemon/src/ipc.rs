@@ -343,7 +343,7 @@ fn handle_client(mut stream: UnixStream, tx: &Sender<DaemonEvent>) {
             IpcCommand::Quit => {
                 info!("IPC: quit requested");
                 let _ = writeln!(stream, "{}", IpcResponse::reload().to_line());
-                std::process::exit(0);
+                crate::shutdown::exit(0);
             }
             IpcCommand::SetConfig { .. }
             | IpcCommand::AddApp { .. }

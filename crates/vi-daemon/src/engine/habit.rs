@@ -90,20 +90,40 @@ fn load(h: &mut Habit) {
 }
 
 fn save(h: &Habit) {
-    let Some(path) = file() else { return };
+    let Some((path, out)) = serialize(h) else { return };
+    std::thread::spawn(move || write_file(&path, out));
+}
+
+fn serialize(h: &Habit) -> Option<(PathBuf, String)> {
+    let path = file()?;
     let mut out = format!("style\t{}\t{}\n", h.telex, h.vni);
     for (raw, n) in &h.score {
         out.push_str(&format!("s\t{raw}\t{n}\n"));
     }
-    std::thread::spawn(move || {
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let tmp = path.with_extension("tmp");
-        if crate::privfile::write(&tmp, out).is_ok() {
-            let _ = std::fs::rename(tmp, path);
-        }
-    });
+    Some((path, out))
+}
+
+fn write_file(path: &std::path::Path, out: String) {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let tmp = path.with_extension("tmp");
+    if crate::privfile::write(&tmp, out).is_ok() {
+        let _ = std::fs::rename(tmp, path);
+    }
+}
+
+/// Save now, on this thread (daemon exit: a spawned save would be killed).
+pub(crate) fn save_now() {
+    let Ok(mut h) = STATE.lock() else { return };
+    if h.unsaved == 0 {
+        return;
+    }
+    h.unsaved = 0;
+    if let Some((path, out)) = serialize(&h) {
+        drop(h);
+        write_file(&path, out);
+    }
 }
 
 /// Typing-thread calls never wait (same rule as predict.rs, R32).

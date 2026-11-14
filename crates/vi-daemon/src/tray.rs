@@ -206,7 +206,7 @@ impl ksni::Tray for ViTray {
             .into(),
             StandardItem {
                 label: "Thoát".into(),
-                activate: Box::new(|_: &mut Self| std::process::exit(0)),
+                activate: Box::new(|_: &mut Self| crate::shutdown::exit(0)),
                 ..Default::default()
             }
             .into(),
