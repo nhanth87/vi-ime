@@ -566,6 +566,10 @@
 >   bản luật chiếm 45% khối lượng → nghiêng về "bản/bán" thay vì "bạn". Đo 2026-11-14 (5 MB, 4 bit): hội thoại
 >   (`work/chat.txt`, 50 câu tự viết) 90,4% → 92,6% từ; văn bản thường 95,6% → 95,2%; báo chí 91,2% → 90,9%.
 >   Phụ đề ×4 hay bỏ hẳn luật đều kém hơn. Đổi trọng số = đo lại cả ba bộ.
+> - **Đã đo, ĐỪNG đo lại (2026-11-14, bảng F + `<s>`):** K làm mượt 100→10000 chênh <0,2 điểm; số ứng viên 8→12/16
+>   chỉ +0,1–0,2 (12 làm p99 chậm gấp đôi). Lỗi còn lại trên bộ hội thoại: 10/40 là "bạn" (→ bắn/bản/bán/ban), còn
+>   lại bàn/bản, tới/tôi, chị/chỉ, nhớ/nhỏ — cần ngữ cảnh xa hơn một từ. Đòn bẩy thật là lịch sử của chính user
+>   (`personal`), không phải chỉnh bảng; trigram đã được tác giả vndiacritics đo là không hơn.
 > - **Đầu câu:** từ vựng có mục giả `<s>` (ô cuối), hàng của nó = số lần mỗi từ mở đầu câu (cột `initial` của
 >   `case.tsv`, cùng trọng số). `fix_at(words, start)` chèn `<s>` khi đoạn không có ngữ cảnh trái (`frozen == 0`).
 >   Đo: văn bản thường 95,2% → 96,0%, hội thoại 92,6% → 93,0%. "ban an com chua" → "bạn ăn cơm chưa" (trước: "bàn").
