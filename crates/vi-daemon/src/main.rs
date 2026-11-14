@@ -203,7 +203,15 @@ fn main() {
         return;
     }
 
-    shutdown::install(); // before any thread: they inherit the blocked signals
+    // One daemon per session. A second one takes the input-method seat from
+    // the first, both write the same log (each deletes it at its own 10 MB
+    // count) and the settings window talks to whichever answers (2026-11-14:
+    // an AppImage started from a terminal ran next to the session daemon).
+    if std::os::unix::net::UnixStream::connect(ipc::default_socket_path()).is_ok() {
+        eprintln!("vi-ime: đã có một bộ gõ đang chạy — không mở thêm.");
+        return;
+    }
+    shutdown::install();
     let (_log_guard, _stderr_guard) = init_tracing();
 
     info!("vi-ime daemon starting...");
@@ -752,18 +760,9 @@ fn engine_input_method(m: crate::config::InputMethod) -> crate::engine::InputMet
 
 fn get_config_path() -> PathBuf {
     let args: Vec<String> = std::env::args().collect();
-    // First non-flag arg = explicit config path
+    // First non-flag arg = explicit config path; otherwise the user's file.
+    // No `./setting.conf` lookup: started from the repo, the daemon used and
+    // rewrote the repo's file, and the user's settings went there (2026-11-14).
     let config_arg = args.iter().skip(1).find(|a| !a.starts_with("--"));
-    if let Some(path) = config_arg {
-        PathBuf::from(path)
-    } else {
-        let local = std::env::current_dir()
-            .unwrap_or_default()
-            .join("setting.conf");
-        if local.exists() {
-            local
-        } else {
-            ConfigManager::default_path()
-        }
-    }
+    config_arg.map_or_else(ConfigManager::default_path, PathBuf::from)
 }

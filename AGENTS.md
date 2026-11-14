@@ -619,11 +619,21 @@
 >   Rủi ro đã biết: autocorrect của office tự viết hoa đầu câu — `retype` giữ phần đầu giống nhau nên "Toi"→"Tôi"
 >   còn hoa, nhưng từ đổi chữ ĐẦU ("Di"→"đi") sẽ mất hoa; OnlyOffice chờ 150 ms sau mỗi chữ có dấu → gõ lại chậm.
 
-### R39. Thoát daemon phải LƯU dữ liệu học (`shutdown.rs`)
+### R39. Thoát daemon phải LƯU dữ liệu học (`shutdown.rs`) + chỉ MỘT daemon
 > Trước 2026-11-14, `predict.tsv`/`habit.tsv` chỉ được ghi khi đổi ứng dụng → "Thoát vi-im", `systemctl stop`, logout
-> làm mất mọi thứ học từ lần đổi app gần nhất. Giờ: SIGTERM/SIGINT/SIGHUP bị chặn ở MỌI thread (`shutdown::install`
-> gọi TRƯỚC khi tạo thread nào, kể cả tracing) và một thread `sigwait` lưu ĐỒNG BỘ (`save_now`) rồi thoát. IPC `quit`
-> và mục "Thoát" của khay đi qua `shutdown::exit`. ĐỪNG gọi `std::process::exit` trực tiếp trong daemon.
+> làm mất mọi thứ học từ lần đổi app gần nhất. Giờ: `sigaction` cho SIGTERM/SIGINT/SIGHUP ghi 1 byte vào self-pipe,
+> một thread đọc pipe → lưu ĐỒNG BỘ (`save_now`) rồi thoát. IPC `quit` và mục "Thoát" của khay đi qua
+> `shutdown::exit`. ĐỪNG gọi `std::process::exit` trực tiếp trong daemon.
+> - **ĐỪNG chặn tín hiệu bằng `pthread_sigmask` + `sigwait`:** mask bị chặn được tiến trình con THỪA HƯỞNG qua exec
+>   (thanh gợi ý, cửa sổ Cấu hình) → chúng lờ SIGTERM, `systemctl stop` phải chờ 90 s rồi SIGKILL, bản thử để lại
+>   thanh gợi ý mồ côi không tắt được (đã sập 2026-11-14, bản `79f64c1`). Handler thì được reset về mặc định khi exec.
+> - **Một daemon mỗi phiên** (`main.rs`, trước `shutdown::install`): kết nối được tới `ipc.sock` → đã có daemon →
+>   thoát ngay. Hai daemon thì cái sau giành seat input-method của cái trước, cả hai ghi chung `vi-ime.log` (mỗi cái
+>   tự xoá ở mốc 10 MB của riêng nó → mất bằng chứng), và cửa sổ Cấu hình nói chuyện với cái nào trả lời trước.
+> - **Không đọc `./setting.conf` theo thư mục hiện tại:** chạy từ repo thì daemon dùng và GHI ĐÈ `setting.conf` của
+>   repo, thiết lập của user rơi vào đó. Chỉ tham số dòng lệnh hoặc `ConfigManager::default_path()`.
+> - Thử daemon: `XDG_RUNTIME_DIR` ngắn (`/run/user/1000/vtN`, socket ≤108 byte), `dbus-run-session`, cấu hình
+>   `predict = false` — nếu không bản thử sẽ mở thanh gợi ý và chiếm lock của thanh gợi ý thật.
 
 ### R31. Log file KHÔNG được ghi mọi cấp độ
 > Sự cố 2026-10-24: file log không có filter → `[NORMALIZE]` debug (nhiều dòng/phím) làm
