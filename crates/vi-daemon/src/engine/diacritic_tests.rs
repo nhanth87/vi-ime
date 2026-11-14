@@ -54,7 +54,7 @@ fn table_restores_toi_di_hoc() {
         .map(|w| t.cand.get(*w).cloned().unwrap_or_default())
         .collect();
     assert!(cols.iter().all(|c| !c.is_empty()));
-    let best = t.viterbi(&cols);
+    let best = t.viterbi(&cols, &HashMap::new());
     let out: Vec<&str> = best
         .iter()
         .map(|id| id.map(|i| t.words[usize::from(i)]).unwrap_or("?"))
@@ -66,7 +66,7 @@ fn table_restores_toi_di_hoc() {
 fn viterbi_keeps_unknown_slot_empty() {
     let t = Table::parse(DATA).expect("vdia.bin must parse");
     let cols = vec![t.cand.get("toi").cloned().unwrap_or_default(), Vec::new()];
-    let best = t.viterbi(&cols);
+    let best = t.viterbi(&cols, &HashMap::new());
     assert_eq!(best.len(), 2);
     assert!(best[0].is_some());
     assert!(best[1].is_none());
@@ -88,7 +88,7 @@ fn table_never_alters_base_text() {
     ];
     for ph in phrases {
         let cols: Vec<Vec<u16>> = ph.iter().map(|w| t.cand.get(&w.to_lowercase()).cloned().unwrap_or_default()).collect();
-        for (w, id) in ph.iter().zip(t.viterbi(&cols)) {
+        for (w, id) in ph.iter().zip(t.viterbi(&cols, &HashMap::new())) {
             if let Some(id) = id {
                 let form = t.words[usize::from(id)];
                 // Case-insensitive: fix() lowercases for lookup and `recase`

@@ -584,10 +584,12 @@
 >   đoạn/undo: `expect_echo` đẩy `last_live_echo_at` về tương lai 15 ms/phím (tối đa 1,5 s), `Done` chỉ
 >   `reset_context` + `autodia::clear` khi `!recent_live`. Thử lồng 2026-11-13: thiếu cái này BackSpace chỉ xoá dấu ".".
 > - **Cặp từ của chính user thắng bảng** (`diacritic::personal` ← `predict::personal_pairs`, user 2026-11-14: "cuc cuc"
->   phải ra "cục cức", "con ga gay o o o" phải ra "con gà gáy ò ó o"). Cặp có dấu user đã gõ MỘT lần là đủ để thêm dấu;
->   muốn GIỮ một từ không dấu mà bảng thêm dấu thì cặp đó phải được gõ ≥3 lần (lịch sử còn chứa chữ gõ không dấu từ
->   trước khi có tính năng này). Từ một chữ cái là nguyên âm ("ò", "ó", "ở", "ạ") giờ cũng được học (`predict::normalize`).
->   Chỉ đọc bằng `try_lock`; bận thì bỏ qua, không chờ.
+>   phải ra "cục cức", "con ga gay o o o" phải ra "con gà gáy ò ó o"). Mỗi cặp CÓ DẤU user đã gõ = điểm cộng ~e^12 cho
+>   đúng chuyển tiếp đó TRONG Viterbi, nên cả đoạn được chọn nhất quán; dạng ngoài top 8 của bảng được thêm vào cột
+>   (rộng tới `MAX_COL` = 12, KHÔNG đẩy ứng viên khác ra). Cặp gõ KHÔNG dấu bị bỏ qua: phần lớn gõ từ trước khi có tính
+>   năng này. Từ user tự gõ dấu không bao giờ bị đổi. Từ một chữ cái là nguyên âm ("ò", "ó", "ở") được học
+>   (`predict::normalize`). ĐỪNG quay lại cách "chép đè cặp gõ nhiều nhất mỗi vị trí": field 2026-11-14 ra "ở o ò" vì
+>   "o o" gõ không dấu 4 lần thắng "ò ó" 1 lần, và cặp sau chép đè lên cặp trước.
 > - **Công tắc engine nạp cả lúc khởi động** (`main.rs::apply_engine_switches`): `apply_config` chỉ chạy khi có sự kiện
 >   focus/config, nên sau restart mà không đổi cửa sổ thì tính năng nằm im (field 2026-11-14: "toi di hoc," không đổi).
 > - **Bảng đã nạp (tức `auto_diacritics` bật) còn phục vụ mọi kiểu gõ:** `predict.rs` lấp chỗ trống trên thanh gợi ý

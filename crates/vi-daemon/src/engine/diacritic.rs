@@ -25,6 +25,8 @@ static MODERN: AtomicBool = AtomicBool::new(false);
 /// Unaccented words the user took back once: never changed again.
 static KEEP: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 const MAX_CAND: usize = 8;
+/// Column width: the table's top `MAX_CAND` plus the user's own forms.
+const MAX_COL: usize = 12;
 const MAX_WORDS: usize = 40;
 
 struct Table {
@@ -133,12 +135,12 @@ impl Table {
 
     /// Best accented form per word. A column is the candidate ids of one
     /// word; an empty column is a word outside the table (kept as typed).
-    fn viterbi(&self, cols: &[Vec<u16>]) -> Vec<Option<u16>> {
+    fn viterbi(&self, cols: &[Vec<u16>], bonus: &HashMap<(u16, u16), f64>) -> Vec<Option<u16>> {
         let n = cols.len();
         let width = |i: usize| cols[i].len().max(1);
         let count = |i: usize, j: usize| cols[i].get(j).map_or(0, |&id| u32_at(self.uni, id as usize));
-        let mut score = vec![[0.0f64; MAX_CAND]; n];
-        let mut back = vec![[0u8; MAX_CAND]; n];
+        let mut score = vec![[0.0f64; MAX_COL]; n];
+        let mut back = vec![[0u8; MAX_COL]; n];
         for i in 1..n {
             for j in 0..width(i) {
                 let cur = count(i, j);
@@ -146,12 +148,14 @@ impl Table {
                 let (mut best, mut arg) = (f64::MIN, 0);
                 for p in 0..width(i - 1) {
                     let n1 = count(i - 1, p);
-                    let n2 = match (cols[i - 1].get(p), cols[i].get(j)) {
-                        (Some(&a), Some(&b)) if cur >= self.skip && n1 >= self.skip => self.pair(a, b),
+                    let ids = cols[i - 1].get(p).zip(cols[i].get(j)).map(|(&a, &b)| (a, b));
+                    let n2 = match ids {
+                        Some((a, b)) if cur >= self.skip && n1 >= self.skip => self.pair(a, b),
                         _ => 0.0,
                     };
                     let mut s = score[i - 1][p]
-                        + if n2 > 0.0 { ((n2 + kp) / (f64::from(n1) + self.k)).ln() } else { self.unk };
+                        + if n2 > 0.0 { ((n2 + kp) / (f64::from(n1) + self.k)).ln() } else { self.unk }
+                        + ids.and_then(|k| bonus.get(&k)).copied().unwrap_or(0.0);
                     if i == 1 {
                         s += ((f64::from(n1) + 1.0) / self.den).ln();
                     }
@@ -298,17 +302,17 @@ pub(crate) fn fix_at(words: &[String], start: bool) -> Option<Vec<String>> {
     if open == 0 {
         return None;
     }
+    let bonus = personal(t, words, &mut cols, kept.as_ref());
     let opener = start.then(|| t.ids.get("<s>").copied()).flatten();
     if let Some(id) = opener {
         cols.insert(0, vec![id]);
     }
-    let mut best = t.viterbi(&cols);
+    let mut best = t.viterbi(&cols, &bonus);
     if opener.is_some() {
         best.remove(0);
     }
-    let mut forms: Vec<Option<String>> =
+    let forms: Vec<Option<String>> =
         best.iter().map(|id| id.map(|id| restyle(t.words[usize::from(id)]))).collect();
-    personal(words, kept.as_ref(), &mut forms);
     let out: Vec<String> = words
         .iter()
         .zip(forms)
@@ -349,30 +353,33 @@ pub(crate) fn next_words(prev: &str, n: usize) -> Vec<String> {
     best.iter().filter_map(|&(_, id)| t.words.get(usize::from(id)).map(|w| (*w).to_string())).collect()
 }
 
-/// The user's own pairs win over the table: "cuc cuc" is "cục cức" for
-/// someone who has typed that, whatever the corpus says (user 2026-11-14).
-/// A pair typed once is enough to ADD diacritics; to leave a word bare that
-/// the table accents it must have been typed 3 times (the history also holds
-/// what was typed before this feature fixed it).
-fn personal(words: &[String], kept: Option<&HashSet<String>>, forms: &mut [Option<String>]) {
+/// The user's own accented pairs as a bonus on the path, so the whole
+/// phrase is chosen consistently: "cuc cuc" → "cục cức", "con ga gay o o o"
+/// → "con gà gáy ò ó o" once typed so (user 2026-11-14). An earlier version
+/// copied the most-typed pair per position over the result and mixed pairs
+/// into "ở o ò". Forms the table ranks below its top 8 join the column.
+fn personal(t: &Table, words: &[String], cols: &mut [Vec<u16>], kept: Option<&HashSet<String>>) -> HashMap<(u16, u16), f64> {
     let low: Vec<String> = words.iter().map(|w| w.to_lowercase()).collect();
-    let mut locked = vec![false; words.len()];
+    let mut bonus = HashMap::new();
     for (i, a, b, n) in super::predict::personal_pairs(&low, strip) {
-        let ok = |j: usize, form: &String| {
-            let bare = strip(form) == *form;
-            let table_accents = forms[j].as_ref().is_some_and(|f| strip(f) != *f);
-            form.chars().count() == low[j].chars().count()
-                && !kept.is_some_and(|k| k.contains(&low[j]))
-                && (!locked[j] || forms[j].as_ref() == Some(form))
-                && (!bare || !table_accents || n >= 3)
-        };
-        if ok(i, &a) && ok(i + 1, &b) {
-            forms[i] = Some(restyle(&a));
-            forms[i + 1] = Some(restyle(&b));
-            locked[i] = true;
-            locked[i + 1] = true;
+        let (Some(&ia), Some(&ib)) = (t.ids.get(a.as_str()), t.ids.get(b.as_str())) else { continue };
+        if kept.is_some_and(|k| k.contains(&low[i]) || k.contains(&low[i + 1])) {
+            continue;
         }
+        // A word the user accented while typing is fixed: never swapped.
+        let fixed = |c: usize, id: u16| strip(&low[c]) != low[c] && !cols[c].contains(&id);
+        if fixed(i, ia) || fixed(i + 1, ib) {
+            continue;
+        }
+        for (col, id) in [(i, ia), (i + 1, ib)] {
+            if !cols[col].contains(&id) && cols[col].len() < MAX_COL {
+                cols[col].push(id);
+            }
+        }
+        // ~e^12 over the table: one pair the user typed beats any corpus pair.
+        bonus.insert((ia, ib), 12.0 + 2.0 * f64::from(n.min(20)).ln());
     }
+    bonus
 }
 
 /// `form` with the capitals of `typed` (same length: one char per letter).
