@@ -66,12 +66,14 @@ pub(crate) fn typing() {
     });
 }
 
-/// A key passed to the app as is: a space after a word extends the phrase.
+/// A key passed to the app as is: a space or a digit after a word extends the phrase.
 pub(crate) fn passthrough(c: Option<char>) {
     with(|p| {
         p.undo = None;
-        if let (Some(' '), Some(last)) = (c, p.words.last_mut()) {
-            last.1.push(' ');
+        // Spaces and digits typed between words are separators on screen
+        // ("toi co 2 con meo": the number must not cut the sentence in two).
+        if let (Some(ch), Some(last)) = (c.filter(|c| *c == ' ' || c.is_ascii_digit()), p.words.last_mut()) {
+            last.1.push(ch);
             p.keep = true;
         }
     });

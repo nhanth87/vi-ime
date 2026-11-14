@@ -289,6 +289,7 @@ fn main() {
     // IPC server for vi-settings (Unix socket, JSON protocol)
     let _ipc_handle = ipc::spawn_ipc_server(tx.clone(), None);
 
+    apply_engine_switches(&setting);
     info!(
         "vi-ime daemon started. IME: {}, Method: {}, Mode: {}, Compositor: {:?}",
         if setting.enabled {
@@ -689,6 +690,18 @@ fn main() {
     info!("vi-ime daemon stopped");
 }
 
+/// Engine-wide switches from setting.conf. Also called once at startup:
+/// `apply_config` only runs on a focus/config event, so after a restart
+/// with no window change the diacritic fix stayed off (field 2026-11-14:
+/// "toi di hoc," unchanged although `auto_diacritics = true`).
+fn apply_engine_switches(setting: &crate::config::Setting) {
+    crate::engine::predict::set_enabled(setting.predict);
+    crate::engine::habit::set_enabled(setting.learn_habits);
+    crate::engine::diacritic::set_enabled(setting.auto_diacritics);
+    crate::engine::diacritic::set_office(setting.auto_diacritics_office);
+    crate::engine::diacritic::set_modern_tone(setting.tone_style == crate::config::ToneStyle::Modern);
+}
+
 /// Recompute the effective config (4-layer: user > learned > builtin >
 /// global) for the current focus and push it live to the IME thread.
 fn apply_config(
@@ -704,11 +717,7 @@ fn apply_config(
     let resolved =
         setting.effective_config_layered(current_app_id.as_deref(), title, learned.as_ref());
     runtime.store(&crate::wayland::RuntimeSnapshot { raw_incomplete: setting.smart_raw_incomplete, ..resolved_to_snapshot(&resolved) });
-    crate::engine::predict::set_enabled(setting.predict);
-    crate::engine::habit::set_enabled(setting.learn_habits);
-    crate::engine::diacritic::set_enabled(setting.auto_diacritics);
-    crate::engine::diacritic::set_office(setting.auto_diacritics_office);
-    crate::engine::diacritic::set_modern_tone(setting.tone_style == crate::config::ToneStyle::Modern);
+    apply_engine_switches(&setting);
     // R-macro: publish keyword + hotkey tables (parsed once here, shared as
     // Arc; both IME paths pick them up — Wayland via maybe_reconfigure,
     // evdev via the consumer loop).
