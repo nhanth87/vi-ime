@@ -139,7 +139,8 @@ impl Table {
     /// word; an empty column is a word outside the table (kept as typed).
     fn viterbi(&self, cols: &[Vec<u16>], bonus: &HashMap<(u16, u16), f64>) -> Vec<Option<u16>> {
         let n = cols.len();
-        let width = |i: usize| cols[i].len().max(1);
+        // Never wider than the score arrays, whatever the caller passes.
+        let width = |i: usize| cols[i].len().clamp(1, MAX_COL);
         let count = |i: usize, j: usize| cols[i].get(j).map_or(0, |&id| u32_at(self.uni, id as usize));
         let mut score = vec![[0.0f64; MAX_COL]; n];
         let mut back = vec![[0u8; MAX_COL]; n];
