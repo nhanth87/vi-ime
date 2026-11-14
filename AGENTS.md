@@ -562,10 +562,11 @@
 >   `None` ngay nếu bảng chưa sẵn sàng (`OnceLock::get`, `try_lock`). Đo: ~30 µs/đoạn, nạp 55 ms, RSS +~20 MB.
 > - **Đo trước khi đổi định dạng bảng** (`/mnt/data/user/vndict/work`): 4 bit @5 MB = bảng đầy đủ 151 MB
 >   (95,6% từ, ~68% đoạn đúng trọn); 8/10 MB không hơn; **1 bit chỉ 72%** (ngang chọn dạng phổ biến nhất) — đừng thử lại.
-> - **Trọng số nguồn: Wikipedia ×2, phụ đề ×3, văn bản luật ×0,5** (`work/wmerge.sh`, phương án F). Trộn đều thì văn
->   bản luật chiếm 45% khối lượng → nghiêng về "bản/bán" thay vì "bạn". Đo 2026-11-14 (5 MB, 4 bit): hội thoại
->   (`work/chat.txt`, 50 câu tự viết) 90,4% → 92,6% từ; văn bản thường 95,6% → 95,2%; báo chí 91,2% → 90,9%.
->   Phụ đề ×4 hay bỏ hẳn luật đều kém hơn. Đổi trọng số = đo lại cả ba bộ.
+> - **Trọng số nguồn: Wikipedia ×2, phụ đề ×3, văn bản luật ×0,5, news ×0,5** (`work/wg.sh`, phương án H,
+>   2026-11-15). News = n-gram của tienthanhdhcn/Vietnamese-Accent-Prediction (không giấy phép — chủ repo xin, ĐANG
+>   CHỜ; nếu bị từ chối thì build lại bỏ news và revert). Đo cùng bench: news ×1 (G) thắng lớn văn bản (in-domain
+>   90,9%→93,4% từ, 38,0%→50,8% đoạn) nhưng rớt hội thoại (92,6%→92,1%); news ×0,5 (H) giữ hội thoại (92,5%/65,6%)
+>   mà vẫn ăn phần lớn mức tăng (in 93,0%/49,2%, báo chí 96,4%/69,0%). Đổi trọng số = đo lại cả ba bộ.
 > - **Đã đo, ĐỪNG đo lại (2026-11-14, bảng F + `<s>`):** K làm mượt 100→10000 chênh <0,2 điểm; số ứng viên 8→12/16
 >   chỉ +0,1–0,2 (12 làm p99 chậm gấp đôi). Lỗi còn lại trên bộ hội thoại: 10/40 là "bạn" (→ bắn/bản/bán/ban), còn
 >   lại bàn/bản, tới/tôi, chị/chỉ, nhớ/nhỏ — cần ngữ cảnh xa hơn một từ. Đòn bẩy thật là lịch sử của chính user
@@ -573,8 +574,9 @@
 > - **Đầu câu:** từ vựng có mục giả `<s>` (ô cuối), hàng của nó = số lần mỗi từ mở đầu câu (cột `initial` của
 >   `case.tsv`, cùng trọng số). `fix_at(words, start)` chèn `<s>` khi đoạn không có ngữ cảnh trái (`frozen == 0`).
 >   Đo: văn bản thường 95,2% → 96,0%, hội thoại 92,6% → 93,0%. "ban an com chua" → "bạn ăn cơm chưa" (trước: "bàn").
-> - **Nguồn đếm:** Wikipedia vi (CC BY-SA), OPUS OpenSubtitles, văn bản luật (CC BY 4.0), dựng bằng script của
->   dmoreq/vndiacritics (MIT). KHÔNG dùng bảng báo 2017 (`Vietnamese-Accent-Prediction`, không giấy phép).
+> - **Nguồn đếm:** Wikipedia vi (CC BY-SA), OPUS OpenSubtitles, văn bản luật (CC BY 4.0), news n-gram của
+>   tienthanhdhcn/Vietnamese-Accent-Prediction (×0,5, giấy phép ĐANG CHỜ — nếu bị từ chối thì build lại bỏ news),
+>   dựng bằng script của dmoreq/vndiacritics (MIT) + `work/convert_vap.py`.
 > - **Đoạn (phrase)** = chuỗi từ gõ liền nhau trong một ô. `autodia::begin_key` ở đầu MỖI phím bỏ đoạn trừ khi phím
 >   trước là gõ chữ thuần (`typing`/`passthrough` dấu cách/`on_word`), hoặc `predict::CONTEXT_GEN` đã đổi (click,
 >   mũi tên, phím tắt, Deactivate). Đường nào quên báo thì chỉ MẤT đoạn, không bao giờ xoá nhầm chữ ở chỗ khác.

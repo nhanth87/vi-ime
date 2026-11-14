@@ -5,7 +5,10 @@
 //! Syllable-bigram Viterbi after dmoreq/vndiacritics (MIT), over a compact
 //! table (`data/vdia.bin`, 5 MB): 65 535 syllables, 1.6 M pairs as CSR rows
 //! of `u16` ids with a 4-bit log-count each. Counts come from Wikipedia vi
-//! (CC BY-SA), OPUS OpenSubtitles and Vietnamese legal texts (CC BY 4.0).
+//! (CC BY-SA), OPUS OpenSubtitles, Vietnamese legal texts (CC BY 4.0) and
+//! news n-grams from tienthanhdhcn/Vietnamese-Accent-Prediction (upstream
+//! has NO license file; reuse requested by the repo owner, grant pending —
+//! if denied, rebuild the table without the news source and revert this).
 //!
 //! Speed first: nothing here runs per key. The table is decoded once on a
 //! background thread (`set_enabled`); `fix` runs only at a phrase end and returns
