@@ -27,6 +27,9 @@ static KEEP: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 const MAX_CAND: usize = 8;
 /// Column width: the table's top `MAX_CAND` plus the user's own forms.
 const MAX_COL: usize = 12;
+/// Added to each transition the user typed, on top of its near-certain
+/// floor, so a phrase that follows more of the user's own pairs wins.
+const OWN_BONUS: f64 = 12.0;
 const MAX_WORDS: usize = 40;
 
 struct Table {
@@ -103,10 +106,9 @@ impl Table {
         let mut ids = HashMap::with_capacity(v);
         for (i, w) in words.iter().enumerate() {
             ids.insert(*w, i as u16);
-            let forms = cand.entry(strip(w)).or_default(); // words are count-sorted
-            if forms.len() < MAX_CAND {
-                forms.push(i as u16);
-            }
+            // Every form, count-sorted; columns take the first MAX_CAND,
+            // the user's pairs may name any of them (`personal`).
+            cand.entry(strip(w)).or_default().push(i as u16);
         }
         Some(Table {
             words, ids, cand, uni, rows, id2, nib, dec,
@@ -153,9 +155,13 @@ impl Table {
                         Some((a, b)) if cur >= self.skip && n1 >= self.skip => self.pair(a, b),
                         _ => 0.0,
                     };
-                    let mut s = score[i - 1][p]
-                        + if n2 > 0.0 { ((n2 + kp) / (f64::from(n1) + self.k)).ln() } else { self.unk }
-                        + ids.and_then(|k| bonus.get(&k)).copied().unwrap_or(0.0);
+                    let table = if n2 > 0.0 { ((n2 + kp) / (f64::from(n1) + self.k)).ln() } else { self.unk };
+                    // A pair the user typed is near certain (`personal`).
+                    let trans = match ids.and_then(|k| bonus.get(&k)) {
+                        Some(&own) => table.max(own) + OWN_BONUS,
+                        None => table,
+                    };
+                    let mut s = score[i - 1][p] + trans;
                     if i == 1 {
                         s += ((f64::from(n1) + 1.0) / self.den).ln();
                     }
@@ -286,20 +292,24 @@ pub(crate) fn fix_at(words: &[String], start: bool) -> Option<Vec<String>> {
     let t = TABLE.get()?.as_ref()?;
     let kept = KEEP.try_lock().ok()?;
     let mut cols = Vec::with_capacity(words.len());
-    let mut open = 0;
+    let (mut open, mut accented) = (0, 0);
     for w in words {
         let low = w.to_lowercase();
         let own = || t.ids.get(low.as_str()).map(|&id| vec![id]).unwrap_or_default();
         if strip(&low) != low {
+            accented += 1;
             cols.push(own()); // accented by the user: an anchor
         } else if kept.as_ref().is_some_and(|k| k.contains(&low)) {
             cols.push(own());
         } else {
-            cols.push(t.cand.get(&low)?.clone());
+            cols.push(t.cand.get(&low)?.iter().take(MAX_CAND).copied().collect());
             open += 1;
         }
     }
-    if open == 0 {
+    // As many words accented by hand as bare ones: the user is typing WITH
+    // diacritics, the bare words are meant bare. Field 2026-11-14: "con chim
+    // ở trọ nồi than," came out "… nồi thân,".
+    if open == 0 || accented >= open {
         return None;
     }
     let bonus = personal(t, words, &mut cols, kept.as_ref());
@@ -361,7 +371,19 @@ pub(crate) fn next_words(prev: &str, n: usize) -> Vec<String> {
 fn personal(t: &Table, words: &[String], cols: &mut [Vec<u16>], kept: Option<&HashSet<String>>) -> HashMap<(u16, u16), f64> {
     let low: Vec<String> = words.iter().map(|w| w.to_lowercase()).collect();
     let mut bonus = HashMap::new();
-    for (i, a, b, n) in super::predict::personal_pairs(&low, strip) {
+    // Forms each typed word may stand for: itself, or any accented form.
+    let forms: Vec<Vec<&str>> = low
+        .iter()
+        .map(|w| {
+            let mut f = vec![w.as_str()];
+            if strip(w) == *w {
+                let ids = t.cand.get(w).map_or(&[][..], |v| &v[..]);
+                f.extend(ids.iter().map(|&id| t.words[usize::from(id)]));
+            }
+            f
+        })
+        .collect();
+    for (i, a, b, n) in super::predict::personal_pairs(&forms, strip) {
         let (Some(&ia), Some(&ib)) = (t.ids.get(a.as_str()), t.ids.get(b.as_str())) else { continue };
         if kept.is_some_and(|k| k.contains(&low[i]) || k.contains(&low[i + 1])) {
             continue;
@@ -376,8 +398,10 @@ fn personal(t: &Table, words: &[String], cols: &mut [Vec<u16>], kept: Option<&Ha
                 cols[col].push(id);
             }
         }
-        // ~e^12 over the table: one pair the user typed beats any corpus pair.
-        bonus.insert((ia, ib), 12.0 + 2.0 * f64::from(n.min(20)).ln());
+        // A floor, not an addition: the table scores a pair it never saw at
+        // ~ln(1e-10), far below what any bonus added to it could reach ("noi
+        // than" stayed "nơi thân" after the user typed "nồi than").
+        bonus.insert((ia, ib), (-0.5 + 0.1 * f64::from(n.min(20)).ln()).min(0.0));
     }
     bonus
 }

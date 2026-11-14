@@ -356,25 +356,24 @@ pub(crate) fn prev_word() -> Option<String> {
 
 /// The user's own pairs that put diacritics on a phrase typed without
 /// them: (index of the first word, first, second, times typed), every pair
-/// with at least one accented word. Pairs typed bare are left out: most were
+/// with at least one accented word; `forms[i]` = what typed word i may
+/// stand for (itself and its accented forms). Pairs typed bare are left out: most were
 /// typed before the diacritic fix existed and say nothing about intent
-/// ("o o" ×4 beat "ò ó" and gave "ở o ò", user 2026-11-14). `words` are
+/// ("o o" ×4 beat "ò ó" and gave "ở o ò", user 2026-11-14). Forms are
 /// lowercase. Empty when the table is busy — the typing thread never waits.
-pub(crate) fn personal_pairs(words: &[String], strip: fn(&str) -> String) -> Vec<(usize, String, String, u32)> {
+pub(crate) fn personal_pairs(forms: &[Vec<&str>], strip: fn(&str) -> String) -> Vec<(usize, String, String, u32)> {
     let Ok(p) = STATE.0.try_lock() else { return Vec::new() };
-    let bare: Vec<String> = words.iter().map(|w| strip(w)).collect();
-    // A typed word matches a learned one when it is that word, or its bare form.
-    let fits = |i: usize, learned: &str| words[i] == learned || (words[i] == bare[i] && strip(learned) == bare[i]);
     let mut out = Vec::new();
-    for (a, followers) in &p.next {
-        for i in 0..words.len().saturating_sub(1) {
-            if !fits(i, a) {
-                continue;
-            }
-            for (b, &n) in followers {
-                let accents = strip(a) != *a || strip(b) != *b;
-                if accents && fits(i + 1, b) {
-                    out.push((i, a.clone(), b.clone(), n));
+    // Indexed by the first word: only the forms a typed word can stand for
+    // are looked up (a scan of every learned pair took ~1.5 ms).
+    for i in 0..forms.len().saturating_sub(1) {
+        for a in &forms[i] {
+            let Some(followers) = p.next.get(*a) else { continue };
+            for b in &forms[i + 1] {
+                if let Some(&n) = followers.get(*b)
+                    && (strip(a) != *a || strip(b) != *b)
+                {
+                    out.push((i, (*a).to_string(), (*b).to_string(), n));
                 }
             }
         }

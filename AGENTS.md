@@ -584,12 +584,15 @@
 >   đoạn/undo: `expect_echo` đẩy `last_live_echo_at` về tương lai 15 ms/phím (tối đa 1,5 s), `Done` chỉ
 >   `reset_context` + `autodia::clear` khi `!recent_live`. Thử lồng 2026-11-13: thiếu cái này BackSpace chỉ xoá dấu ".".
 > - **Cặp từ của chính user thắng bảng** (`diacritic::personal` ← `predict::personal_pairs`, user 2026-11-14: "cuc cuc"
->   phải ra "cục cức", "con ga gay o o o" phải ra "con gà gáy ò ó o"). Mỗi cặp CÓ DẤU user đã gõ = điểm cộng ~e^12 cho
+>   phải ra "cục cức", "con ga gay o o o" phải ra "con gà gáy ò ó o"). Mỗi cặp CÓ DẤU user đã gõ = điểm SÀN gần chắc chắn (−0,5) CỘNG `OWN_BONUS` 12 cho
 >   đúng chuyển tiếp đó TRONG Viterbi, nên cả đoạn được chọn nhất quán; dạng ngoài top 8 của bảng được thêm vào cột
 >   (rộng tới `MAX_COL` = 12, KHÔNG đẩy ứng viên khác ra). Cặp gõ KHÔNG dấu bị bỏ qua: phần lớn gõ từ trước khi có tính
 >   năng này. Từ user tự gõ dấu không bao giờ bị đổi. Từ một chữ cái là nguyên âm ("ò", "ó", "ở") được học
 >   (`predict::normalize`). ĐỪNG quay lại cách "chép đè cặp gõ nhiều nhất mỗi vị trí": field 2026-11-14 ra "ở o ò" vì
->   "o o" gõ không dấu 4 lần thắng "ò ó" 1 lần, và cặp sau chép đè lên cặp trước.
+>   "o o" gõ không dấu 4 lần thắng "ò ó" 1 lần, và cặp sau chép đè lên cặp trước. Chỉ điểm cộng thì "nồi than" thua "nơi thân" (bảng phạt cặp lạ ~ln(1e-10)); chỉ điểm sàn thì "ò ó o" thua "ở o ò"
+>   (chuỗi nhiều cặp của user phải thắng) — cần CẢ HAI. Tra cặp theo chỉ mục từ đầu (`personal_pairs(forms)`): quét cả
+>   lịch sử 7k cặp tốn 1,5 ms. Đoạn mà số từ user tự gõ dấu ≥ số từ trơn → để nguyên cả đoạn (user đang gõ CÓ dấu,
+>   từ trơn là cố ý: field "con chim ở trọ nồi than," ra "… nồi thân,").
 > - **Công tắc engine nạp cả lúc khởi động** (`main.rs::apply_engine_switches`): `apply_config` chỉ chạy khi có sự kiện
 >   focus/config, nên sau restart mà không đổi cửa sổ thì tính năng nằm im (field 2026-11-14: "toi di hoc," không đổi).
 > - **Bảng đã nạp (tức `auto_diacritics` bật) còn phục vụ mọi kiểu gõ:** `predict.rs` lấp chỗ trống trên thanh gợi ý
