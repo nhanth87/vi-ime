@@ -137,6 +137,25 @@ impl Table {
 
     /// Best accented form per word. A column is the candidate ids of one
     /// word; an empty column is a word outside the table (kept as typed).
+    /// Score of `b` right after `a` (None = a word outside the table).
+    /// The only place the transition arithmetic lives: the search and the
+    /// per-word check in `fix_at` must agree.
+    fn trans(&self, a: Option<u16>, b: Option<u16>, bonus: &HashMap<(u16, u16), f64>) -> f64 {
+        let cnt = |id: Option<u16>| id.map_or(0, |id| u32_at(self.uni, usize::from(id)));
+        let (n1, cur) = (cnt(a), cnt(b));
+        let kp = self.k * (f64::from(cur) + 1.0) / self.den;
+        let n2 = match (a, b) {
+            (Some(a), Some(b)) if cur >= self.skip && n1 >= self.skip => self.pair(a, b),
+            _ => 0.0,
+        };
+        let table = if n2 > 0.0 { ((n2 + kp) / (f64::from(n1) + self.k)).ln() } else { self.unk };
+        // A pair the user typed is near certain (`personal`).
+        match a.zip(b).and_then(|k| bonus.get(&k)) {
+            Some(&own) => table.max(own) + OWN_BONUS,
+            None => table,
+        }
+    }
+
     fn viterbi(&self, cols: &[Vec<u16>], bonus: &HashMap<(u16, u16), f64>) -> Vec<Option<u16>> {
         let n = cols.len();
         // Never wider than the score arrays, whatever the caller passes.
@@ -146,23 +165,10 @@ impl Table {
         let mut back = vec![[0u8; MAX_COL]; n];
         for i in 1..n {
             for j in 0..width(i) {
-                let cur = count(i, j);
-                let kp = self.k * (f64::from(cur) + 1.0) / self.den;
                 let (mut best, mut arg) = (f64::MIN, 0);
                 for p in 0..width(i - 1) {
                     let n1 = count(i - 1, p);
-                    let ids = cols[i - 1].get(p).zip(cols[i].get(j)).map(|(&a, &b)| (a, b));
-                    let n2 = match ids {
-                        Some((a, b)) if cur >= self.skip && n1 >= self.skip => self.pair(a, b),
-                        _ => 0.0,
-                    };
-                    let table = if n2 > 0.0 { ((n2 + kp) / (f64::from(n1) + self.k)).ln() } else { self.unk };
-                    // A pair the user typed is near certain (`personal`).
-                    let trans = match ids.and_then(|k| bonus.get(&k)) {
-                        Some(&own) => table.max(own) + OWN_BONUS,
-                        None => table,
-                    };
-                    let mut s = score[i - 1][p] + trans;
+                    let mut s = score[i - 1][p] + self.trans(cols[i - 1].get(p).copied(), cols[i].get(j).copied(), bonus);
                     if i == 1 {
                         s += ((f64::from(n1) + 1.0) / self.den).ln();
                     }
@@ -307,18 +313,30 @@ pub(crate) fn fix_at(words: &[String], start: bool) -> Option<Vec<String>> {
             open += 1;
         }
     }
-    // As many words accented by hand as bare ones: the user is typing WITH
-    // diacritics, the bare words are meant bare. Field 2026-11-14: "con chim
-    // ở trọ nồi than," came out "… nồi thân,".
-    if open == 0 || accented >= open {
+    if open == 0 {
         return None;
     }
+    // As many words accented by hand as bare ones: the user is typing WITH
+    // diacritics, so a bare word is probably meant bare ("con chim ở trọ nồi
+    // than," must keep "than") — unless context makes the accent clear
+    // ("Em trồng can sa" is "cần sa"). Checked word by word below.
+    let with_marks = accented >= open;
     let bonus = personal(t, words, &mut cols, kept.as_ref());
     let opener = start.then(|| t.ids.get("<s>").copied()).flatten();
     if let Some(id) = opener {
         cols.insert(0, vec![id]);
     }
     let mut best = t.viterbi(&cols, &bonus);
+    if with_marks {
+        let bare: Vec<Option<u16>> = std::iter::once(None)
+            .take(usize::from(opener.is_some()))
+            .chain(words.iter().map(|w| {
+                let low = w.to_lowercase();
+                (strip(&low) == low).then(|| t.ids.get(low.as_str()).copied()).flatten()
+            }))
+            .collect();
+        keep_meant_bare(t, &mut best, &bare, &bonus);
+    }
     if opener.is_some() {
         best.remove(0);
     }
@@ -362,6 +380,32 @@ pub(crate) fn next_words(prev: &str, n: usize) -> Vec<String> {
         }
     }
     best.iter().filter_map(|&(_, id)| t.words.get(usize::from(id)).map(|w| (*w).to_string())).collect()
+}
+
+/// Below this (natural-log) margin over the bare reading, a bare word in a
+/// phrase typed with diacritics stays bare. Measured 2026-11-15 on the two
+/// field phrases: see `keep_meant_bare`.
+const MEANT_BARE_MARGIN: f64 = 3.0;
+
+/// In a phrase typed with diacritics, put back every bare word whose
+/// accented reading does not beat the bare one by `MEANT_BARE_MARGIN`,
+/// judged with the chosen neighbours. `bare[i]` = id of the typed bare form
+/// (None: typed accented, or no such word).
+fn keep_meant_bare(t: &Table, best: &mut [Option<u16>], bare: &[Option<u16>], bonus: &HashMap<(u16, u16), f64>) {
+    for i in 0..best.len() {
+        let (Some(b), Some(chosen)) = (bare[i], best[i]) else { continue };
+        if b == chosen {
+            continue;
+        }
+        let prev = i.checked_sub(1).and_then(|p| best[p]);
+        let next = best.get(i + 1).copied().flatten();
+        let local = |x: u16| {
+            prev.map_or(0.0, |p| t.trans(Some(p), Some(x), bonus)) + next.map_or(0.0, |n| t.trans(Some(x), Some(n), bonus))
+        };
+        if local(chosen) - local(b) < MEANT_BARE_MARGIN {
+            best[i] = Some(b);
+        }
+    }
 }
 
 /// The user's own accented pairs as a bonus on the path, so the whole

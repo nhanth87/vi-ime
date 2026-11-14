@@ -587,6 +587,10 @@
 > - **Phản hồi của chính lần gõ lại** (20+ BackSpace, app báo mỗi cái là `TextChangeCause::Other`) KHÔNG được xoá
 >   đoạn/undo: `expect_echo` đẩy `last_live_echo_at` về tương lai 15 ms/phím (tối đa 1,5 s), `Done` chỉ
 >   `reset_context` + `autodia::clear` khi `!recent_live`. Thử lồng 2026-11-13: thiếu cái này BackSpace chỉ xoá dấu ".".
+> - **Đoạn gõ CÓ dấu (số từ tự gõ dấu ≥ số từ trơn): xét TỪNG từ trơn** (`keep_meant_bare`): chỉ sửa khi dạng có dấu
+>   hơn dạng trơn ≥ `MEANT_BARE_MARGIN` (3, log tự nhiên) theo hai từ kề đã chọn. Đo 2026-11-15: "trồng cần sa" vs
+>   "trồng can sa" chênh 32 (sửa), "nồi thân" vs "nồi than" chênh 0 (giữ "than"). Bản trước bỏ qua CẢ đoạn → field:
+>   "Em trồng can sa trước cửa nhà em," giữ nguyên "can". Điểm chuyển tiếp chỉ ở `Table::trans` (Viterbi dùng chung).
 > - **Cặp từ của chính user thắng bảng** (`diacritic::personal` ← `predict::personal_pairs`, user 2026-11-14: "cuc cuc"
 >   phải ra "cục cức", "con ga gay o o o" phải ra "con gà gáy ò ó o"). Mỗi cặp CÓ DẤU user đã gõ = điểm SÀN gần chắc chắn (−0,5) CỘNG `OWN_BONUS` 12 cho
 >   đúng chuyển tiếp đó TRONG Viterbi, nên cả đoạn được chọn nhất quán; dạng ngoài top 8 của bảng được thêm vào cột
@@ -617,6 +621,12 @@
 >   12/12 lượt gõ lại + hoàn tác đúng, đoạn 10–34 ký tự mất 0,6–1,1 s (phím kế tiếp của user chờ trong hàng đợi).
 >   Field 2026-11-15: user bật `auto_diacritics_office`, gõ trong OnlyOffice thật → sửa đoạn 30 ký tự, user xác nhận
 >   "only office đã bỏ dấu được". Chưa thử: LibreOffice, hoàn tác bằng BackSpace trong OnlyOffice thật.
+>   **Dán thay vì gõ lại** (`clipboard_paste.rs`, user chọn 2026-11-15 vì "hơi chậm"): OnlyOffice cần 150 ms sau MỖI chữ
+>   có dấu → đoạn 6 chữ có dấu ≈ 1 s. Khi đoạn cần gõ lại có ≥2 chữ có dấu và typer là XTEST: lưu clipboard (bỏ cuộc,
+>   gõ như cũ, nếu clipboard chứa thứ không phải chữ — ảnh, file), đặt đoạn đã sửa, BackSpace, Ctrl+V qua XTEST, trả
+>   clipboard sau 1 s trên thread riêng (trả sớm hơn thì app dán nhầm clipboard cũ). Thử trên ô GTK ở X ẩn: 46–125 ms,
+>   clipboard trả đúng. ĐỪNG mở OnlyOffice để thử khi OnlyOffice thật của user đang chạy: nó LUÔN chuyển lệnh sang bản
+>   đang chạy (kể cả HOME khác) → mở tài liệu trống trong cửa sổ của user (đã xảy ra 2026-11-15).
 >   Rủi ro đã biết: autocorrect của office tự viết hoa đầu câu — `retype` giữ phần đầu giống nhau nên "Toi"→"Tôi"
 >   còn hoa, nhưng từ đổi chữ ĐẦU ("Di"→"đi") sẽ mất hoa; OnlyOffice chờ 150 ms sau mỗi chữ có dấu → gõ lại chậm.
 

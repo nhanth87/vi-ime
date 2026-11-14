@@ -28,6 +28,7 @@ mod learning;
 mod legacy_grab;
 mod log_file;
 mod shutdown;
+mod clipboard_paste;
 mod notify;
 mod plugin;
 mod privfile;

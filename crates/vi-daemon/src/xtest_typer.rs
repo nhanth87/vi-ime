@@ -41,6 +41,7 @@ use x11rb::rust_connection::RustConnection;
 
 const XK_BACKSPACE: Keysym = 0xff08;
 const XK_SHIFT_L: Keysym = 0xffe1;
+const XK_CONTROL_L: Keysym = 0xffe3;
 
 /// After (re)mapping keycodes, how long X clients get to process the
 /// MappingNotify before the first tap that uses them. Paid once per remap
@@ -94,6 +95,8 @@ pub(crate) struct XTestTyper {
     root: u32,
     backspace: Keycode,
     shift: Keycode,
+    /// Control_L, for Ctrl+V (`paste`); None on a keymap without it.
+    control: Option<Keycode>,
     /// Existing keycodes for printable ASCII (from the server's own map).
     ascii: HashMap<char, Slot>,
     /// Every non-ASCII character currently on the keyboard (static + LRU).
@@ -159,7 +162,7 @@ impl XTestTyper {
         let mut ascii = HashMap::new();
         let mut usable = Vec::new();
         let mut original = HashMap::new();
-        let (mut backspace, mut shift) = (None, None);
+        let (mut backspace, mut shift, mut control) = (None, None, None);
         for (i, syms) in reply.keysyms.chunks(per).enumerate() {
             let kc = min + i as u8;
             if kc >= 8 && SAFE_EVDEV.contains(&(kc - 8)) {
@@ -181,6 +184,9 @@ impl XTestTyper {
                 }
                 if s == XK_SHIFT_L && shift.is_none() {
                     shift = Some(kc);
+                }
+                if s == XK_CONTROL_L && control.is_none() {
+                    control = Some(kc);
                 }
                 if (0x20..0x7f).contains(&s)
                     && let Some(c) = char::from_u32(s)
@@ -221,6 +227,7 @@ impl XTestTyper {
             root,
             backspace,
             shift,
+            control,
             ascii,
             glyphs,
             mapped,
@@ -375,6 +382,22 @@ impl XTestTyper {
                 self.last_accent = Some(std::time::Instant::now());
             }
         }
+        ok && self.sync()
+    }
+
+    /// Ctrl+V on the focused window. False when the keymap has no Control_L
+    /// or plain "v" (the caller types the text instead).
+    pub(crate) fn paste(&mut self) -> bool {
+        let (Some(ctrl), Some(&v)) = (self.control, self.ascii.get(&'v')) else { return false };
+        if v.shift {
+            return false;
+        }
+        let mut ok = self.wait_settled();
+        let fake = |kind, kc| self.conn.xtest_fake_input(kind, kc, 0, self.root, 0, 0, 0).is_ok();
+        ok &= fake(KEY_PRESS_EVENT, ctrl);
+        ok &= fake(KEY_PRESS_EVENT, v.keycode);
+        ok &= fake(KEY_RELEASE_EVENT, v.keycode);
+        ok &= fake(KEY_RELEASE_EVENT, ctrl);
         ok && self.sync()
     }
 

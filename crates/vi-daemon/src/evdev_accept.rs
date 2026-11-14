@@ -147,7 +147,36 @@ impl Composer {
     fn retype(&mut self, old: &str, new: &str) {
         let common = old.chars().zip(new.chars()).take_while(|(a, b)| a == b).count();
         let suffix: String = new.chars().skip(common).collect();
-        self.type_out(old.chars().count() - common, &suffix, true);
+        let bs = old.chars().count() - common;
+        if suffix.chars().filter(|c| !c.is_ascii()).count() >= 2 && self.paste_tail(bs, &suffix) {
+            return;
+        }
+        self.type_out(bs, &suffix, true);
+    }
+
+    /// OnlyOffice (XTEST typer): BackSpace × `bs`, then paste `text` in one
+    /// key instead of typing it — accented glyphs cost 150 ms each there
+    /// (`clipboard_paste.rs`). False = nothing was done, type instead.
+    fn paste_tail(&mut self, bs: usize, text: &str) -> bool {
+        if !matches!(self.typer, Typer::X(_)) {
+            return false;
+        }
+        let mut erased = false;
+        let done = crate::clipboard_paste::paste_text(text, || {
+            self.type_out(bs, "", true);
+            erased = true;
+            match &mut self.typer {
+                Typer::X(x) => x.paste(),
+                _ => false,
+            }
+        });
+        if erased && !done {
+            self.type_out(0, text, true); // the paste key did not go out
+        }
+        if erased {
+            info!("[AUTODIA] pasted {} chars after {bs} BackSpaces", text.chars().count());
+        }
+        erased
     }
 
     /// Before forwarding another chord key: give the app back the Alt that
