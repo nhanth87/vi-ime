@@ -116,43 +116,71 @@ pub(crate) fn on_word(text: &str, c: char) -> Option<(String, String)> {
         }
         let mut all = p.words.clone();
         all.push((text.to_string(), String::new()));
-        let typed: Vec<String> = all.iter().map(|(w, _)| w.clone()).collect();
-        let Some(mut fixed) = diacritic::fix_at(&typed, p.frozen == 0) else {
-            // Failed (unknown word, table off…): keep the whole sentence,
-            // current word included, for the next sentence end. The
-            // separator IS the punctuation: it is on screen, and a later
-            // rewrite that starts before it must count it.
-            push(p, text.to_string(), c.to_string());
-            return None;
-        };
-        fixed[..p.frozen].clone_from_slice(&typed[..p.frozen]);
-        let Some(first) = typed.iter().zip(&fixed).position(|(a, b)| a != b) else {
-            push(p, text.to_string(), c.to_string());
-            return None;
-        };
-        let tail = |ws: &[String]| -> String {
-            ws[first..].iter().zip(&all[first..]).map(|(w, (_, sep))| format!("{w}{sep}")).collect()
-        };
-        let (old, new) = (tail(&typed), tail(&fixed));
-        if old.chars().count() > MAX_TAIL {
-            p.words.clear(); // too messy to rewrite — start the next phrase over
-            p.frozen = 0;
-            return None;
+        match end(p, all, c) {
+            Ok(plan) => Some(plan),
+            Err(keep) => {
+                if keep {
+                    // Failed (unknown word, table off…): keep the whole
+                    // sentence for the next sentence end. The separator IS
+                    // the punctuation: it is on screen, and a later rewrite
+                    // that starts before it must count it.
+                    push(p, text.to_string(), c.to_string());
+                }
+                None
+            }
         }
-        let changed = typed.iter().zip(&fixed).filter(|(a, b)| a != b).map(|(a, _)| a.clone()).collect();
-        // Consumed by the successful fix. After a comma the sentence goes on:
-        // its last word stays as left context for the next clause ("…, ban o
-        // lai." read "ban" with nothing before it and chose "bản").
-        p.words.clear();
-        p.frozen = 0;
-        if let (',', Some(last)) = (c, fixed.last()) {
-            p.words.push((last.clone(), c.to_string()));
-            p.frozen = 1;
-        }
-        p.undo = Some((format!("{new}{c}"), format!("{old}{c}"), changed));
-        p.keep = true;
-        Some((old, new))
     })
+}
+
+/// `,` `.` `?` `!` right after a number that follows words ("o so 15,"):
+/// the phrase ends there as well. Same plan as `on_word`.
+fn on_number_end(c: char) -> Option<(String, String)> {
+    with(|p| {
+        let after_number = p.words.last().is_some_and(|(_, sep)| sep.ends_with(|ch: char| ch.is_ascii_digit()));
+        if !matches!(c, ',' | '.' | '?' | '!') || !after_number {
+            return None;
+        }
+        match end(p, p.words.clone(), c) {
+            Ok(plan) => Some(plan),
+            Err(keep) => {
+                if let (true, Some(last)) = (keep, p.words.last_mut()) {
+                    last.1.push(c);
+                    p.keep = true;
+                }
+                None
+            }
+        }
+    })
+}
+
+/// Fix the phrase `all` (each word with the separator typed after it) that
+/// ends at `c`. Err(true): nothing to rewrite, keep the phrase as context;
+/// Err(false): phrase dropped.
+fn end(p: &mut Phrase, all: Vec<(String, String)>, c: char) -> Result<(String, String), bool> {
+    let typed: Vec<String> = all.iter().map(|(w, _)| w.clone()).collect();
+    let mut fixed = diacritic::fix_at(&typed, p.frozen == 0).ok_or(true)?;
+    fixed[..p.frozen].clone_from_slice(&typed[..p.frozen]);
+    let first = typed.iter().zip(&fixed).position(|(a, b)| a != b).ok_or(true)?;
+    let tail = |ws: &[String]| -> String {
+        ws[first..].iter().zip(&all[first..]).map(|(w, (_, sep))| format!("{w}{sep}")).collect()
+    };
+    let (old, new) = (tail(&typed), tail(&fixed));
+    p.words.clear();
+    p.frozen = 0;
+    if old.chars().count() > MAX_TAIL {
+        return Err(false); // too messy to rewrite — start the next phrase over
+    }
+    let changed = typed.iter().zip(&fixed).filter(|(a, b)| a != b).map(|(a, _)| a.clone()).collect();
+    // Consumed by the successful fix. After a comma the sentence goes on:
+    // its last word stays as left context for the next clause ("…, ban o
+    // lai." read "ban" with nothing before it and chose "bản").
+    if let (',', Some(last), Some((_, sep))) = (c, fixed.last(), all.last()) {
+        p.words.push((last.clone(), format!("{sep}{c}")));
+        p.frozen = 1;
+    }
+    p.undo = Some((format!("{new}{c}"), format!("{old}{c}"), changed));
+    p.keep = true;
+    Ok((old, new))
 }
 
 /// The pending undo, if the key before this one was the fix:
@@ -195,6 +223,27 @@ impl ImeAppState {
     fn expect_echo(&mut self, keys: usize) {
         let ms = (keys as u64 * 15).min(1500);
         self.last_live_echo_at = Some(std::time::Instant::now() + std::time::Duration::from_millis(ms));
+    }
+
+    /// `,` `.` `?` `!` typed right after a number ending a phrase ("o so
+    /// 15,"): rewrite the phrase, punctuation included. True = typed here.
+    pub(crate) fn number_end(&mut self, c: Option<char>) -> bool {
+        let inline = self.runtime.as_ref().is_some_and(|rt| rt.inline_complete());
+        let live = self.live_echo() && !self.app_surrounding_capable();
+        let Some(c) = c.filter(|_| diacritic::enabled() && self.learns() && live && !inline) else { return false };
+        let Some((old, new)) = on_number_end(c) else { return false };
+        let target = format!("{new}{c}");
+        let keys = old.chars().count() + target.chars().count();
+        self.shown_word = old; // on screen: the typed tail, number included
+        self.sync_shown(&target);
+        self.expect_echo(keys);
+        if self.shown_word == target {
+            info!("[AUTODIA] phrase tail retyped ({} chars)", target.chars().count());
+        } else {
+            clear();
+        }
+        self.reset_word_state();
+        true
     }
 
     /// BackSpace right after a fix: put the typed text back. True = handled.

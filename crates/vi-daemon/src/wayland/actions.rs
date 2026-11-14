@@ -390,7 +390,11 @@ impl ImeAppState {
             }
             NonPreeditAction::PassThrough => {
                 // Same ordering rule: never overtake queued typer output.
-                crate::wayland::autodia::passthrough(self.xkb.keycode_to_char(keycode));
+                let ch = self.xkb.keycode_to_char(keycode);
+                if self.number_end(ch) {
+                    return; // R37: "o so 15," — punctuation typed with the rewrite
+                }
+                crate::wayland::autodia::passthrough(ch);
                 self.viet.wait_idle();
                 self.vk.press(keycode);
             }
