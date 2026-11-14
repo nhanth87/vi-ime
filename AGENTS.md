@@ -615,7 +615,8 @@
 >   setting.conf, mặc định tắt, không có trong cửa sổ Cấu hình). Chỉ đưa lên UI sau khi field test xanh (R22/R29).
 >   Đã thử phần typer trên OnlyOffice ẩn (weston headless + Xwayland :2, probe `xprobe/autodia.rs`, 2026-11-14, load 6,5):
 >   12/12 lượt gõ lại + hoàn tác đúng, đoạn 10–34 ký tự mất 0,6–1,1 s (phím kế tiếp của user chờ trong hàng đợi).
->   Chưa thử: `Composer` thật với bàn phím thật, LibreOffice.
+>   Field 2026-11-15: user bật `auto_diacritics_office`, gõ trong OnlyOffice thật → sửa đoạn 30 ký tự, user xác nhận
+>   "only office đã bỏ dấu được". Chưa thử: LibreOffice, hoàn tác bằng BackSpace trong OnlyOffice thật.
 >   Rủi ro đã biết: autocorrect của office tự viết hoa đầu câu — `retype` giữ phần đầu giống nhau nên "Toi"→"Tôi"
 >   còn hoa, nhưng từ đổi chữ ĐẦU ("Di"→"đi") sẽ mất hoa; OnlyOffice chờ 150 ms sau mỗi chữ có dấu → gõ lại chậm.
 
